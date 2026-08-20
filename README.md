@@ -1,29 +1,31 @@
 # RoadSense India
 
 ## Project Problem Statement
-Automate the analysis of recorded road videos to detect pothole candidates, add visible traffic context, remove duplicate sightings, and produce a repair/inspection-priority report.
+RoadSense currently provides a Manual Annotation Baseline. It samples video frames and turns human-provided pothole boxes into evidence-backed incident reports.
 
 ## Target User
 Road inspector, campus facilities team, or municipal field team.
 
 ## MVP User Flow
 ```text
-Road video + optional GPS
-→ pothole candidate detection
-→ visible traffic context
-→ duplicate removal
-→ inspection-priority report
+Road video
+→ real metadata extraction
+→ sampled frames
+→ downloadable annotation kit
+→ human-provided pothole CSV
+→ manually grouped incidents
+→ evidence-backed report
 ```
 
 ## Current Development Status
-Foundation setup
+Manual Annotation Baseline
 
 ## Planned Modules
 - Video Input processing
-- Detectors (Potholes)
-- Analytics (Traffic context)
-- Fusion (Duplicate removal)
-- Scoring (Inspection-priority)
+- Detectors (Potholes) - *Currently Manual Only*
+- Analytics (Traffic context) - *Not Active*
+- Fusion (Duplicate removal) - *Currently Manual Only*
+- Scoring (Inspection-priority) - *Not Active*
 - Exporters (Reports)
 
 ## Local Setup Instructions
@@ -35,7 +37,6 @@ streamlit run app.py
 ```
 
 ## Important Scope Limits
-- potholes only in MVP
-- traffic context is not true city traffic volume
-- priority is for human inspection, not accident prediction
-- GPS is approximate camera position, not exact pothole position
+- These boxes come from a human-provided CSV. RoadSense has not yet run a trained pothole model, calculated traffic volume, or created a repair priority.
+- exact exact columns allowed: `incident_id,frame_index,x_min,y_min,x_max,y_max,label,note`
+- label must be exactly `pothole`

@@ -15,3 +15,4 @@ models/*.engine
 outputs/*
 !outputs/.gitkeep
 .streamlit/
+.pytest_cache/

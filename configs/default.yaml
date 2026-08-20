@@ -1,0 +1,8 @@
+app:
+  name: RoadSense India
+  max_upload_mb: 200
+
+video:
+  allowed_extensions: [".mp4", ".mov", ".avi"]
+  sampling_fps: 2
+  max_sampled_frames: 180

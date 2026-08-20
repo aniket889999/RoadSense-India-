@@ -1,0 +1,13 @@
+experiment:
+  name: pothole_yolov8n_smoke
+  seed: 42
+
+model:
+  base_weights: models/yolov8n.pt
+  image_size: 320
+
+training:
+  epochs: 1
+  batch: 2
+  patience: 0
+  device: cpu

@@ -1,5 +1,11 @@
 # RoadSense India
 
+## Project Roadmap
+
+1. **Step 1:** Establish basic repository layout, CI configs, and foundational structures.
+2. **Step 2:** Implement manual video analysis using Streamlit (Active Application).
+3. **Step 3:** Custom Pothole Model. Note: Step 3 is an offline custom-model scaffold; the active Streamlit app remains manual-only.
+
 ## Project Problem Statement
 RoadSense currently provides a Manual Annotation Baseline. It samples video frames and turns human-provided pothole boxes into evidence-backed incident reports.
 
@@ -38,5 +44,5 @@ streamlit run app.py
 
 ## Important Scope Limits
 - These boxes come from a human-provided CSV. RoadSense has not yet run a trained pothole model, calculated traffic volume, or created a repair priority.
-- exact exact columns allowed: `incident_id,frame_index,x_min,y_min,x_max,y_max,label,note`
+- Strict column parsing (exact columns only): `incident_id,frame_index,x_min,y_min,x_max,y_max,label,note`
 - label must be exactly `pothole`

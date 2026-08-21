@@ -58,6 +58,29 @@ python scripts/train_pothole.py --config configs/training/pothole_yolov8n_rdd202
 python scripts/evaluate_pothole.py --weights outputs/training/pothole_yolov8n_smoke/weights/best.pt --dataset data/processed/yolo_potholes
 ```
 
+## Roboflow-Exported Dataset Import (Step 4)
+
+If working from a Roboflow-exported RDD2022 dataset (e.g. 10-class YOLO format with `train/`, `valid/`, `test/`), note that the original Roboflow random splits have severe frame-adjacency data leakage.
+
+The isolated importer `scripts/import_roboflow_yolo_potholes.py`:
+- Discards the pre-baked Roboflow splits.
+- Pools all images across `train`, `valid`, and `test`.
+- Groups contiguous sequential frames (e.g. frames `4229, 4230, 4231` remain in one atomic group).
+- Filters and remaps source class `6` (`D40`) -> `0` (`pothole`) and drops non-pothole damages.
+- Uses atomic staging and validation before promoting to `data/processed/`.
+
+Dry run command:
+```bash
+python scripts/import_roboflow_yolo_potholes.py \
+  --source-root "/path/to/RDD2022-India" \
+  --output-dir "data/processed/rdd2022_india_roboflow_d40_v1" \
+  --max-consecutive-gap 1 \
+  --seed 42 \
+  --dry-run
+```
+
+> **Limitation Warning**: Grouping is a filename-based contiguous-sequence proxy, not verified road-route or capture-session grouping. No Roboflow cloud training or weights are utilized.
+
 ## Important Limitations
 - Do not use official unlabeled RDD2022 test images.
 - All raw/derived data, weights, and evaluation reports remain local and are ignored by git.

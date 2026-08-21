@@ -30,7 +30,7 @@ def validate_dataset_item(xml_w: int, xml_h: int, decoded_width: int, decoded_he
 
 def validate_prepared_yolo_dataset(dataset_dir: str) -> Tuple[bool, str]:
     try:
-        abs_dataset_dir = os.path.abspath(dataset_dir)
+        abs_dataset_dir = os.path.realpath(dataset_dir)
         pothole_yaml = os.path.join(abs_dataset_dir, "pothole.yaml")
         if not os.path.exists(pothole_yaml):
             return False, "pothole.yaml not found"
@@ -44,7 +44,8 @@ def validate_prepared_yolo_dataset(dataset_dir: str) -> Tuple[bool, str]:
         if data.get("names") != {0: "pothole"}:
             return False, "pothole.yaml must define exactly names: {0: 'pothole'}"
 
-        if data.get("path") != abs_dataset_dir:
+        yaml_path_raw = data.get("path")
+        if not yaml_path_raw or os.path.realpath(str(yaml_path_raw)) != abs_dataset_dir:
             return False, f"YAML path {data.get('path')} does not match dataset dir {abs_dataset_dir}"
 
         if data.get("train") != "images/train" or data.get("val") != "images/val" or data.get("test") != "images/test":
@@ -58,14 +59,19 @@ def validate_prepared_yolo_dataset(dataset_dir: str) -> Tuple[bool, str]:
                 return False, f"Missing {split} image or label directory"
 
             images = set()
+            stems_seen = {}
             for root, _, files in os.walk(img_dir):
-                for f in files:
-                    if f.lower().endswith(".jpg"):
-                        images.add(os.path.relpath(os.path.join(root, os.path.splitext(f)[0]), img_dir))
+                for f in sorted(files):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        rel_stem = os.path.relpath(os.path.join(root, os.path.splitext(f)[0]), img_dir)
+                        if rel_stem in stems_seen:
+                            return False, f"Split {split} has image stem collision: {stems_seen[rel_stem]} and {f}"
+                        stems_seen[rel_stem] = f
+                        images.add(rel_stem)
 
             labels = set()
             for root, _, files in os.walk(lbl_dir):
-                for f in files:
+                for f in sorted(files):
                     if f.endswith(".txt"):
                         labels.add(os.path.relpath(os.path.join(root, os.path.splitext(f)[0]), lbl_dir))
 

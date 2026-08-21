@@ -7,6 +7,7 @@ def test_cli_help():
         "scripts/prepare_rdd2022_potholes.py",
         "scripts/validate_yolo_dataset.py",
         "scripts/train_pothole.py",
+        "scripts/import_roboflow_yolo_potholes.py",
         "scripts/evaluate_pothole.py"
     ]
 

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 def write_metadata_json(output_dir: str, filename: str, metadata: Dict[str, Any]):
     with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
@@ -12,7 +12,8 @@ def build_training_metadata(
     cfg: Dict[str, Any],
     run_dir: str,
     artifacts: Dict[str, str],
-    env: Dict[str, str]
+    env: Dict[str, str],
+    resolved_base_weights: Optional[str] = None
 ) -> Dict[str, Any]:
     return {
         "task": "detection",
@@ -25,6 +26,7 @@ def build_training_metadata(
         "split_distribution": prep_meta.get("counts", {}).get("split_distribution", {}),
         "split_counts": prep_meta.get("counts", {}),
         "base_weights": cfg["model"]["base_weights"],
+        "resolved_base_weights": resolved_base_weights or cfg["model"].get("base_weights"),
         "fine_tuned": True,
         "seed": cfg["experiment"]["seed"],
         "hyperparameters": {

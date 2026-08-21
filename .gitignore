@@ -16,3 +16,11 @@ outputs/*
 !outputs/.gitkeep
 .streamlit/
 .pytest_cache/
+
+runs/
+outputs/training/
+outputs/evaluation/
+*.pt
+*.onnx
+*.engine
+*.cache

@@ -1,0 +1,13 @@
+experiment:
+  name: pothole_yolov8n_rdd2022_india_v1
+  seed: 42
+
+model:
+  base_weights: models/yolov8n.pt
+  image_size: 640
+
+training:
+  epochs: 50
+  batch: 4
+  patience: 15
+  device: auto

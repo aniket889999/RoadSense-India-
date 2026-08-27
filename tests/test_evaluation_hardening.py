@@ -578,3 +578,398 @@ def test_mocked_train_allow_weight_download(tmp_path, monkeypatch):
 
         assert meta["resolved_base_weights"] == str(dl_file.resolve())
         assert meta["artifacts"]["base_weights"] == hashlib.sha256(b"downloaded_yolov8n_bytes").hexdigest()
+
+def create_mock_torch_checkpoint(path: Path, epoch: int = 2, total_epochs: int = 10, **kwargs):
+    import torch
+    ckpt = {
+        "epoch": epoch,
+        "optimizer": {"state": {}, "param_groups": []},
+        "train_args": {
+            "data": str(kwargs.get("data", "/path/to/pothole.yaml")),
+            "epochs": total_epochs,
+            "batch": kwargs.get("batch", 2),
+            "patience": kwargs.get("patience", 0),
+            "device": kwargs.get("device", "mps"),
+            "imgsz": kwargs.get("imgsz", 320),
+            "seed": kwargs.get("seed", 42),
+            "name": kwargs.get("name", "resume_exp_run"),
+            "project": kwargs.get("project", "/path/to/outputs/training"),
+            "save_dir": kwargs.get("save_dir", "/path/to/outputs/training/resume_exp_run"),
+            "model": kwargs.get("model", "/path/to/models/yolov8n.pt")
+        }
+    }
+    ckpt.update({k: v for k, v in kwargs.items() if k not in ["data", "batch", "patience", "device", "imgsz", "seed", "name", "project", "save_dir", "model"]})
+    torch.save(ckpt, str(path))
+    return ckpt
+
+def test_mocked_train_resume_from_valid_last_pt(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    best_pt = weights_dir / "best.pt"
+    best_pt.write_bytes(b"best_w")
+    last_pt = weights_dir / "last.pt"
+
+    create_mock_torch_checkpoint(
+        last_pt,
+        epoch=3,
+        total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=2,
+        patience=0,
+        device="mps",
+        imgsz=320,
+        seed=42,
+        name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()),
+        model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+
+    (run_dir / "results.csv").write_text("epoch,loss\n1,0.1\n")
+    (run_dir / "args.yaml").write_text("device: mps\n")
+
+    mock_trainer = MagicMock(save_dir=str(run_dir))
+    mock_model_instance = MagicMock(trainer=mock_trainer)
+    mock_yolo_cls = MagicMock(return_value=mock_model_instance)
+
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = [
+            "train_pothole.py",
+            "--config", str(cfg_file),
+            "--dataset", str(dataset_dir),
+            "--resume-from", str(last_pt)
+        ]
+        monkeypatch.setattr("sys.argv", test_args)
+
+        tp.main()
+
+        mock_yolo_cls.assert_called_once_with(str(last_pt.resolve()))
+        mock_model_instance.train.assert_called_once_with(resume=True)
+
+        meta_path = run_dir / "model_metadata.json"
+        assert meta_path.exists()
+        with open(meta_path) as f:
+            meta = json.load(f)
+
+        assert meta["resumed"] is True
+        assert meta["resume_info"]["checkpoint_epoch"] == 3
+        assert meta["resume_info"]["next_epoch"] == 4
+        assert meta["resume_info"]["resume_checkpoint"] == str(last_pt.resolve())
+        assert len(meta["resume_info"]["checkpoint_train_args_sha256"]) == 64
+        assert len(meta["artifacts"]) == 7
+
+def test_mocked_train_resume_checkpoint_invalid_structure_fails(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_pt = weights_dir / "last.pt"
+
+    mock_yolo_cls = MagicMock()
+
+    # 1. Missing optimizer in checkpoint
+    import torch
+    bad_ckpt = {
+        "epoch": 2,
+        "optimizer": None,
+        "train_args": {
+            "data": str((dataset_dir / "pothole.yaml").resolve()),
+            "epochs": 10, "batch": 2, "patience": 0, "device": "mps", "imgsz": 320, "seed": 42, "name": "resume_exp_run"
+        }
+    }
+    torch.save(bad_ckpt, str(last_pt))
+
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = ["train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir), "--resume-from", str(last_pt)]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+        mock_yolo_cls.assert_not_called()
+
+    # 2. Checkpoint already completed all epochs (epoch >= total_epochs)
+    create_mock_torch_checkpoint(
+        last_pt, epoch=10, total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=2, patience=0, device="mps", imgsz=320, seed=42, name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()), model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = ["train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir), "--resume-from", str(last_pt)]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+        mock_yolo_cls.assert_not_called()
+
+def test_mocked_train_resume_config_or_dataset_mismatch_rejected(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_pt = weights_dir / "last.pt"
+
+    mock_yolo_cls = MagicMock()
+
+    # Mismatched batch size (saved: 4, config: 2)
+    create_mock_torch_checkpoint(
+        last_pt, epoch=2, total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=4, patience=0, device="mps", imgsz=320, seed=42, name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()), model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = ["train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir), "--resume-from", str(last_pt)]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+        mock_yolo_cls.assert_not_called()
+
+def test_mocked_train_resume_base_weights_validation_and_download_flag(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_pt = weights_dir / "last.pt"
+
+    create_mock_torch_checkpoint(
+        last_pt, epoch=2, total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=2, patience=0, device="mps", imgsz=320, seed=42, name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()), model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+
+    mock_yolo_cls = MagicMock()
+
+    # 1. Combining --allow-weight-download with --resume-from fails
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = [
+            "train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir),
+            "--resume-from", str(last_pt), "--allow-weight-download"
+        ]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+        mock_yolo_cls.assert_not_called()
+
+    # 2. Missing base weights in resume mode fails before YOLO
+    (tmp_path / "models" / "yolov8n.pt").unlink()
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = [
+            "train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir),
+            "--resume-from", str(last_pt)
+        ]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+        mock_yolo_cls.assert_not_called()
+
+def test_mocked_train_resume_mismatched_trainer_save_dir_fails(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_pt = weights_dir / "last.pt"
+
+    create_mock_torch_checkpoint(
+        last_pt, epoch=2, total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=2, patience=0, device="mps", imgsz=320, seed=42, name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()), model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+
+    # Trainer returning unexpected save_dir
+    different_run_dir = tmp_path / "outputs" / "training" / "resume_exp_run_suffixed"
+    mock_trainer = MagicMock(save_dir=str(different_run_dir))
+    mock_model_instance = MagicMock(trainer=mock_trainer)
+    mock_yolo_cls = MagicMock(return_value=mock_model_instance)
+
+    with patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = [
+            "train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir),
+            "--resume-from", str(last_pt)
+        ]
+        monkeypatch.setattr("sys.argv", test_args)
+        with pytest.raises(SystemExit) as exc:
+            tp.main()
+        assert exc.value.code == 1
+
+def test_mocked_train_resume_calls_torch_load_with_weights_only_false(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    import torch
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    best_pt = weights_dir / "best.pt"
+    best_pt.write_bytes(b"best_w")
+    last_pt = weights_dir / "last.pt"
+
+    create_mock_torch_checkpoint(
+        last_pt, epoch=2, total_epochs=10,
+        data=str((dataset_dir / "pothole.yaml").resolve()),
+        batch=2, patience=0, device="mps", imgsz=320, seed=42, name="resume_exp_run",
+        project=str((tmp_path / "outputs" / "training").resolve()),
+        save_dir=str(run_dir.resolve()), model=str((tmp_path / "models" / "yolov8n.pt").resolve())
+    )
+    (run_dir / "results.csv").write_text("epoch,loss\n1,0.1\n")
+    (run_dir / "args.yaml").write_text("device: mps\n")
+
+    mock_trainer = MagicMock(save_dir=str(run_dir))
+    mock_model_instance = MagicMock(trainer=mock_trainer)
+    mock_yolo_cls = MagicMock(return_value=mock_model_instance)
+
+    orig_torch_load = torch.load
+    load_spy = MagicMock(side_effect=orig_torch_load)
+
+    with patch("torch.load", load_spy), patch("ultralytics.YOLO", mock_yolo_cls):
+        test_args = [
+            "train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir),
+            "--resume-from", str(last_pt)
+        ]
+        monkeypatch.setattr("sys.argv", test_args)
+
+        tp.main()
+
+        load_spy.assert_called_once_with(
+            str(last_pt.resolve()),
+            map_location="cpu",
+            weights_only=False
+        )
+
+def test_mocked_train_resume_missing_each_mandatory_saved_argument_fails(tmp_path, monkeypatch):
+    import scripts.train_pothole as tp
+    monkeypatch.setattr(tp, "REPO_ROOT", tmp_path)
+
+    dataset_dir, _, _ = setup_mock_training_and_dataset(tmp_path)
+    cfg_file = tmp_path / "train_cfg.yaml"
+    cfg_data = {
+        "experiment": {"name": "resume_exp_run", "seed": 42},
+        "model": {"base_weights": "models/yolov8n.pt", "image_size": 320},
+        "training": {"epochs": 10, "batch": 2, "patience": 0, "device": "mps"}
+    }
+    with open(cfg_file, "w") as f:
+        yaml.dump(cfg_data, f)
+
+    run_dir = tmp_path / "outputs" / "training" / "resume_exp_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_pt = weights_dir / "last.pt"
+
+    mandatory_fields = ["data", "project", "save_dir", "model", "epochs", "batch", "patience", "device", "imgsz", "seed", "name"]
+
+    for field in mandatory_fields:
+        full_args = {
+            "data": str((dataset_dir / "pothole.yaml").resolve()),
+            "epochs": 10,
+            "batch": 2,
+            "patience": 0,
+            "device": "mps",
+            "imgsz": 320,
+            "seed": 42,
+            "name": "resume_exp_run",
+            "project": str((tmp_path / "outputs" / "training").resolve()),
+            "save_dir": str(run_dir.resolve()),
+            "model": str((tmp_path / "models" / "yolov8n.pt").resolve())
+        }
+        del full_args[field]
+
+        import torch
+        ckpt = {
+            "epoch": 2,
+            "optimizer": {"state": {}},
+            "train_args": full_args
+        }
+        torch.save(ckpt, str(last_pt))
+
+        mock_yolo_cls = MagicMock()
+        with patch("ultralytics.YOLO", mock_yolo_cls):
+            test_args = [
+                "train_pothole.py", "--config", str(cfg_file), "--dataset", str(dataset_dir),
+                "--resume-from", str(last_pt)
+            ]
+            monkeypatch.setattr("sys.argv", test_args)
+            with pytest.raises(SystemExit) as exc:
+                tp.main()
+            assert exc.value.code == 1, f"Expected failure when mandatory field '{field}' is missing"
+            mock_yolo_cls.assert_not_called()

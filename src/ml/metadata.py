@@ -13,9 +13,10 @@ def build_training_metadata(
     run_dir: str,
     artifacts: Dict[str, str],
     env: Dict[str, str],
-    resolved_base_weights: Optional[str] = None
+    resolved_base_weights: Optional[str] = None,
+    resume_info: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    return {
+    meta = {
         "task": "detection",
         "class_mapping": {0: "pothole"},
         "rdd2022_reference": "Arya et al. (2024), DOI: 10.1002/gdj3.260",
@@ -28,6 +29,7 @@ def build_training_metadata(
         "base_weights": cfg["model"]["base_weights"],
         "resolved_base_weights": resolved_base_weights or cfg["model"].get("base_weights"),
         "fine_tuned": True,
+        "resumed": bool(resume_info.get("resumed")) if resume_info else False,
         "seed": cfg["experiment"]["seed"],
         "hyperparameters": {
             "experiment": cfg["experiment"],
@@ -41,3 +43,6 @@ def build_training_metadata(
         "artifacts": artifacts,
         "limitations": "Model not yet connected to UI. Requires external evaluation on novel real-world sequences."
     }
+    if resume_info:
+        meta["resume_info"] = resume_info
+    return meta

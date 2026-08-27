@@ -99,6 +99,22 @@ python scripts/train_pothole.py \
 
 > **Note on Output Directories:** Ultralytics may create a suffixed output directory (e.g., `pothole_yolov8n_rdd2022_india_mps_baseline_v12`) if a run directory with the requested experiment name already exists. After training finishes, copy the exact output directory printed by the script and use that exact folder's `weights/best.pt` for evaluation.
 
+### Resuming an Interrupted Training Run
+If an ongoing training run is interrupted, you can safely resume in-place from its `weights/last.pt` checkpoint using `--resume-from`:
+
+```bash
+caffeinate -dims .venv/bin/python scripts/train_pothole.py \
+  --config configs/training/pothole_yolov8n_rdd2022_india.yaml \
+  --dataset data/processed/rdd2022_india_roboflow_d40_v1 \
+  --resume-from outputs/training/pothole_yolov8n_rdd2022_india_mps_baseline_v1/weights/last.pt
+```
+
+> **Important Rules for Resume:**
+> - Passing the exact same prepared dataset and baseline training configuration is mandatory; preflight validation verifies that all hyperparameters (`epochs`, `batch`, `patience`, `device`, `imgsz`, `seed`, `name`) and dataset paths match the checkpoint's saved `train_args`.
+> - Resume mode requires the checkpoint path to resolve strictly to `<training_run_dir>/weights/last.pt` within `outputs/training/`.
+> - It resumes the existing training run in-place without creating a new output folder or downloading base weights.
+> - Resume is strictly for continuing training optimization; it **must not** be used for the held-out test split evaluation.
+
 ---
 
 ## 5. Model Evaluation (Held-Out Test Split)

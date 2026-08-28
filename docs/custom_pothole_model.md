@@ -138,3 +138,10 @@ python scripts/evaluate_pothole.py \
 - **Group Proxy Limitation**: Grouping is a filename-based contiguous-sequence proxy, not verified ground-truth road-route or capture-session grouping.
 - **Internal vs Real-World Metrics**: Test split evaluation reflects performance on contiguous held-out sequence runs from the camera rig, not guaranteed real-world generalization across new geographies, weather conditions, or vehicle types.
 - **Provenance Tracking**: Every training and evaluation run records full Git SHAs, environment versions, dataset fingerprints, and artifact hashes under `outputs/`.
+
+---
+
+## 7. Frozen Baseline Results
+
+The 50-epoch baseline model has completed its training and one-time held-out test evaluation. For the complete metrics table, provenance hashes, and safety limitations, see:
+- [Frozen Baseline Results Report](frozen_baseline_results.md)

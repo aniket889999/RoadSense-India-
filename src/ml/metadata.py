@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 def write_metadata_json(output_dir: str, filename: str, metadata: Dict[str, Any]):
     with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
@@ -12,9 +12,11 @@ def build_training_metadata(
     cfg: Dict[str, Any],
     run_dir: str,
     artifacts: Dict[str, str],
-    env: Dict[str, str]
+    env: Dict[str, str],
+    resolved_base_weights: Optional[str] = None,
+    resume_info: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    return {
+    meta = {
         "task": "detection",
         "class_mapping": {0: "pothole"},
         "rdd2022_reference": "Arya et al. (2024), DOI: 10.1002/gdj3.260",
@@ -25,7 +27,9 @@ def build_training_metadata(
         "split_distribution": prep_meta.get("counts", {}).get("split_distribution", {}),
         "split_counts": prep_meta.get("counts", {}),
         "base_weights": cfg["model"]["base_weights"],
+        "resolved_base_weights": resolved_base_weights or cfg["model"].get("base_weights"),
         "fine_tuned": True,
+        "resumed": bool(resume_info.get("resumed")) if resume_info else False,
         "seed": cfg["experiment"]["seed"],
         "hyperparameters": {
             "experiment": cfg["experiment"],
@@ -39,3 +43,6 @@ def build_training_metadata(
         "artifacts": artifacts,
         "limitations": "Model not yet connected to UI. Requires external evaluation on novel real-world sequences."
     }
+    if resume_info:
+        meta["resume_info"] = resume_info
+    return meta

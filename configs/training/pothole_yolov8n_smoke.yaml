@@ -10,4 +10,4 @@ training:
   epochs: 1
   batch: 2
   patience: 0
-  device: cpu
+  device: mps

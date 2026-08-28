@@ -1,5 +1,5 @@
 experiment:
-  name: pothole_yolov8n_rdd2022_india_v1
+  name: pothole_yolov8n_rdd2022_india_mps_baseline_v1
   seed: 42
 
 model:
@@ -10,4 +10,4 @@ training:
   epochs: 50
   batch: 4
   patience: 15
-  device: auto
+  device: mps

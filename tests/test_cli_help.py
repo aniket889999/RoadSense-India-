@@ -8,7 +8,9 @@ def test_cli_help():
         "scripts/validate_yolo_dataset.py",
         "scripts/train_pothole.py",
         "scripts/import_roboflow_yolo_potholes.py",
-        "scripts/evaluate_pothole.py"
+        "scripts/evaluate_pothole.py",
+        "scripts/infer_pothole_video.py",
+        "scripts/curate_manual_pothole_batch.py",
     ]
 
     for script in scripts:

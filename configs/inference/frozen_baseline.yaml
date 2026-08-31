@@ -1,0 +1,25 @@
+schema_version: 1
+
+# This is a fail-closed local provenance pin for the frozen Step 4.7 model.
+# It does not load the checkpoint or invoke Ultralytics.
+frozen_baseline:
+  run_id: pothole_yolov8n_rdd2022_india_mps_baseline_v1
+  run_directory: outputs/training/pothole_yolov8n_rdd2022_india_mps_baseline_v1
+  checkpoint_path: outputs/training/pothole_yolov8n_rdd2022_india_mps_baseline_v1/weights/best.pt
+  checkpoint_sha256: bdf07ad81197ee15b795de635671d2ef75243492138d34c37d5352a9a777d430
+  model_metadata_path: outputs/training/pothole_yolov8n_rdd2022_india_mps_baseline_v1/model_metadata.json
+  model_metadata_sha256: f7f0c1321a6c9998eaec80fa3b2b5dd0c00bec42434fe604d64b3dcdaaf3009b
+  base_weights_path: models/yolov8n.pt
+  task: detection
+  class_mapping:
+    "0": pothole
+  git_sha: 1076e5dd530206c09df4ed738e297d9cf0a6cbee
+  dataset_fingerprint: 18bbaae9402323f96a8161829f1d1a35a14a6e45317abc0330397bb6dddbfe33
+  artifact_hashes:
+    base_weights: f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36
+    weights/best.pt: bdf07ad81197ee15b795de635671d2ef75243492138d34c37d5352a9a777d430
+    weights/last.pt: c383a0a904c0bb032875763cb4cdec90291a182f52b44c4bc27cff1f0ecb5b59
+    results.csv: 24f724314f9366fea40c298ce823a74b9005c1e10af9ce1a9601a03da72ca0fc
+    args.yaml: db0816beda99b766ea80d77168eee4bcf14b71f94566b09bb23925d90041c007
+    train_config.yaml: 76374d3232953a96941c31805d8505d7e9f95bf2253cf513612f5a989f6c199f
+    dataset_preparation_metadata.json: 4f80c8d1d1e7eef4217c26c18044af993b47cc645774059778527a165f79833c

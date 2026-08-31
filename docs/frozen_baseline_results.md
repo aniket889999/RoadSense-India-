@@ -69,5 +69,5 @@ The fine-tuned model (`pothole_yolov8n_rdd2022_india_mps_baseline_v1`) was evalu
 
 ## 5. Next Steps & Future Work
 
-1. **Experimental In-App Inference**: Connect `best.pt` to the Streamlit application as an *explicitly experimental* automated inference option alongside the manual annotation baseline.
+1. **Experimental In-App Inference**: A separate optional local-only panel now uses `best.pt` as explicitly experimental raw suggestions alongside the manual annotation baseline. It keeps model output out of manual reports, verifies the pinned checkpoint and provenance before loading, and does not reuse the held-out test split.
 2. **External Route Validation**: Evaluate detection and false-alarm performance on a separately collected, geographically distinct road-route dataset with independent ground-truth labeling.

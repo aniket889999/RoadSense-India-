@@ -145,3 +145,73 @@ python scripts/evaluate_pothole.py \
 
 The 50-epoch baseline model has completed its training and one-time held-out test evaluation. For the complete metrics table, provenance hashes, and safety limitations, see:
 - [Frozen Baseline Results Report](frozen_baseline_results.md)
+
+---
+
+## 8. Experimental Local Video Suggestions
+
+> **Scope:** This is an optional review aid, not an automated inspection decision. The primary Streamlit workflow remains the manual annotation baseline.
+
+The experimental panel uses one locally stored, provenance-pinned checkpoint:
+
+- Config: `configs/inference/frozen_baseline.yaml`
+- Checkpoint: `outputs/training/pothole_yolov8n_rdd2022_india_mps_baseline_v1/weights/best.pt`
+- Required SHA-256: `bdf07ad81197ee15b795de635671d2ef75243492138d34c37d5352a9a777d430`
+
+Before loading the model, RoadSense verifies the checkpoint, its model metadata, the recorded Git/dataset provenance, and all seven hashed training artifacts. Missing, changed, external, or symlinked artifacts fail closed. The feature does not download a model or use an online inference API.
+
+### Streamlit Flow
+
+Run Streamlit in the local environment that has the optional model runtime:
+
+```bash
+.venv/bin/streamlit run app.py
+```
+
+1. Upload a video and create the usual annotation kit.
+2. Open **Experimental Local Model Suggestions (Optional)**.
+3. Read the warning, choose a review-display threshold, and explicitly click the run button.
+4. Review raw per-frame suggestions (frame, time, box, and model score) separately from the manual CSV workflow.
+5. Only manually accepted boxes, entered by a reviewer with reviewer-provided incident IDs, can enter a RoadSense manual report.
+
+The default threshold of `0.25` is only a review-display filter. It was not tuned on the frozen held-out test split and is not a calibrated probability, severity, or risk score.
+
+### Reproducible Local CLI
+
+The CLI runs the exact same pinned local model. It uses only sampled frames, never accesses the prepared training dataset, and refuses to overwrite an existing output directory.
+
+```bash
+# Verify local model/video/sampling/output safety without loading YOLO or writing output.
+.venv/bin/python scripts/infer_pothole_video.py \
+  --input-video "/absolute/path/to/road-video.mp4" \
+  --output-dir "outputs/inference/example-road-video" \
+  --dry-run
+
+# Run raw experimental suggestions locally after the dry run passes.
+.venv/bin/python scripts/infer_pothole_video.py \
+  --input-video "/absolute/path/to/road-video.mp4" \
+  --output-dir "outputs/inference/example-road-video"
+```
+
+The generated ZIP contains `model_predictions.csv`, `inference_metadata.json`, and `annotated_experimental_predictions.mp4`. It records the input-file hash and model provenance but not the input's absolute local path. The output is ignored by Git.
+
+### Strict Limits
+
+- Only `model.predict(...)` is used. This feature never calls model training or held-out test evaluation.
+- Suggestions are raw per-frame model detections, not verified potholes or grouped incidents.
+- It does not estimate traffic, GPS, severity, repair priority, or safety risk.
+- It is not validated for field decisions or external routes. New independent ground-truth data is required for any generalization claim.
+
+---
+
+## 9. Human-Confirmed Local Curation for a Future Experiment
+
+When the frozen baseline misses potholes on a new road style, do not change its
+threshold or test result to claim improvement. Instead, create a separate
+human-confirmed curation pool from RoadSense annotation-kit frames. The pool is
+local-only, contains no original MP4, remains outside the frozen RDD2022
+dataset, and is not automatically trained.
+
+See [Manual Curation](manual_curation.md) for the strict review CSV format,
+dry-run command, explicit `--write` command, grouping rule, privacy limits,
+and the requirements for any later independent experiment.

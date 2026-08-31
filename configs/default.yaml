@@ -6,3 +6,14 @@ video:
   allowed_extensions: [".mp4", ".mov", ".avi"]
   sampling_fps: 2
   max_sampled_frames: 180
+
+experimental_inference:
+  enabled: true
+  frozen_baseline_config_path: configs/inference/frozen_baseline.yaml
+  device: mps
+  image_size: 640
+  # Review-display default only; it was not tuned against the frozen test split.
+  default_confidence_threshold: 0.25
+  iou_threshold: 0.7
+  max_detections_per_frame: 100
+  output_fps: 5

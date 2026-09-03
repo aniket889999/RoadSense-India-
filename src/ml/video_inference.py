@@ -69,6 +69,7 @@ def run_sampled_video_inference(
     confidence_threshold: float = 0.25,
     output_fps: float = 5.0,
     model_metadata: Optional[Mapping[str, Any]] = None,
+    render_mode: str = "experimental",
 ) -> ExperimentalInferenceResult:
     """Run a predictor only on caller-supplied frame indices and package results.
 
@@ -87,6 +88,7 @@ def run_sampled_video_inference(
 
     frame_indices = _validate_frame_indices(sampled_frame_indices)
     _validate_runtime_options(confidence_threshold, output_fps)
+    _validate_render_mode(render_mode)
 
     if not callable(predictor):
         raise TypeError("predictor must be a callable accepting one OpenCV frame.")
@@ -166,6 +168,7 @@ def run_sampled_video_inference(
                 frame_detections,
                 frame_index=frame_index,
                 timestamp_seconds=frame_index / source_fps,
+                render_mode=render_mode,
             )
             writer.write(frame)
 
@@ -178,6 +181,7 @@ def run_sampled_video_inference(
             rendered_video_path=output_path,
             metadata={
                 "analysis_mode": "experimental_sampled_video_inference",
+                "render_mode": render_mode,
                 "human_verification_status": "not_human_verified",
                 "prediction_status": "experimental",
                 "prediction_record_type": "raw_per_frame_detection",
@@ -259,6 +263,11 @@ def _validate_runtime_options(confidence_threshold: float, output_fps: float) ->
         raise ValueError("output_fps must be a positive finite number.") from exc
     if isinstance(output_fps, bool) or not math.isfinite(rendered_fps) or rendered_fps <= 0:
         raise ValueError("output_fps must be a positive finite number.")
+
+
+def _validate_render_mode(render_mode: str) -> None:
+    if render_mode not in {"experimental", "drive_review"}:
+        raise ValueError("render_mode must be exactly 'experimental' or 'drive_review'.")
 
 
 def _safe_video_suffix(video_filename: str) -> str:
@@ -384,7 +393,9 @@ def _draw_experimental_overlays(
     *,
     frame_index: int,
     timestamp_seconds: float,
+    render_mode: str = "experimental",
 ) -> None:
+    _validate_render_mode(render_mode)
     height, width = frame.shape[:2]
     box_color = (0, 220, 0)
     text_color = (0, 255, 255)
@@ -394,10 +405,17 @@ def _draw_experimental_overlays(
         y_min = max(0, min(height - 1, int(round(detection.y_min))))
         x_max = max(0, min(width - 1, int(round(detection.x_max))))
         y_max = max(0, min(height - 1, int(round(detection.y_max))))
-        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
+        if render_mode == "drive_review":
+            center = ((x_min + x_max) // 2, (y_min + y_max) // 2)
+            radius = max(8, int(math.ceil(max(x_max - x_min, y_max - y_min) / 2.0)) + 5)
+            cv2.circle(frame, center, radius, box_color, 2, cv2.LINE_AA)
+            label = f"POTHOLE SUGGESTION {detection.confidence:.2f}"
+        else:
+            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
+            label = f"pothole {detection.confidence:.2f}"
         cv2.putText(
             frame,
-            f"pothole {detection.confidence:.2f}",
+            label,
             (x_min, max(16, y_min - 6)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
@@ -412,9 +430,19 @@ def _draw_experimental_overlays(
     line_step = max(14, int(32 * font_scale))
     overlay_height = min(height, line_step * 3 + 8)
     cv2.rectangle(frame, (0, 0), (width, overlay_height), (0, 0, 0), -1)
+    title = (
+        "DRIVE REVIEW · SAMPLED PLAYBACK"
+        if render_mode == "drive_review"
+        else "EXPERIMENTAL MODEL OUTPUT"
+    )
+    subtitle = (
+        "GREEN CIRCLES = UNVERIFIED SUGGESTIONS"
+        if render_mode == "drive_review"
+        else "NOT HUMAN-VERIFIED"
+    )
     cv2.putText(
         frame,
-        "EXPERIMENTAL MODEL OUTPUT",
+        title,
         (6, line_step),
         cv2.FONT_HERSHEY_SIMPLEX,
         font_scale,
@@ -424,7 +452,7 @@ def _draw_experimental_overlays(
     )
     cv2.putText(
         frame,
-        "NOT HUMAN-VERIFIED",
+        subtitle,
         (6, line_step * 2),
         cv2.FONT_HERSHEY_SIMPLEX,
         font_scale,

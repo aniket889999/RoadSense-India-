@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: roadsense_postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-roadsense}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-roadsense_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-roadsense_india}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-roadsense} -d ${POSTGRES_DB:-roadsense_india}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local

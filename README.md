@@ -8,58 +8,60 @@
 4. **Step 5 (Experimental):** Offer local, hash-pinned model suggestions without changing the manual reporting workflow.
 5. **Step 6 (Drive Review):** Replay a bounded window of uploaded dashcam footage with green circles around raw model suggestions. *(Recorded-video review only; not a live driver-alert system.)*
 6. **Step 7 (Local Curation):** Export explicitly human-confirmed sampled frames into a separate, local-only curation pool for a future experiment. *(It does not train or change the frozen baseline.)*
+7. **Step 8 (Operations Command Center):** Industrial-grade local dashcam operations platform with Next.js 14 frontend, FastAPI async backend, PostgreSQL/PostGIS persistence, and immutable audit logs.
+8. **Step 9 (Media Intelligence Pipeline):** OpenCV bounded streaming, FFprobe container verification, ByteTrack multi-object tracking, and FFmpeg H.264 web encoding.
 
 ## Project Problem Statement
-RoadSense provides a video-based road condition analytics platform. The active application currently provides a Manual Annotation Baseline: it samples video frames and turns human-provided pothole boxes into evidence-backed incident reports.
+RoadSense provides an industrial-grade, local-first road condition analytics platform. It ingests dashcam video, tracks pothole candidate detections across frames with ByteTrack, consolidates tracks into reviewable Road Events, and equips municipal road inspectors with an auditable verification workflow.
 
 ## Target User
-Road inspector, campus facilities team, or municipal field team.
+Road inspector, municipal public works department, campus facilities team, or fleet safety auditor.
 
-## MVP User Flow
+## Production Architecture & Media Pipeline
 ```text
-Road video
-→ real metadata extraction
-→ sampled frames
-→ downloadable annotation kit
-→ human-provided pothole CSV
-→ manually grouped incidents
-→ evidence-backed report
+Dashcam Video (.mp4)
+  → FFprobe Secure Media Intake (codec, rotation, duration, fps validation)
+  → Memory-Bounded OpenCV Frame Streaming
+  → Provenance-Verified Frozen YOLOv8n (Apple MPS / CUDA)
+  → ByteTrack Multi-Object Tracking (Session-local Track IDs & Kalman Gating)
+  → Road Event Fusion Engine (Deduplicated candidate events)
+  → FFmpeg H.264/yuv420p Faststart Browser-Ready Video Encoding
+  → Human Inspection Workbench (Confirm / Reject / Revisit decisions)
+  → Auditable Field Inspection Dossier (.zip / .csv / .json)
 ```
 
 ## Current Development Status
-- **Primary Web Application**: A Streamlit dashboard with upload-backed Dashcam Drive Review and a separate Manual Evidence workspace.
-- **Dashcam Drive Review**: Selects a bounded source-video window, samples it locally, and renders raw model suggestions as green circles in a non-real-time replay. It does not confirm or report potholes automatically.
-- **Offline ML Pipeline**: Custom YOLOv8n pothole detector baseline trained for 50 epochs on Apple Silicon (MPS) and evaluated once on a held-out test split (Precision: 35.54%, Recall: 31.45%, mAP@50: 29.26%, mAP@50–95: 10.84%). Detailed report: [Frozen Baseline Results](docs/frozen_baseline_results.md).
-- **Local Curation Pool**: A CLI can export only explicitly human-confirmed kit frames and boxes for a possible future experiment. See [Manual Curation](docs/manual_curation.md).
+- **Operations Command Center (`apps/web`)**: Next.js 14 dashboard with synchronized video/canvas viewport, ByteTrack labels, spatial route maps, and audit-logged review drawer.
+- **FastAPI Backend (`services/api`)**: Async API with PostgreSQL/PostGIS & SQLite persistence, WebSocket live progress, and media artifact generation.
+- **Media Intelligence Pipeline (`src/media/`, `src/tracking/`)**: FFprobe validation, OpenCV streaming memory bounding, ByteTrack adapter, and FFmpeg libx264 encoding.
+- **Offline ML Baseline**: Custom single-class YOLOv8n detector trained on Apple Silicon (MPS) and evaluated once on a held-out test split (Precision: 35.54%, Recall: 31.45%, mAP@50: 29.26%, mAP@50–95: 10.84%). Detailed report: [Frozen Baseline Results](docs/frozen_baseline_results.md).
 
-## Planned Modules
-- Video Input processing *(Active in Streamlit)*
-- Detectors (Potholes) - *Active Application is Manual Only; Custom YOLOv8n model trained offline*
-- Analytics (Traffic context) - *Not Active*
-- Fusion (Duplicate removal) - *Currently Manual Only*
-- Scoring (Inspection-priority) - *Not Active*
-- Exporters (Reports) *(Active in Streamlit)*
+## Local Setup & Quickstart
 
-## Local Setup Instructions
-1. Create a Python 3.12 virtual environment.
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run the app:
+### 1. Python Virtual Environment
 ```bash
-streamlit run app.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r services/api/requirements.txt
 ```
 
-To enable Drive Review, use the project's local training environment. It includes the normal app requirements plus the local Ultralytics runtime:
-
+### 2. Start FastAPI Backend Service
 ```bash
-.venv/bin/python -m pip install -r requirements-training.txt
-.venv/bin/streamlit run app.py
+.venv/bin/uvicorn services.api.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-## Important Scope Limits
-- Manual incident reports are built only from a human-provided CSV. Drive Review never creates, groups, or verifies incidents, and it never writes directly into a manual report.
-- Drive Review reads an uploaded recording in a bounded local session. It is not a continuous live camera, navigation aid, driver warning, or safety system.
-- Experimental suggestions use only the configured local frozen checkpoint after SHA-256 and provenance verification. They never download weights, train, call an external inference API, or re-run the held-out test split.
-- The manual curation command does not treat unreviewed frames as negative labels, does not copy the original MP4, and does not modify the frozen RDD2022 dataset or its held-out test split.
-- The experimental model is a research/portfolio baseline, not production-ready or safety-critical software. Review every suggested box manually before using it.
-- Strict column parsing (exact columns only): `incident_id,frame_index,x_min,y_min,x_max,y_max,label,note`
-- label must be exactly `pothole`
+### 3. Start Next.js Operations Dashboard
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to access the Command Center.
+
+## Important Scope & Operational Limits
+- **AI Suggestions Are Not Confirmed Potholes**: Every detection is labeled `AI SUGGESTION — NOT HUMAN VERIFIED` until signed off by a human inspector.
+- **Zero Coordinate Fabrication**: GPS telemetry is extracted strictly from embedded NMEA/sensor metadata. When absent, the system displays "No GPS Supplied" rather than fabricating artificial coordinates.
+- **No Volumetric Depth or Hazard Risk**: Monocular dashcam video cannot measure 3D pothole depth. RoadSense never claims pothole depth, axle risk, or automated repair priority.
+- **Not an ADAS / Collision Alert System**: The application is an offline/local review workbench, not a certified real-time driver alert or collision avoidance tool.
+- **100% Local Execution**: Zero cloud API calls, telemetry, or external STUN/TURN services.

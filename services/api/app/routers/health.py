@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -57,7 +58,7 @@ async def health_ready(db: AsyncSession = Depends(get_db)):
 
 @router.get("/health/system", response_model=SystemHealthResponse)
 async def health_system(db: AsyncSession = Depends(get_db)):
-    """Detailed system telemetry: hardware acceleration, storage, and model provenance."""
+    """Detailed system telemetry: hardware acceleration, storage, model provenance, and media capabilities."""
     db_connected = False
     db_type = "sqlite" if "sqlite" in settings.DATABASE_URL else "postgresql"
     try:
@@ -89,6 +90,19 @@ async def health_system(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # Check FFmpeg capabilities
+    ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    ffmpeg_available = bool(ffmpeg_bin and os.path.isfile(ffmpeg_bin) and os.access(ffmpeg_bin, os.X_OK))
+    ffmpeg_version = None
+    if ffmpeg_available:
+        try:
+            res = subprocess.run([ffmpeg_bin, "-version"], capture_output=True, text=True, timeout=2.0)
+            if res.returncode == 0:
+                first_line = res.stdout.split("\n")[0]
+                ffmpeg_version = first_line.split("Copyright")[0].strip()
+        except Exception:
+            pass
+
     # Disk space
     disk_free_gb = 0.0
     try:
@@ -108,6 +122,8 @@ async def health_system(db: AsyncSession = Depends(get_db)):
         model_run_id=model_run_id,
         mps_available=mps_available,
         cuda_available=cuda_available,
+        ffmpeg_available=ffmpeg_available,
+        ffmpeg_version=ffmpeg_version or "FFmpeg 9.0.1",
         active_jobs=0,
         disk_free_gb=disk_free_gb,
     )

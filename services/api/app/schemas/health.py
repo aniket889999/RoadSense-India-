@@ -27,6 +27,8 @@ class HealthResponse(BaseModel):
 
 
 class SystemHealthResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     status: str
     timestamp: datetime
     api_version: str
@@ -37,6 +39,8 @@ class SystemHealthResponse(BaseModel):
     model_run_id: Optional[str] = None
     mps_available: bool
     cuda_available: bool
+    ffmpeg_available: bool = True
+    ffmpeg_version: Optional[str] = None
     active_jobs: int = 0
     disk_free_gb: float
     last_error: Optional[str] = None

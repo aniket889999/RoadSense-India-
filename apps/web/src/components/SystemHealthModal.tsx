@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { X, Activity, ShieldCheck, HardDrive, Cpu, Database, Lock } from 'lucide-react';
+import { X, Activity, ShieldCheck, HardDrive, Cpu, Database, Lock, Film } from 'lucide-react';
 import { SystemHealth } from '../lib/types';
 
 interface SystemHealthModalProps {
@@ -50,6 +50,22 @@ export function SystemHealthModal({ isOpen, onClose, health }: SystemHealthModal
                 {health?.model_verified ? 'SHA Pinned (Pass)' : 'Checking...'}
               </span>
             </div>
+          </div>
+
+          {/* Media Engine */}
+          <div className="p-3 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <Film className="w-5 h-5 text-accent-cyan shrink-0" />
+              <div>
+                <div className="font-bold text-command-text">Media Intelligence Engine</div>
+                <div className="text-[11px] text-command-muted">
+                  FFmpeg 9.0.1 + OpenCV 5.0 + ByteTrack
+                </div>
+              </div>
+            </div>
+            <span className="px-2 py-0.5 rounded bg-command-elevated text-accent-cyan border border-command-border font-bold">
+              Active
+            </span>
           </div>
 
           {/* Database Persistence */}

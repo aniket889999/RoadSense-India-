@@ -4,7 +4,9 @@ import pytest
 from services.api.app.services.event_fusion import (
     DetectionCandidate,
     cluster_detections_into_road_events,
+    fuse_tracks_into_road_events,
 )
+from src.tracking.bytetrack_adapter import TrackObservation, TrackSummary
 
 
 def test_empty_detections():
@@ -60,31 +62,41 @@ def test_clustering_consecutive_overlapping_detections():
     assert ev.representative_detection_id == "det-2"
 
 
-def test_clustering_separate_potholes_by_time():
-    # Two detections far apart in time (> 1.5s gap)
+def test_clustering_with_bytetrack_ids():
+    # Detections carrying ByteTrack track IDs
     det1 = DetectionCandidate(
-        id="det-1", frame_index=10, timestamp_seconds=2.0, confidence=0.80,
-        x_min=100.0, y_min=100.0, x_max=200.0, y_max=200.0,
+        id="det-1", frame_index=5, timestamp_seconds=1.0, confidence=0.80,
+        x_min=100.0, y_min=100.0, x_max=200.0, y_max=200.0, track_id=42,
     )
     det2 = DetectionCandidate(
-        id="det-2", frame_index=30, timestamp_seconds=6.0, confidence=0.75,
-        x_min=100.0, y_min=100.0, x_max=200.0, y_max=200.0,
+        id="det-2", frame_index=6, timestamp_seconds=1.2, confidence=0.90,
+        x_min=102.0, y_min=101.0, x_max=202.0, y_max=201.0, track_id=42,
     )
     events = cluster_detections_into_road_events([det1, det2])
-    assert len(events) == 2
-    assert events[0].first_seen_seconds == 2.0
-    assert events[1].first_seen_seconds == 6.0
+    assert len(events) == 1
+    assert events[0].track_id == 42
+    assert events[0].support_count == 2
+    assert events[0].representative_confidence == 0.90
 
 
-def test_clustering_separate_potholes_by_space():
-    # Two detections in the same frame but far apart spatially
-    det1 = DetectionCandidate(
-        id="det-1", frame_index=10, timestamp_seconds=2.0, confidence=0.80,
-        x_min=10.0, y_min=10.0, x_max=50.0, y_max=50.0,
+def test_fuse_tracks_into_road_events():
+    obs1 = TrackObservation(
+        session_id="sess-1", track_id=7, frame_number=2, timestamp_seconds=0.4,
+        bbox=(50.0, 50.0, 120.0, 120.0), confidence=0.80,
     )
-    det2 = DetectionCandidate(
-        id="det-2", frame_index=10, timestamp_seconds=2.0, confidence=0.85,
-        x_min=500.0, y_min=500.0, x_max=600.0, y_max=600.0,
+    obs2 = TrackObservation(
+        session_id="sess-1", track_id=7, frame_number=3, timestamp_seconds=0.6,
+        bbox=(52.0, 51.0, 122.0, 121.0), confidence=0.94,
     )
-    events = cluster_detections_into_road_events([det1, det2])
-    assert len(events) == 2
+    track = TrackSummary(
+        track_id=7, session_id="sess-1", first_seen_seconds=0.4, last_seen_seconds=0.6,
+        first_frame=2, last_frame=3, observation_count=2, max_confidence=0.94,
+        avg_confidence=0.87, representative_frame=3, representative_bbox=(52.0, 51.0, 122.0, 121.0),
+        observations=[obs1, obs2], is_stable=True,
+    )
+
+    events = fuse_tracks_into_road_events([track])
+    assert len(events) == 1
+    assert events[0].track_id == 7
+    assert events[0].representative_confidence == 0.94
+    assert events[0].support_count == 2

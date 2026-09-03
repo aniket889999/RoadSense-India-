@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import src.ml.video_inference as video_inference
-from src.ml.video_inference import run_sampled_video_inference
+from src.ml.video_inference import ExperimentalDetection, run_sampled_video_inference
 
 
 def create_marker_video(frame_count=8, width=96, height=72):
@@ -251,3 +251,56 @@ def test_rejects_non_monotonic_sampled_frame_plan():
 
     with pytest.raises(ValueError, match="strictly increasing"):
         run_sampled_video_inference(video_bytes, "input.mp4", [2, 1], lambda _frame: [])
+
+
+def test_drive_review_circle_marker_is_drawn_only_for_raw_suggestions(monkeypatch):
+    frame = np.zeros((80, 100, 3), dtype=np.uint8)
+    detection = ExperimentalDetection(
+        frame_index=3,
+        timestamp_seconds=0.3,
+        class_id=0,
+        confidence=0.75,
+        x_min=20.0,
+        y_min=10.0,
+        x_max=60.0,
+        y_max=50.0,
+    )
+    calls = []
+    real_circle = video_inference.cv2.circle
+
+    def spy_circle(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_circle(*args, **kwargs)
+
+    monkeypatch.setattr(video_inference.cv2, "circle", spy_circle)
+    video_inference._draw_experimental_overlays(
+        frame,
+        [detection],
+        frame_index=3,
+        timestamp_seconds=0.3,
+        render_mode="drive_review",
+    )
+    assert calls
+    assert calls[0][0][1] == (40, 30)
+    assert calls[0][0][3] == (0, 220, 0)
+
+    calls.clear()
+    video_inference._draw_experimental_overlays(
+        frame,
+        [],
+        frame_index=4,
+        timestamp_seconds=0.4,
+        render_mode="drive_review",
+    )
+    assert calls == []
+
+
+def test_rejects_unknown_render_mode_before_video_processing():
+    with pytest.raises(ValueError, match="render_mode"):
+        run_sampled_video_inference(
+            b"not-opened",
+            "input.mp4",
+            [0],
+            lambda _frame: [],
+            render_mode="live_alert",
+        )

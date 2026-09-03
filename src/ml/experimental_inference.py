@@ -112,8 +112,13 @@ def run_verified_sampled_video_inference(
     model_info: FrozenModelInfo,
     settings: ExperimentalInferenceSettings,
     input_video_sha256: str | None = None,
+    render_mode: str = "experimental",
 ) -> ExperimentalInferenceResult:
-    """Render raw, unverified local-model suggestions for an existing sample plan."""
+    """Render raw, unverified local-model suggestions for an existing sample plan.
+
+    ``render_mode`` changes presentation only.  It never changes the model,
+    sample plan, confidence threshold, or the meaning of a raw detection.
+    """
 
     metadata = dict(build_public_inference_metadata(model_info, settings))
     if input_video_sha256 is not None:
@@ -129,4 +134,5 @@ def run_verified_sampled_video_inference(
         confidence_threshold=settings.confidence_threshold,
         output_fps=settings.output_fps,
         model_metadata=metadata,
+        render_mode=render_mode,
     )

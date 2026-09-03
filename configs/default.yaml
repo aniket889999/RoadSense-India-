@@ -17,3 +17,12 @@ experimental_inference:
   iou_threshold: 0.7
   max_detections_per_frame: 100
   output_fps: 5
+
+drive_review:
+  # Upload-backed sampled playback only; this is not a live dashcam alert system.
+  enabled: true
+  default_window_seconds: 30
+  max_window_seconds: 60
+  sampling_fps: 2
+  max_sampled_frames: 120
+  output_fps: 5

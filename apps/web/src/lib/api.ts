@@ -59,6 +59,7 @@ export async function triggerProcessing(
     max_frames?: number;
     window_start_seconds?: number;
     window_duration_seconds?: number;
+    apply_privacy_mask?: boolean;
   } = {}
 ): Promise<{ message: string; session_id: string }> {
   const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/process`, {
@@ -71,6 +72,7 @@ export async function triggerProcessing(
       max_frames: params.max_frames ?? 150,
       window_start_seconds: params.window_start_seconds ?? 0.0,
       window_duration_seconds: params.window_duration_seconds ?? 30.0,
+      apply_privacy_mask: params.apply_privacy_mask ?? false,
     }),
   });
 
@@ -79,6 +81,33 @@ export async function triggerProcessing(
     throw new Error(err.detail || 'Failed to trigger processing.');
   }
 
+  return res.json();
+}
+
+export async function cancelSession(sessionId: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to cancel session.');
+  }
+  return res.json();
+}
+
+export async function deleteSession(
+  sessionId: string,
+  options: { delete_source_media?: boolean; delete_artifacts?: boolean; delete_database_record?: boolean } = {}
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to delete session.');
+  }
   return res.json();
 }
 

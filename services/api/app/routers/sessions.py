@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -43,11 +44,15 @@ from services.api.app.schemas.road_event import (
     RoadEventResponse,
 )
 from services.api.app.schemas.session import (
+    SessionDeleteRequest,
     SessionProcessRequest,
     SessionResponse,
 )
 from services.api.app.services.live_manager import ws_manager
-from services.api.app.services.video_processor import process_video_session
+from services.api.app.services.video_processor import (
+    cancel_session_processing,
+    process_video_session,
+)
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["Drive Sessions"])
 
@@ -148,7 +153,7 @@ async def trigger_processing(
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
-    if session.processing_state in {"processing", "validating", "sampling", "model_loading"}:
+    if session.processing_state in {"processing", "validating", "sampling", "model_loading", "detecting", "tracking", "fusing_events", "encoding"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Session is already actively processing."
@@ -157,6 +162,47 @@ async def trigger_processing(
     # Launch background job
     background_tasks.add_task(process_video_session, session_id, request)
     return {"message": "Processing job queued successfully.", "session_id": session_id}
+
+
+@router.post("/{session_id}/cancel")
+async def cancel_processing(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request graceful cancellation of a running video processing pipeline."""
+    stmt = select(DriveSession).where(DriveSession.id == session_id)
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+    cancel_session_processing(session_id)
+    return {"message": "Cancellation request submitted.", "session_id": session_id}
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: str,
+    req: SessionDeleteRequest = SessionDeleteRequest(),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a drive session and optionally purge disk artifacts with configurable retention."""
+    stmt = select(DriveSession).where(DriveSession.id == session_id)
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+    session_dir = settings.session_dir / session_id
+    if req.delete_source_media or req.delete_artifacts:
+        if session_dir.exists() and session_dir.is_dir():
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+    if req.delete_database_record:
+        await db.delete(session)
+        await db.commit()
+
+    return {"message": "Session deleted successfully.", "session_id": session_id}
 
 
 @router.get("/{session_id}/detections", response_model=List[RawDetectionResponse])
@@ -242,7 +288,6 @@ async def session_events_websocket(websocket: WebSocket, session_id: str):
     await ws_manager.connect(session_id, websocket)
     try:
         while True:
-            # Keep connection alive; client can send pings
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         await ws_manager.disconnect(session_id, websocket)

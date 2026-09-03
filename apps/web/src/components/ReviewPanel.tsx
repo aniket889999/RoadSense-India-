@@ -10,6 +10,7 @@ import {
   FileCheck,
   History,
   Tag,
+  Crosshair,
 } from 'lucide-react';
 import { ReviewActionType, ReviewStatus, RoadEvent } from '../lib/types';
 import { getArtifactDownloadUrl, reviewRoadEvent } from '../lib/api';
@@ -139,9 +140,16 @@ export function ReviewPanel({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-mono font-bold text-command-text">
-                    @ {ev.first_seen_seconds.toFixed(2)}s - {ev.last_seen_seconds.toFixed(2)}s
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-mono font-bold text-command-text">
+                      @ {ev.first_seen_seconds.toFixed(2)}s - {ev.last_seen_seconds.toFixed(2)}s
+                    </span>
+                    {ev.track_id !== undefined && ev.track_id !== null && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-radar-dim/30 text-radar-bright border border-radar-green/30">
+                        Track #{ev.track_id}
+                      </span>
+                    )}
+                  </div>
                   {getStatusBadge(ev.review_status)}
                 </div>
 
@@ -152,7 +160,7 @@ export function ReviewPanel({
 
                 {ev.reviewer_note && (
                   <p className="mt-1 text-[10px] text-command-muted italic line-clamp-1">
-                    "{ev.reviewer_note}"
+                    &ldquo;{ev.reviewer_note}&rdquo;
                   </p>
                 )}
               </div>
@@ -165,8 +173,13 @@ export function ReviewPanel({
       {selectedEvent && (
         <div className="p-4 bg-command-surface border-t border-command-border space-y-3">
           <div className="text-xs font-mono font-bold text-command-text flex items-center justify-between">
-            <span>Reviewing Event @ {selectedEvent.first_seen_seconds.toFixed(2)}s</span>
-            <span className="text-[10px] text-command-muted">ID: {selectedEvent.id.slice(0, 8)}</span>
+            <div className="flex items-center space-x-1.5">
+              <Crosshair className="w-3.5 h-3.5 text-radar-bright" />
+              <span>Event @ {selectedEvent.first_seen_seconds.toFixed(2)}s</span>
+            </div>
+            <span className="text-[10px] text-command-muted font-mono">
+              {selectedEvent.track_id !== undefined && selectedEvent.track_id !== null ? `Track #${selectedEvent.track_id}` : `ID: ${selectedEvent.id.slice(0, 8)}`}
+            </span>
           </div>
 
           <textarea

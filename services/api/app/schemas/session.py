@@ -27,6 +27,7 @@ class SessionResponse(BaseModel):
     total_detections_count: Optional[int] = None
     processing_duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
+    media_metadata: Optional[dict[str, Any]] = None
     model_provenance: Optional[dict[str, Any]] = None
     route_telemetry: Optional[list[dict[str, Any]]] = None
 
@@ -38,14 +39,21 @@ class SessionProcessRequest(BaseModel):
     max_frames: int = Field(150, gt=0, le=1000)
     window_start_seconds: float = Field(0.0, ge=0.0)
     window_duration_seconds: float = Field(30.0, gt=0.0)
+    apply_privacy_mask: bool = Field(False)
 
 
 class SessionProgressEvent(BaseModel):
     session_id: str
-    stage: str # validating, sampling, model_loading, processing, rendering, complete, failed
+    stage: str # validating, decoding, detecting, tracking, fusing_events, encoding, complete, failed, cancelled
     processed_frames: int = 0
     total_frames: int = 0
     percentage: float = 0.0
     current_fps: Optional[float] = None
     message: Optional[str] = None
     detections_found: int = 0
+
+
+class SessionDeleteRequest(BaseModel):
+    delete_source_media: bool = True
+    delete_artifacts: bool = True
+    delete_database_record: bool = True

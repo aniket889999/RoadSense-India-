@@ -1,21 +1,46 @@
 'use client';
 
 import React from 'react';
-import { Film, CheckCircle2, Clock, AlertTriangle, Download, ArrowRight } from 'lucide-react';
+import { Film, CheckCircle2, Clock, AlertTriangle, Download, ArrowRight, Trash2, StopCircle } from 'lucide-react';
 import { DriveSession } from '../lib/types';
-import { getArtifactDownloadUrl } from '../lib/api';
+import { cancelSession, deleteSession, getArtifactDownloadUrl } from '../lib/api';
 
 interface SessionsListProps {
   sessions: DriveSession[];
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
+  onSessionDeleted?: (sessionId: string) => void;
 }
 
 export function SessionsList({
   sessions,
   activeSessionId,
   onSelectSession,
+  onSessionDeleted,
 }: SessionsListProps) {
+  const handleDelete = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm('Delete this drive session and associated media artifacts?')) {
+      try {
+        await deleteSession(sessionId);
+        if (onSessionDeleted) {
+          onSessionDeleted(sessionId);
+        }
+      } catch (err) {
+        console.error('Delete session error:', err);
+      }
+    }
+  };
+
+  const handleCancel = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await cancelSession(sessionId);
+    } catch (err) {
+      console.error('Cancel session error:', err);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full rounded-xl glass-panel-elevated border border-command-border overflow-hidden">
       {/* Header */}
@@ -42,7 +67,8 @@ export function SessionsList({
             const isSelected = activeSessionId === sess.id;
             const isComplete = sess.processing_state === 'complete';
             const isFailed = sess.processing_state === 'failed';
-            const isRunning = !isComplete && !isFailed;
+            const isCancelled = sess.processing_state === 'cancelled';
+            const isRunning = !isComplete && !isFailed && !isCancelled;
 
             return (
               <div
@@ -71,6 +97,12 @@ export function SessionsList({
                           <span className="uppercase">{sess.processing_state}...</span>
                         </span>
                       )}
+                      {isCancelled && (
+                        <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-command-elevated text-command-muted border border-command-border flex items-center space-x-1">
+                          <StopCircle className="w-3 h-3" />
+                          <span>CANCELLED</span>
+                        </span>
+                      )}
                       {isFailed && (
                         <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-accent-red/20 text-accent-red border border-accent-red/30 flex items-center space-x-1">
                           <AlertTriangle className="w-3 h-3" />
@@ -89,6 +121,16 @@ export function SessionsList({
 
                   {/* Actions */}
                   <div className="flex items-center space-x-2 font-mono text-xs">
+                    {isRunning && (
+                      <button
+                        onClick={(e) => handleCancel(sess.id, e)}
+                        className="px-2.5 py-1.5 rounded bg-accent-red/20 hover:bg-accent-red text-accent-red hover:text-white border border-accent-red/30 transition-colors flex items-center space-x-1"
+                        title="Cancel Processing"
+                      >
+                        <StopCircle className="w-3.5 h-3.5" />
+                        <span>Cancel</span>
+                      </button>
+                    )}
                     {isComplete && (
                       <a
                         href={getArtifactDownloadUrl(sess.id, 'report_zip')}
@@ -110,6 +152,13 @@ export function SessionsList({
                     >
                       <span>Inspect</span>
                       <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDelete(sess.id, e)}
+                      className="p-1.5 rounded text-command-muted hover:text-accent-red hover:bg-accent-red/10 transition-colors"
+                      title="Delete Session"
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>

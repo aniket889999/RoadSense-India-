@@ -16,6 +16,7 @@ class RawDetectionResponse(BaseModel):
     timestamp_seconds: float
     confidence: float
     class_id: int = 0
+    track_id: Optional[int] = None
     x_min: float
     y_min: float
     x_max: float
@@ -50,10 +51,12 @@ class RoadEventResponse(BaseModel):
     last_seen_seconds: float
     first_frame_index: int
     last_frame_index: int
+    track_id: Optional[int] = None
     representative_detection_id: Optional[str] = None
     representative_confidence: float
     representative_bbox: dict[str, float]
     support_count: int
+    evidence_crop_path: Optional[str] = None
     review_status: str
     reviewer_note: Optional[str] = None
     reviewed_at: Optional[datetime] = None

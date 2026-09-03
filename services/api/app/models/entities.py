@@ -43,7 +43,7 @@ class DriveSession(Base):
     mode: Mapped[str] = mapped_column(String(32), default="upload", nullable=False) # upload | live
     source_filename: Mapped[str] = mapped_column(String(256), nullable=False)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    processing_state: Mapped[str] = mapped_column(String(32), default="queued", nullable=False) # queued, validating, sampling, model_loading, processing, rendering, complete, failed
+    processing_state: Mapped[str] = mapped_column(String(32), default="queued", nullable=False) # queued, validating, decoding, detecting, tracking, fusing_events, encoding, complete, failed, cancelled
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -59,6 +59,9 @@ class DriveSession(Base):
     frames_with_detections: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     total_detections_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     processing_duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Full ffprobe media metadata (JSON)
+    media_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     # Model Provenance snapshot (JSON)
     model_provenance: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
@@ -82,6 +85,7 @@ class RawDetection(Base):
     timestamp_seconds: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     class_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    track_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
 
     x_min: Mapped[float] = mapped_column(Float, nullable=False)
     y_min: Mapped[float] = mapped_column(Float, nullable=False)
@@ -107,10 +111,12 @@ class RoadEvent(Base):
     first_frame_index: Mapped[int] = mapped_column(Integer, nullable=False)
     last_frame_index: Mapped[int] = mapped_column(Integer, nullable=False)
 
+    track_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     representative_detection_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     representative_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     representative_bbox: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False) # {x_min, y_min, x_max, y_max}
     support_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    evidence_crop_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     # Review status: PENDING_REVIEW, CONFIRMED, REJECTED, NEEDS_REVISIT
     review_status: Mapped[str] = mapped_column(String(32), default="PENDING_REVIEW", nullable=False, index=True)
@@ -150,7 +156,7 @@ class Artifact(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
     session_id: Mapped[str] = mapped_column(String(64), ForeignKey("drive_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False) # raw_video, annotated_video, report_zip, detections_csv, metadata_json
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False) # raw_video, annotated_video, report_zip, detections_csv, metadata_json, evidence_crop
     relative_path: Mapped[str] = mapped_column(String(512), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)

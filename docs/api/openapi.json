@@ -213,6 +213,59 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Drive Sessions"
+        ],
+        "summary": "Delete Session",
+        "description": "Delete a drive session and optionally purge disk artifacts with configurable retention.",
+        "operationId": "delete_session_api_v1_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionDeleteRequest",
+                "default": {
+                  "delete_source_media": true,
+                  "delete_artifacts": true,
+                  "delete_database_record": true
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/sessions/{session_id}/process": {
@@ -246,6 +299,47 @@
         },
         "responses": {
           "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/cancel": {
+      "post": {
+        "tags": [
+          "Drive Sessions"
+        ],
+        "summary": "Cancel Processing",
+        "description": "Request graceful cancellation of a running video processing pipeline.",
+        "operationId": "cancel_processing_api_v1_sessions__session_id__cancel_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -745,6 +839,17 @@
             "title": "Class Id",
             "default": 0
           },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
           "x_min": {
             "type": "number",
             "title": "X Min"
@@ -869,6 +974,17 @@
             "type": "integer",
             "title": "Last Frame Index"
           },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
           "representative_detection_id": {
             "anyOf": [
               {
@@ -894,6 +1010,17 @@
           "support_count": {
             "type": "integer",
             "title": "Support Count"
+          },
+          "evidence_crop_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Crop Path"
           },
           "review_status": {
             "type": "string",
@@ -1000,6 +1127,27 @@
         ],
         "title": "RoadEventReviewRequest"
       },
+      "SessionDeleteRequest": {
+        "properties": {
+          "delete_source_media": {
+            "type": "boolean",
+            "title": "Delete Source Media",
+            "default": true
+          },
+          "delete_artifacts": {
+            "type": "boolean",
+            "title": "Delete Artifacts",
+            "default": true
+          },
+          "delete_database_record": {
+            "type": "boolean",
+            "title": "Delete Database Record",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "SessionDeleteRequest"
+      },
       "SessionProcessRequest": {
         "properties": {
           "confidence_threshold": {
@@ -1041,6 +1189,11 @@
             "exclusiveMinimum": 0.0,
             "title": "Window Duration Seconds",
             "default": 30.0
+          },
+          "apply_privacy_mask": {
+            "type": "boolean",
+            "title": "Apply Privacy Mask",
+            "default": false
           }
         },
         "type": "object",
@@ -1194,6 +1347,18 @@
               }
             ],
             "title": "Error Message"
+          },
+          "media_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Metadata"
           },
           "model_provenance": {
             "anyOf": [

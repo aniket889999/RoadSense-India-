@@ -192,12 +192,16 @@ To ensure geometric validity and prevent erroneous spatial assumptions:
 1. **No Automatic Cross-Camera Video Mapping:** Mobile dashcam pothole detections **cannot** automatically map to CCTV parking polygons from video appearance alone.
 2. **Incomparable Image Coordinates:** Pixel coordinates from disparate cameras (mobile vs. fixed) are entirely distinct reference frames and are **not** directly comparable.
 3. **Planar Homography Limitations:** Planar homography applies strictly where the mapped lot surface is sufficiently planar and surveyed ground control points are valid.
-4. **Calibration Status Lifecycle:** The system maintains an explicit camera calibration state:
+4. **Calibration Status Lifecycle & Stability Gate:** The system maintains an explicit camera calibration state:
    - `NOT_CONFIGURED`: Camera registered without geometric calibration.
    - `PENDING_REVIEW`: Ground control points marked, awaiting validation.
    - `VERIFIED`: Calibration active, planar error within tolerance.
    - `INVALIDATED`: Camera movement or background drift detected; geometric projections disabled.
-5. **Handling Unregistered Observations:** In the absence of a verified shared coordinate system, mobile hazard observations remain **unassociated** until linked manually by a human reviewer in the Review Queue. The system will **never** guess or interpolate unverified coordinates.
+5. **Fail-Closed Camera Stability Guard:**
+   - Operational inference is guarded by automated visual feature matching (ORB / homography decomposition) against the calibration reference image.
+   - **Gate Logic:** `ALLOWED` strictly when a fresh assessment is `STABLE` and its reference image SHA matches the active verified layout SHA. Any `UNSTABLE`, `INSUFFICIENT_EVIDENCE`, missing, errored, or stale assessment transitions the operational gate to `BLOCKED`.
+   - **Geometry Preservation:** Automated stability blocking **never silently mutates or deletes human-verified geometry**. The verified polygon coordinates remain intact in the database for operator review, audit, or explicit re-verification/invalidation.
+6. **Handling Unregistered Observations:** In the absence of a verified shared coordinate system, mobile hazard observations remain **unassociated** until linked manually by a human reviewer in the Review Queue. The system will **never** guess or interpolate unverified coordinates.
 
 ---
 

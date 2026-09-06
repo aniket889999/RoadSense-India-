@@ -22,15 +22,18 @@ from services.api.app.db.session import get_db
 from services.api.app.models.entities import (
     ApproachZone,
     Camera,
+    CameraStabilityAssessment,
     LayoutAuditEvent,
     ParkingLayoutRevision,
     ParkingSpace,
     Site,
 )
 from services.api.app.schemas.parking import (
+    AcknowledgeStabilityRequest,
     AuditEventResponse,
     CameraCreateRequest,
     CameraInvalidateCalibrationRequest,
+    CameraOperationalGateResponse,
     CameraResponse,
     LayoutCreateRequest,
     LayoutInvalidateRequest,
@@ -43,8 +46,10 @@ from services.api.app.schemas.parking import (
     ParkingSpaceSchema,
     ApproachZoneSchema,
     PointSchema,
+    SampleMeasurementSchema,
     SiteCreateRequest,
     SiteResponse,
+    StabilityAssessmentResponse,
 )
 from services.api.app.services.reference_image_service import (
     ReferenceImageProcessingError,
@@ -53,9 +58,18 @@ from services.api.app.services.reference_image_service import (
     validate_served_file_path,
 )
 
-from src.parking.contracts import CalibrationStatus, LayoutRevisionStatus, SpaceType
+from src.parking.contracts import (
+    CalibrationStatus,
+    LayoutRevisionStatus,
+    OperationalGate,
+    SpaceType,
+    StabilityDecision,
+    StabilityThresholds,
+    evaluate_operational_gate,
+)
 from src.parking.layout_serialization import compute_canonical_layout_sha256
 from src.parking.layout_validation import validate_parking_layout
+from src.parking.stability_engine import evaluate_video_camera_stability
 
 logger = logging.getLogger(__name__)
 
@@ -1264,3 +1278,345 @@ async def invalidate_layout(
     await db.refresh(rev)
 
     return _build_layout_response(rev)
+
+
+def _build_stability_response(a: CameraStabilityAssessment) -> StabilityAssessmentResponse:
+    return StabilityAssessmentResponse(
+        id=a.id,
+        camera_id=a.camera_id,
+        layout_revision_id=a.layout_revision_id,
+        layout_canonical_sha256=a.layout_canonical_sha256,
+        reference_image_sha256=a.reference_image_sha256,
+        video_sha256=a.video_sha256,
+        algorithm_version=a.algorithm_version,
+        opencv_version=a.opencv_version,
+        thresholds_snapshot=a.thresholds_snapshot,
+        sample_measurements=[
+            SampleMeasurementSchema(
+                sample_index=s["sample_index"],
+                timestamp_seconds=float(s["timestamp_seconds"]),
+                frame_index=int(s["frame_index"]),
+                matched_features=int(s["matched_features"]),
+                inlier_count=int(s["inlier_count"]),
+                inlier_ratio=float(s["inlier_ratio"]),
+                translation_px_x=float(s["translation_px_x"]),
+                translation_px_y=float(s["translation_px_y"]),
+                translation_magnitude_px=float(s["translation_magnitude_px"]),
+                translation_normalized=float(s["translation_normalized"]),
+                scale_factor=float(s["scale_factor"]),
+                scale_change=float(s["scale_change"]),
+                rotation_degrees=float(s["rotation_degrees"]),
+                perspective_distortion=float(s["perspective_distortion"]),
+                reprojection_error=float(s["reprojection_error"]),
+                decision=s["decision"],
+                rejection_reasons=s.get("rejection_reasons", []),
+            )
+            for s in a.sample_measurements
+        ],
+        aggregate_decision=a.aggregate_decision,
+        operational_gate=a.operational_gate,
+        gate_reasons=a.gate_reasons,
+        summary_metrics=a.summary_metrics,
+        created_at=a.created_at,
+        operator_acknowledged_at=a.operator_acknowledged_at,
+        operator_label=a.operator_label,
+        operator_note=a.operator_note,
+    )
+
+
+# ============================================================================
+# Camera Stability Endpoints
+# ============================================================================
+
+@router.post("/cameras/{camera_id}/stability/assess", response_model=StabilityAssessmentResponse, status_code=status.HTTP_201_CREATED)
+async def create_camera_stability_assessment(
+    camera_id: str,
+    file: Optional[UploadFile] = File(None),
+    local_video_name: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Execute a bounded local video camera stability assessment against the camera's reference image.
+    Computes motion metrics and fail-closed operational gate status.
+    """
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    if not cam.reference_image_path or not cam.reference_image_sha256:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Camera has no reference image uploaded. Stability assessment requires a verified reference frame.",
+        )
+
+    storage_root = get_storage_root()
+    ref_file_path = validate_served_file_path(cam.reference_image_path, storage_root)
+    if not ref_file_path.exists():
+        raise HTTPException(status_code=404, detail="Reference image file missing from storage.")
+
+    with open(ref_file_path, "rb") as rf:
+        ref_bytes = rf.read()
+
+    # Find active verified layout if present
+    layout_res = await db.execute(
+        select(ParkingLayoutRevision)
+        .where(ParkingLayoutRevision.camera_id == camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+    )
+    verified_layout = layout_res.scalar_one_or_none()
+    active_layout_id = verified_layout.id if verified_layout else None
+    active_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
+
+    # Handle incoming video
+    temp_video_path: Optional[Path] = None
+    target_video_path: Optional[Path] = None
+
+    try:
+        if file is not None:
+            # Stream upload bounded to 100MB
+            camera_dir = storage_root / "staging" / camera_id
+            camera_dir.mkdir(parents=True, exist_ok=True)
+            temp_video_path = camera_dir / f"assess_stream_{uuid.uuid4().hex}.mp4"
+
+            MAX_VIDEO_BYTES = 100 * 1024 * 1024
+            total_bytes = 0
+            with open(temp_video_path, "wb") as vf:
+                while chunk := await file.read(65536):
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_VIDEO_BYTES:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=f"Uploaded video exceeds maximum allowed size ({MAX_VIDEO_BYTES // (1024*1024)} MiB).",
+                        )
+                    vf.write(chunk)
+            target_video_path = temp_video_path
+        elif local_video_name:
+            # Safe local video name lookup
+            clean_name = os.path.basename(local_video_name.strip())
+            candidate_paths = [
+                storage_root / "staging" / camera_id / clean_name,
+                Path("/Users/aniket/Downloads") / clean_name,
+            ]
+            for cp in candidate_paths:
+                if cp.exists() and cp.is_file():
+                    target_video_path = cp
+                    break
+            if not target_video_path:
+                raise HTTPException(status_code=404, detail=f"Local video '{clean_name}' not found.")
+        else:
+            raise HTTPException(status_code=400, detail="Either 'file' or 'local_video_name' must be provided.")
+
+        # Run stability assessment engine
+        result = evaluate_video_camera_stability(
+            video_path=target_video_path,
+            reference_image_bytes=ref_bytes,
+            expected_reference_sha256=cam.reference_image_sha256,
+            active_layout_canonical_sha256=active_layout_sha,
+            sample_count=5,
+            max_duration_sec=60.0,
+            max_bytes=100 * 1024 * 1024,
+        )
+
+        assessment = CameraStabilityAssessment(
+            id=str(uuid.uuid4()),
+            camera_id=camera_id,
+            layout_revision_id=active_layout_id,
+            layout_canonical_sha256=active_layout_sha,
+            reference_image_sha256=result.reference_image_sha256,
+            video_sha256=result.video_sha256,
+            algorithm_version=result.algorithm_version,
+            opencv_version=result.opencv_version,
+            thresholds_snapshot=result.thresholds_snapshot,
+            sample_measurements=[s.to_dict() for s in result.samples],
+            aggregate_decision=result.aggregate_decision.value,
+            operational_gate=result.operational_gate.value,
+            gate_reasons=result.gate_reasons,
+            summary_metrics=result.summary_metrics,
+            created_at=utc_now(),
+        )
+        db.add(assessment)
+        await db.commit()
+        await db.refresh(assessment)
+
+        return _build_stability_response(assessment)
+
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    finally:
+        if temp_video_path and temp_video_path.exists():
+            try:
+                temp_video_path.unlink()
+            except Exception:
+                pass
+
+
+@router.get("/cameras/{camera_id}/stability/gate", response_model=CameraOperationalGateResponse)
+async def get_camera_operational_gate(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieve the current fail-closed operational inference gate for a camera.
+    Inference is ALLOWED only if a fresh STABLE assessment matches both reference and layout SHAs.
+    """
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    layout_res = await db.execute(
+        select(ParkingLayoutRevision)
+        .where(ParkingLayoutRevision.camera_id == camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+    )
+    verified_layout = layout_res.scalar_one_or_none()
+    current_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
+
+    # Get latest stability assessment
+    ass_res = await db.execute(
+        select(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.camera_id == camera_id)
+        .order_by(desc(CameraStabilityAssessment.created_at))
+        .limit(1)
+    )
+    latest_assessment = ass_res.scalar_one_or_none()
+
+    if not latest_assessment:
+        gate, reasons = evaluate_operational_gate(
+            decision=None,
+            assessment_reference_sha=None,
+            current_reference_sha=cam.reference_image_sha256,
+            assessment_layout_sha=None,
+            current_layout_sha=current_layout_sha,
+        )
+        return CameraOperationalGateResponse(
+            camera_id=camera_id,
+            operational_gate=gate.value,
+            gate_reasons=reasons,
+            aggregate_decision=None,
+            assessment_id=None,
+            reference_image_sha256=cam.reference_image_sha256,
+            layout_canonical_sha256=current_layout_sha,
+            created_at=None,
+            is_fresh=False,
+        )
+
+    decision_enum = None
+    try:
+        decision_enum = StabilityDecision(latest_assessment.aggregate_decision)
+    except Exception:
+        pass
+
+    now = utc_now()
+    gate, reasons = evaluate_operational_gate(
+        decision=decision_enum,
+        assessment_reference_sha=latest_assessment.reference_image_sha256,
+        current_reference_sha=cam.reference_image_sha256,
+        assessment_layout_sha=latest_assessment.layout_canonical_sha256,
+        current_layout_sha=current_layout_sha,
+        assessment_timestamp=latest_assessment.created_at,
+        current_timestamp=now,
+    )
+
+    t_ass = latest_assessment.created_at.astimezone(timezone.utc) if latest_assessment.created_at.tzinfo else latest_assessment.created_at.replace(tzinfo=timezone.utc)
+    age_seconds = (now - t_ass).total_seconds()
+    is_fresh = (age_seconds <= 86400) and (gate == OperationalGate.ALLOWED)
+
+    return CameraOperationalGateResponse(
+        camera_id=camera_id,
+        operational_gate=gate.value,
+        gate_reasons=reasons,
+        aggregate_decision=latest_assessment.aggregate_decision,
+        assessment_id=latest_assessment.id,
+        reference_image_sha256=cam.reference_image_sha256,
+        layout_canonical_sha256=current_layout_sha,
+        created_at=latest_assessment.created_at,
+        is_fresh=is_fresh,
+    )
+
+
+@router.get("/cameras/{camera_id}/stability/assessments", response_model=List[StabilityAssessmentResponse])
+async def list_camera_stability_assessments(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List historical camera stability assessments ordered by creation time."""
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    if not cam_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    res = await db.execute(
+        select(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.camera_id == camera_id)
+        .order_by(desc(CameraStabilityAssessment.created_at))
+    )
+    assessments = res.scalars().all()
+    return [_build_stability_response(a) for a in assessments]
+
+
+@router.get("/stability/assessments/{assessment_id}", response_model=StabilityAssessmentResponse)
+async def get_stability_assessment_detail(
+    assessment_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve full stability assessment report including per-sample measurements."""
+    res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
+    a = res.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Stability assessment not found")
+    return _build_stability_response(a)
+
+
+@router.post("/stability/assessments/{assessment_id}/acknowledge", response_model=StabilityAssessmentResponse)
+async def acknowledge_stability_assessment(
+    assessment_id: str,
+    payload: AcknowledgeStabilityRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Operator acknowledgement of a stability assessment outcome.
+    Optionally triggers audited camera calibration invalidation if the assessment is UNSTABLE.
+    """
+    res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
+    a = res.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Stability assessment not found")
+
+    a.operator_acknowledged_at = utc_now()
+    a.operator_label = payload.local_operator_label
+    a.operator_note = payload.note
+
+    if payload.trigger_calibration_invalidation:
+        cam_res = await db.execute(select(Camera).where(Camera.id == a.camera_id))
+        cam = cam_res.scalar_one_or_none()
+        if cam:
+            cam.calibration_status = CalibrationStatus.INVALIDATED.value
+            cam.updated_at = utc_now()
+
+            # Invalidate any active verified layouts
+            rev_res = await db.execute(
+                select(ParkingLayoutRevision)
+                .where(ParkingLayoutRevision.camera_id == a.camera_id)
+                .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+            )
+            for rev in rev_res.scalars().all():
+                rev.status = LayoutRevisionStatus.INVALIDATED.value
+                rev.invalidated_at = utc_now()
+                rev.invalidation_reason = f"Camera stability assessment UNSTABLE: {payload.invalidation_reason or payload.note or 'Geometry drift detected'}"
+
+                audit = LayoutAuditEvent(
+                    id=str(uuid.uuid4()),
+                    layout_revision_id=rev.id,
+                    event_type="CALIBRATION_INVALIDATED",
+                    prior_status=LayoutRevisionStatus.VERIFIED.value,
+                    new_status=LayoutRevisionStatus.INVALIDATED.value,
+                    local_operator_label=payload.local_operator_label,
+                    note=payload.note or f"Stability assessment {assessment_id} flagged UNSTABLE.",
+                    created_at=utc_now(),
+                )
+                db.add(audit)
+
+    await db.commit()
+    await db.refresh(a)
+    return _build_stability_response(a)

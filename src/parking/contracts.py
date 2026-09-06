@@ -151,7 +151,7 @@ class OperationalGate(str, Enum):
 
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,9 @@ def evaluate_operational_gate(
         )
 
     if assessment_timestamp and current_timestamp:
-        age = (current_timestamp - assessment_timestamp).total_seconds()
+        t_curr = current_timestamp.astimezone(timezone.utc) if current_timestamp.tzinfo else current_timestamp.replace(tzinfo=timezone.utc)
+        t_ass = assessment_timestamp.astimezone(timezone.utc) if assessment_timestamp.tzinfo else assessment_timestamp.replace(tzinfo=timezone.utc)
+        age = (t_curr - t_ass).total_seconds()
         if age > max_age_seconds:
             reasons.append(f"EXPIRED_ASSESSMENT: Assessment age ({int(age)}s) exceeds max allowed age ({max_age_seconds}s).")
 

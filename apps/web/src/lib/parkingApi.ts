@@ -9,6 +9,8 @@ import {
   ParkingSpace,
   ApproachZone,
   Site,
+  StabilityAssessment,
+  CameraOperationalGate,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -231,6 +233,85 @@ export async function invalidateLayout(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || 'Failed to invalidate layout');
+  }
+  return res.json();
+}
+
+// ============================================================================
+// Camera Stability Assessment & Operational Gate (Phase 2A)
+// ============================================================================
+
+export async function getCameraOperationalGate(cameraId: string): Promise<CameraOperationalGate> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/gate`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to fetch operational gate: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listCameraStabilityAssessments(cameraId: string): Promise<StabilityAssessment[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/assessments`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to list stability assessments: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getStabilityAssessmentDetail(assessmentId: string): Promise<StabilityAssessment> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to fetch assessment detail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function assessCameraStability(
+  cameraId: string,
+  videoFile?: File,
+  localVideoName?: string
+): Promise<StabilityAssessment> {
+  const formData = new FormData();
+  if (videoFile) {
+    formData.append('file', videoFile, videoFile.name);
+  }
+  if (localVideoName) {
+    formData.append('local_video_name', localVideoName);
+  }
+
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/assess`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to assess camera stability');
+  }
+  return res.json();
+}
+
+export async function acknowledgeStabilityAssessment(
+  assessmentId: string,
+  operatorLabel: string,
+  note?: string,
+  triggerInvalidation?: boolean,
+  invalidationReason?: string
+): Promise<StabilityAssessment> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}/acknowledge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      local_operator_label: operatorLabel,
+      note,
+      trigger_calibration_invalidation: triggerInvalidation || false,
+      invalidation_reason: invalidationReason,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to acknowledge stability assessment');
   }
   return res.json();
 }

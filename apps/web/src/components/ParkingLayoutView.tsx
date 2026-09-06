@@ -32,6 +32,7 @@ import { LayoutVerificationModal } from './LayoutVerificationModal';
 import { LayoutSubmitModal } from './LayoutSubmitModal';
 import { ReferenceImageReplaceModal } from './ReferenceImageReplaceModal';
 import { CameraCalibrationModal } from './CameraCalibrationModal';
+import { CameraStabilityPanel } from './CameraStabilityPanel';
 import {
   AlertCircle,
   AlertTriangle,
@@ -51,6 +52,7 @@ import {
   RotateCcw,
   Save,
   Send,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   UploadCloud,
@@ -83,6 +85,7 @@ export function ParkingLayoutView() {
   const [isSaving, setIsSaving] = useState(false);
   const [isBranchingDraft, setIsBranchingDraft] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [activeRightTab, setActiveRightTab] = useState<'editor' | 'stability'>('editor');
 
   // Modals
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
@@ -451,9 +454,20 @@ export function ParkingLayoutView() {
           <Layers className="w-4 h-4" />
           <span>RoadSense SiteOps: Parking Geometry & ROI Configuration</span>
         </div>
-        <div className="flex items-center space-x-2 text-command-muted text-[11px]">
-          <span className="w-2 h-2 rounded-full bg-accent-amber animate-pulse" />
-          <span>Layout configuration only — occupancy inference is not connected.</span>
+        <div className="flex items-center space-x-3 text-command-muted text-[11px]">
+          <span className="flex items-center space-x-1.5">
+            <span className="w-2 h-2 rounded-full bg-accent-amber animate-pulse" />
+            <span>Layout configuration only — occupancy inference is not connected.</span>
+          </span>
+          <button
+            id="stability-gate-shortcut-btn"
+            onClick={() => setActiveRightTab('stability')}
+            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-950/60 border border-rose-600/60 text-rose-300 hover:text-white font-bold transition-all"
+            title="Inspect Fail-Closed Stability Gate"
+          >
+            <ShieldAlert className="w-3 h-3 text-rose-400" />
+            <span>Stability Gate</span>
+          </button>
         </div>
       </div>
 
@@ -736,8 +750,53 @@ export function ParkingLayoutView() {
 
         {/* Right Inspector & Audit Panel (4 Cols) */}
         <div className="lg:col-span-4 flex flex-col h-full space-y-3 overflow-y-auto pr-1">
-          {/* Selected Space Properties Panel */}
-          <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3 text-xs">
+          {/* Sub-tab Navigation */}
+          <div className="flex rounded-lg bg-command-elevated border border-command-border p-1 text-xs">
+            <button
+              onClick={() => setActiveRightTab('editor')}
+              className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
+                activeRightTab === 'editor'
+                  ? 'bg-command-surface text-radar-bright shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-white'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>ROI & Governance</span>
+            </button>
+            <button
+              id="camera-stability-tab-button"
+              onClick={() => setActiveRightTab('stability')}
+              className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
+                activeRightTab === 'stability'
+                  ? 'bg-command-surface text-amber-400 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-white'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Camera Stability Gate</span>
+            </button>
+          </div>
+
+          {activeRightTab === 'stability' ? (
+            <CameraStabilityPanel
+              cameraId={selectedCameraId}
+              cameraName={activeCamera?.name}
+              hasReferenceImage={Boolean(activeCamera?.reference_image_path)}
+              activeLayoutId={activeLayout?.id}
+              onCalibrationInvalidated={async () => {
+                if (selectedSiteId) {
+                  const camList = await fetchSiteCameras(selectedSiteId);
+                  setCameras(camList);
+                }
+                if (selectedCameraId) {
+                  await loadCameraLayouts(selectedCameraId);
+                }
+              }}
+            />
+          ) : (
+            <>
+              {/* Selected Space Properties Panel */}
+              <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3 text-xs">
             <div className="flex items-center justify-between border-b border-command-border pb-2">
               <span className="font-bold text-command-text uppercase tracking-wider">
                 {selectedSpace ? `Inspecting ${selectedSpace.operator_label}` : 'Space Inspector'}
@@ -931,6 +990,8 @@ export function ParkingLayoutView() {
               )}
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
 

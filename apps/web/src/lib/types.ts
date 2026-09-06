@@ -241,3 +241,59 @@ export interface LayoutValidationResult {
   spaces_count: number;
   approach_zones_count: number;
 }
+
+export type StabilityDecision = 'STABLE' | 'UNSTABLE' | 'INSUFFICIENT_EVIDENCE' | 'ERROR';
+export type OperationalGate = 'ALLOWED' | 'BLOCKED';
+
+export interface SampleMeasurement {
+  sample_index: number;
+  timestamp_seconds: number;
+  frame_index: number;
+  matched_features: number;
+  inlier_count: number;
+  inlier_ratio: number;
+  translation_px_x: number;
+  translation_px_y: number;
+  translation_magnitude_px: number;
+  translation_normalized: number;
+  scale_factor: number;
+  scale_change: number;
+  rotation_degrees: number;
+  perspective_distortion: number;
+  reprojection_error: number;
+  decision: StabilityDecision;
+  rejection_reasons: string[];
+}
+
+export interface StabilityAssessment {
+  id: string;
+  camera_id: string;
+  layout_revision_id?: string | null;
+  layout_canonical_sha256?: string | null;
+  reference_image_sha256: string;
+  video_sha256: string;
+  algorithm_version: string;
+  opencv_version: string;
+  thresholds_snapshot: Record<string, any>;
+  sample_measurements: SampleMeasurement[];
+  aggregate_decision: StabilityDecision;
+  operational_gate: OperationalGate;
+  gate_reasons: string[];
+  summary_metrics: Record<string, any>;
+  created_at: string;
+  operator_acknowledged_at?: string | null;
+  operator_label?: string | null;
+  operator_note?: string | null;
+}
+
+export interface CameraOperationalGate {
+  camera_id: string;
+  operational_gate: OperationalGate;
+  gate_reasons: string[];
+  aggregate_decision?: StabilityDecision | null;
+  assessment_id?: string | null;
+  reference_image_sha256?: string | null;
+  layout_canonical_sha256?: string | null;
+  created_at?: string | null;
+  is_fresh: boolean;
+}

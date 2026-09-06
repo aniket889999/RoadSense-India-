@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from src.parking.contracts import OperationalGate, StabilityDecision, StabilityThresholds, evaluate_operational_gate
+from src.parking.stability_config import StabilityConfig, StabilityIntakeConfig, load_stability_config
 
 # Module metadata provenance
 STABILITY_ALGORITHM_VERSION = "2.0.0-orb-ransac-decomposed"
@@ -57,6 +58,8 @@ class StabilityAssessmentResult:
     layout_canonical_sha256: Optional[str]
     algorithm_version: str
     opencv_version: str
+    config_version: str
+    config_sha256: str
     thresholds_snapshot: dict[str, Any]
     samples: List[SampleMeasurement]
     summary_metrics: dict[str, Any]
@@ -71,6 +74,8 @@ class StabilityAssessmentResult:
             "layout_canonical_sha256": self.layout_canonical_sha256,
             "algorithm_version": self.algorithm_version,
             "opencv_version": self.opencv_version,
+            "config_version": self.config_version,
+            "config_sha256": self.config_sha256,
             "thresholds_snapshot": self.thresholds_snapshot,
             "samples": [s.to_dict() for s in self.samples],
             "summary_metrics": self.summary_metrics,
@@ -303,49 +308,97 @@ def assess_frame_pair(
     )
 
 
-def inspect_video_media_safe(video_path: Path, max_duration_sec: float = 60.0, max_bytes: int = 100 * 1024 * 1024) -> dict[str, Any]:
+def inspect_video_media_safe(
+    video_path: Path,
+    intake_config: Optional[StabilityIntakeConfig] = None,
+    timeout_sec: float = 10.0,
+) -> dict[str, Any]:
     """
     Inspect media file using ffprobe argument array without shell=True.
-    Validates duration, bytes, and video stream properties.
+    Validates file size, non-emptiness, codec, resolution, duration, and stream properties.
     """
+    intake = intake_config or StabilityIntakeConfig()
+
+    if video_path.is_symlink():
+        raise ValueError("Symlink video paths are not permitted for security reasons.")
+
     if not video_path.exists() or not video_path.is_file():
         raise ValueError(f"Video path does not exist or is not a regular file: {video_path}")
 
     file_size = video_path.stat().st_size
-    if file_size > max_bytes:
-        raise ValueError(f"Video file size ({file_size} bytes) exceeds limit ({max_bytes} bytes).")
+    if file_size == 0:
+        raise ValueError("Uploaded media file is empty (0 bytes).")
+    if file_size > intake.max_upload_bytes:
+        raise ValueError(
+            f"Video file size ({file_size} bytes / {file_size / (1024*1024):.1f}MB) exceeds configured limit "
+            f"({intake.max_upload_bytes} bytes / {intake.max_upload_bytes / (1024*1024):.1f}MB)."
+        )
 
     cmd = [
         "ffprobe",
         "-v", "error",
-        "-show_entries", "format=duration,size",
-        "-show_entries", "stream=codec_name,width,height,r_frame_rate,nb_frames",
+        "-show_entries", "format=duration,size,nb_streams",
+        "-show_entries", "stream=index,codec_type,codec_name,width,height,r_frame_rate,nb_frames",
         "-of", "json",
         str(video_path),
     ]
 
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            timeout=timeout_sec,
+            check=True,
+        )
         data = json.loads(proc.stdout)
+    except subprocess.TimeoutExpired as te:
+        raise ValueError(f"ffprobe timed out after {timeout_sec}s inspecting media: {te}")
     except Exception as e:
         raise ValueError(f"ffprobe failed to inspect media: {e}")
 
     streams = data.get("streams", [])
-    if not streams:
+    video_streams = [s for s in streams if s.get("codec_type") == "video"]
+    if not video_streams:
         raise ValueError("Media file contains no valid video streams.")
+    if len(video_streams) > 1:
+        raise ValueError(f"Media file contains {len(video_streams)} video streams; expected exactly 1.")
 
-    v_stream = streams[0]
+    v_stream = video_streams[0]
+    codec = str(v_stream.get("codec_name", "unknown")).lower()
+    if codec not in intake.allowed_codecs:
+        raise ValueError(
+            f"Unsupported video codec '{codec}'. Allowed codecs are: {', '.join(intake.allowed_codecs)}."
+        )
+
+    width = int(v_stream.get("width", 0))
+    height = int(v_stream.get("height", 0))
+    if width < intake.min_width or width > intake.max_width or height < intake.min_height or height > intake.max_height:
+        raise ValueError(
+            f"Video resolution ({width}x{height}) is outside allowed bounds "
+            f"([{intake.min_width}..{intake.max_width}] x [{intake.min_height}..{intake.max_height}])."
+        )
+
     fmt = data.get("format", {})
-    duration = float(fmt.get("duration", 0.0))
+    try:
+        duration = float(fmt.get("duration", 0.0))
+    except (ValueError, TypeError):
+        duration = 0.0
 
-    if duration > max_duration_sec:
-        raise ValueError(f"Video duration ({duration:.2f}s) exceeds max allowed assessment duration ({max_duration_sec}s).")
+    if duration <= 0.0:
+        raise ValueError("Could not determine a valid positive video duration from container metadata.")
+    if duration > intake.max_duration_seconds:
+        raise ValueError(
+            f"Video duration ({duration:.2f}s) exceeds max allowed assessment duration ({intake.max_duration_seconds}s)."
+        )
 
     return {
         "duration": duration,
-        "width": int(v_stream.get("width", 0)),
-        "height": int(v_stream.get("height", 0)),
-        "codec": v_stream.get("codec_name", "unknown"),
+        "width": width,
+        "height": height,
+        "codec": codec,
         "nb_frames": int(v_stream.get("nb_frames", 0)) if v_stream.get("nb_frames") else None,
         "file_size": file_size,
     }
@@ -356,15 +409,29 @@ def evaluate_video_camera_stability(
     reference_image_bytes: bytes,
     expected_reference_sha256: str,
     active_layout_canonical_sha256: Optional[str] = None,
-    thresholds: Optional[StabilityThresholds] = None,
-    sample_count: int = 5,
-    max_duration_sec: float = 60.0,
-    max_bytes: int = 100 * 1024 * 1024,
+    config: Optional[StabilityConfig] = None,
+    sample_count: Optional[int] = None,
+    progress_callback: Optional[Any] = None,
 ) -> StabilityAssessmentResult:
     """
-    Execute complete fail-closed camera stability assessment against a video file.
+    Execute complete fail-closed camera stability assessment against a video file using versioned configuration.
     """
-    t = thresholds or StabilityThresholds()
+    cfg = config or load_stability_config()
+    t = cfg.thresholds
+    intake = cfg.intake
+
+    if progress_callback:
+        progress_callback(10.0, "Validating video media container and metadata")
+
+    # Inspect media safely
+    media_info = inspect_video_media_safe(
+        video_path=video_path,
+        intake_config=intake,
+        timeout_sec=cfg.execution.ffprobe_timeout_seconds,
+    )
+
+    if progress_callback:
+        progress_callback(20.0, "Decoding reference image and initializing feature detector")
 
     # Verify reference image bytes
     computed_ref_sha = hashlib.sha256(reference_image_bytes).hexdigest()
@@ -373,10 +440,7 @@ def evaluate_video_camera_stability(
     if ref_img is None:
         raise ValueError("Failed to decode reference image bytes into grayscale image.")
 
-    # Inspect media safely
-    media_info = inspect_video_media_safe(video_path, max_duration_sec, max_bytes)
-
-    # Hash video file
+    # Hash video file in 64KB chunks
     h_vid = hashlib.sha256()
     with open(video_path, "rb") as vf:
         while chunk := vf.read(65536):
@@ -394,18 +458,22 @@ def evaluate_video_camera_stability(
     if total_frames <= 0:
         total_frames = int(media_info["duration"] * fps)
 
-    # Determine bounded sample frame indices (e.g. 10%, 30%, 50%, 70%, 90%)
-    sample_count = max(1, min(10, sample_count))
-    if total_frames <= sample_count:
+    effective_sample_count = sample_count if sample_count is not None else intake.sample_count
+    sample_count_val = max(1, min(20, effective_sample_count))
+    if total_frames <= sample_count_val:
         sample_indices = list(range(total_frames))
     else:
-        step = total_frames / (sample_count + 1)
-        sample_indices = [int(step * (i + 1)) for i in range(sample_count)]
+        step = total_frames / (sample_count_val + 1)
+        sample_indices = [int(step * (i + 1)) for i in range(sample_count_val)]
 
     samples: List[SampleMeasurement] = []
 
     try:
         for idx, target_frame_idx in enumerate(sample_indices):
+            if progress_callback:
+                pct = 20.0 + (70.0 * (idx + 1) / max(1, len(sample_indices)))
+                progress_callback(pct, f"Evaluating stability sample {idx + 1}/{len(sample_indices)} (frame {target_frame_idx})")
+
             cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
             ret, frame = cap.read()
             timestamp_sec = float(target_frame_idx / fps)
@@ -473,6 +541,9 @@ def evaluate_video_camera_stability(
         "insufficient_samples_count": sum(1 for s in samples if s.decision == StabilityDecision.INSUFFICIENT_EVIDENCE),
     }
 
+    if progress_callback:
+        progress_callback(95.0, "Aggregating geometric metrics and evaluating operational gate")
+
     # Evaluate operational gate
     gate, gate_reasons = evaluate_operational_gate(
         decision=aggregate_decision,
@@ -480,15 +551,21 @@ def evaluate_video_camera_stability(
         current_reference_sha=expected_reference_sha256,
         assessment_layout_sha=active_layout_canonical_sha256,
         current_layout_sha=active_layout_canonical_sha256,
+        max_age_seconds=t.max_assessment_age_seconds,
     )
+
+    if progress_callback:
+        progress_callback(100.0, "Camera stability assessment complete")
 
     return StabilityAssessmentResult(
         video_sha256=video_sha,
         reference_image_sha256=computed_ref_sha,
         layout_canonical_sha256=active_layout_canonical_sha256,
-        algorithm_version=STABILITY_ALGORITHM_VERSION,
+        algorithm_version=cfg.algorithm_version,
         opencv_version=cv2.__version__,
-        thresholds_snapshot=asdict(t),
+        config_version=cfg.version,
+        config_sha256=cfg.config_sha256,
+        thresholds_snapshot=cfg.thresholds_snapshot,
         samples=samples,
         summary_metrics=summary_metrics,
         aggregate_decision=aggregate_decision,

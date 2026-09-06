@@ -1,0 +1,37 @@
+# RoadSense SiteOps — Camera Stability Assessment Configuration v1
+version: "1.0.0"
+algorithm_version: "2.0.0-orb-ransac-decomposed"
+
+thresholds:
+  max_translation_px: 8.0
+  max_translation_norm: 0.01
+  max_rotation_deg: 1.0
+  max_scale_change: 0.03
+  max_perspective_distortion: 0.0005
+  min_matches: 25
+  min_inliers: 15
+  min_inlier_ratio: 0.25
+  max_reprojection_error: 2.5
+  max_assessment_age_seconds: 86400
+
+intake:
+  max_upload_bytes: 209715200 # 200 MB
+  max_duration_seconds: 300.0 # 5 minutes
+  min_width: 64
+  max_width: 4096
+  min_height: 64
+  max_height: 4096
+  sample_count: 5
+  allowed_codecs:
+    - h264
+    - hevc
+    - h265
+    - vp8
+    - vp9
+    - av1
+    - mjpeg
+    - mpeg4
+
+execution:
+  max_concurrent_jobs: 2
+  ffprobe_timeout_seconds: 10.0

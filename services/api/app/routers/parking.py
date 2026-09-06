@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +47,9 @@ from services.api.app.schemas.parking import (
 )
 from services.api.app.services.reference_image_service import (
     ReferenceImageProcessingError,
-    extract_image_bytes_from_payload,
-    process_and_store_reference_image,
+    ReferenceImageSecurityError,
+    process_and_store_upload_file,
+    validate_served_file_path,
 )
 
 from src.parking.contracts import CalibrationStatus, LayoutRevisionStatus, SpaceType
@@ -273,7 +274,7 @@ async def get_camera(camera_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/cameras/{camera_id}/reference-image", response_model=CameraResponse)
 async def upload_reference_image(
     camera_id: str,
-    request: Request,
+    file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload and normalize a reference frame image for a camera."""
@@ -283,19 +284,15 @@ async def upload_reference_image(
         raise HTTPException(status_code=404, detail="Camera not found")
 
     storage_root = get_storage_root()
-    content_type = request.headers.get("content-type", "")
 
     try:
-        raw_body = await request.body()
-        image_bytes, original_filename = extract_image_bytes_from_payload(content_type, raw_body)
-        file_stream = io.BytesIO(image_bytes)
-
-        processed = process_and_store_reference_image(
-            file_stream=file_stream,
+        processed = await process_and_store_upload_file(
+            upload_file=file,
             camera_id=cam.id,
             storage_root=storage_root,
-            original_filename=original_filename,
         )
+    except ReferenceImageSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Security error: {str(e)}")
     except ReferenceImageProcessingError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -311,7 +308,6 @@ async def upload_reference_image(
 
     await db.commit()
     await db.refresh(cam)
-
 
     return CameraResponse(
         id=cam.id,
@@ -338,16 +334,17 @@ async def get_reference_image(camera_id: str, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="Reference image not found for this camera")
 
     storage_root = get_storage_root()
-    image_file = (storage_root / cam.reference_image_path).resolve()
-
-    # Confine to storage root to prevent path traversal
-    if not str(image_file).startswith(str(storage_root)) or not image_file.is_file():
+    try:
+        image_file = validate_served_file_path(cam.reference_image_path, storage_root)
+    except ReferenceImageSecurityError as e:
+        logger.warning(f"Security error accessing reference image: {e}")
         raise HTTPException(status_code=404, detail="Image file not found on local storage")
 
     media_type = "image/png" if image_file.suffix.lower() == ".png" else "image/jpeg"
     return FileResponse(
         path=str(image_file),
         media_type=media_type,
+        filename=image_file.name,
         headers={
             "Cache-Control": "private, max-age=3600",
             "X-Content-Type-Options": "nosniff",

@@ -8,6 +8,7 @@ import { ReviewPanel } from '../components/ReviewPanel';
 import { SessionsList } from '../components/SessionsList';
 import { MapView } from '../components/MapView';
 import { LiveCameraView } from '../components/LiveCameraView';
+import { ParkingLayoutView } from '../components/ParkingLayoutView';
 import { UploadModal } from '../components/UploadModal';
 import { SystemHealthModal } from '../components/SystemHealthModal';
 import {
@@ -231,6 +232,12 @@ export default function OperationsDashboard() {
           {activeTab === 'live' && (
             <div className="h-[calc(100vh-8.5rem)]">
               <LiveCameraView />
+            </div>
+          )}
+
+          {activeTab === 'parking' && (
+            <div className="h-[calc(100vh-8.5rem)]">
+              <ParkingLayoutView />
             </div>
           )}
         </main>

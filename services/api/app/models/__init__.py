@@ -7,6 +7,12 @@ from services.api.app.models.entities import (
     RoadEvent,
     ReviewAction,
     Artifact,
+    Site,
+    Camera,
+    ParkingLayoutRevision,
+    ParkingSpace,
+    ApproachZone,
+    LayoutAuditEvent,
 )
 
 __all__ = [
@@ -16,4 +22,10 @@ __all__ = [
     "RoadEvent",
     "ReviewAction",
     "Artifact",
+    "Site",
+    "Camera",
+    "ParkingLayoutRevision",
+    "ParkingSpace",
+    "ApproachZone",
+    "LayoutAuditEvent",
 ]

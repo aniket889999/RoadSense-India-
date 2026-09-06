@@ -136,7 +136,7 @@ The persistence layer organizes data into 14 distinct entities stored in Postgre
 
 #### 8. `SurfaceHazard`
 - **Purpose:** Verified road or stall surface defect (pothole, deep subsidence, physical hazard).
-- **Essential Fields:** `id` (UUID), `site_id` (UUID), `hazard_type` (enum: `D40_POTHOLE`, `SUBSIDENCE`, `DEBRIS_OBSTACLE`), `centroid_coord` (PostGIS `Point`, nullable), `bounding_footprint` (PostGIS `Polygon`, nullable), `initial_observed_time` (timestamp), `review_status` (enum: `CANDIDATE_UNREVIEWED`, `CONFIRMED_ACTIVE`, `REJECTED_FALSE_ALARM`, `REPAIRED_RESOLVED`), `persistence_count` (int), `current_mos_score` (float).
+- **Essential Fields:** `id` (UUID), `site_id` (UUID), `hazard_type` (enum: `D40_POTHOLE`, `SUBSIDENCE`, `DEBRIS_OBSTACLE`), `centroid_coord` (PostGIS `Point`, nullable), `bounding_footprint` (PostGIS `Polygon`, nullable), `initial_observed_time` (timestamp), `review_status` (enum: `UNREVIEWED`, `CONFIRMED`, `REJECTED`, `NEEDS_REVIEW`), `persistence_count` (int), `current_mos_score` (float).
 - **Provenance:** Mobile inspection pipeline + HumanReview confirmation.
 - **Retention:** Permanent audit record.
 - **Relationships:** Belongs to `Site`; one-to-many with `HazardSpaceAssociation`, `HumanReview`, `MaintenanceWorkOrder`.

@@ -19,6 +19,26 @@ from services.api.app.schemas.health import (
     LiveOfferResponse,
 )
 
+from services.api.app.schemas.parking import (
+    PointSchema,
+    ParkingSpaceSchema,
+    ApproachZoneSchema,
+    SiteCreateRequest,
+    SiteResponse,
+    CameraCreateRequest,
+    CameraResponse,
+    CameraInvalidateCalibrationRequest,
+    LayoutCreateRequest,
+    LayoutUpdateRequest,
+    LayoutValidationErrorDict,
+    LayoutValidationResponse,
+    LayoutSubmitRequest,
+    LayoutVerifyRequest,
+    LayoutInvalidateRequest,
+    AuditEventResponse,
+    LayoutRevisionResponse,
+)
+
 __all__ = [
     "SessionResponse",
     "SessionProcessRequest",
@@ -32,4 +52,21 @@ __all__ = [
     "SystemHealthResponse",
     "LiveOfferRequest",
     "LiveOfferResponse",
+    "PointSchema",
+    "ParkingSpaceSchema",
+    "ApproachZoneSchema",
+    "SiteCreateRequest",
+    "SiteResponse",
+    "CameraCreateRequest",
+    "CameraResponse",
+    "CameraInvalidateCalibrationRequest",
+    "LayoutCreateRequest",
+    "LayoutUpdateRequest",
+    "LayoutValidationErrorDict",
+    "LayoutValidationResponse",
+    "LayoutSubmitRequest",
+    "LayoutVerifyRequest",
+    "LayoutInvalidateRequest",
+    "AuditEventResponse",
+    "LayoutRevisionResponse",
 ]

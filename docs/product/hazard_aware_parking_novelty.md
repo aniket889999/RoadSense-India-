@@ -158,7 +158,16 @@ To eliminate ambiguities caused by conflating physical occupancy, surface damage
    - `REJECTED`: Human auditor rejected the automated candidate observation.
    - `NEEDS\_REVIEW`: Operational workflow flag triggered by conflicting evidence or sensor drift.
 
-### 6.2 Key State Model Principles
+### 6.2 Key State Model Principles & Precedence Rules
+- **Derived-Status Precedence:**
+  1. If evidence quality is insufficient or occupancy is `UNKNOWN` ($D_{occ} = \text{UNKNOWN}$): derived status = `UNKNOWN`.
+  2. If obstruction is `BLOCKED` ($D_{obs} = \text{BLOCKED}$): derived status = `BLOCKED`.
+  3. If occupancy is `OCCUPIED` ($D_{occ} = \text{OCCUPIED}$): derived status = `OCCUPIED`. Underlying surface hazards ($D_{surf} = \text{UNSAFE}$) are preserved as a separate maintenance flag.
+  4. If occupancy is `FREE` ($D_{occ} = \text{FREE}$) and a `CONFIRMED` surface hazard affects the bay or approach zone ($D_{surf} = \text{UNSAFE} \land D_{rev} = \text{CONFIRMED}$): derived status = `FREE_UNSAFE`.
+  5. If occupancy is `FREE`, obstruction is `CLEAR`, and the reviewed surface state is `SAFE` ($D_{occ} = \text{FREE} \land D_{obs} = \text{CLEAR} \land D_{surf} = \text{SAFE}$): derived status = `FREE_SAFE`.
+  6. An `UNREVIEWED` surface observation ($D_{rev} = \text{UNREVIEWED}$) must **not** establish `SAFE`.
+  7. `NEEDS_REVIEW` alters workflow presentation but must **not** erase known physical facts.
+
 - **Coexistence of States:** An occupied space may simultaneously have an unsafe surface ($D_{occ}=\text{OCCUPIED}, D_{surf}=\text{UNSAFE}$). A blocked space may also contain a pavement hazard.
 - **Workflow vs. Physical Reality:** `NEEDS_REVIEW` is strictly a workflow triage state, not a physical space condition.
 - **Asymmetric Evidence:** Human rejection of one candidate observation does not prove that a physical surface is safe; it merely indicates that the specific candidate detection was a false alarm.
@@ -166,15 +175,17 @@ To eliminate ambiguities caused by conflating physical occupancy, surface damage
 
 ### 6.3 Derived Operator-Facing Availability Truth Table
 
-The presentation layer collapses the underlying multi-dimensional state tuple $(D_{occ}, D_{surf}, D_{obs})$ into a simplified operator-facing availability badge:
+The presentation layer evaluates the factored state tuple $(D_{occ}, D_{surf}, D_{obs}, D_{rev})$ through the strict precedence rules:
 
 | Occupancy ($D_{occ}$) | Surface ($D_{surf}$) | Obstruction ($D_{obs}$) | Review ($D_{rev}$) | Derived Operator Status | Operational Interpretation |
 | :---: | :---: | :---: | :---: | :---: | :--- |
-| `FREE` | `SAFE` | `CLEAR` | Any non-conflict | **`FREE_SAFE`** | Safely usable empty space; eligible for driver routing. |
-| `FREE` | `UNSAFE` | `CLEAR` | `CONFIRMED` | **`FREE_UNSAFE`** | Empty stall, but surface hazard present; not safely usable. |
+| `FREE` | `SAFE` | `CLEAR` | `CONFIRMED` | **`FREE_SAFE`** | Safely usable empty space; eligible for driver routing. |
+| `FREE` | `SAFE` | `CLEAR` | `UNREVIEWED` | **`UNKNOWN`** | Empty and unobstructed, but surface state unreviewed; cannot confirm safe. |
+| `FREE` | `UNSAFE` | `CLEAR` | `CONFIRMED` | **`FREE_UNSAFE`** | Empty stall, but confirmed surface hazard present; not safely usable. |
+| `FREE` | `UNSAFE` | `CLEAR` | `REJECTED` | **`FREE_SAFE`** | Candidate defect rejected by human review; stall confirmed safe. |
 | `FREE` | Any | `BLOCKED` | Any | **`BLOCKED`** | Empty stall, but blocked by obstacle or staging in approach lane. |
 | `OCCUPIED` | `SAFE` | Any | Any | **`OCCUPIED`** | Space physically occupied by vehicle; normal surface. |
-| `OCCUPIED` | `UNSAFE` | Any | `CONFIRMED` | **`OCCUPIED`** *(with Hazard Flag)* | Space occupied, but underlying surface hazard recorded for maintenance. |
+| `OCCUPIED` | `UNSAFE` | Any | `CONFIRMED` | **`OCCUPIED`** *(Hazard Flag)* | Space occupied, but underlying surface hazard recorded for maintenance. |
 | `UNKNOWN` | Any | Any | Any | **`UNKNOWN`** | Camera offline, calibration invalid, or severe visual occlusion. |
 | Any | Any | Any | `NEEDS_REVIEW` | **`UNKNOWN`** *(Review Pending)* | Sensor conflict or unverified state; displayed with triage indicator. |
 

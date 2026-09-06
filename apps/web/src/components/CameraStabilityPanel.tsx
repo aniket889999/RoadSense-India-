@@ -3,14 +3,18 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   CameraOperationalGate,
+  CameraStabilityAuditEvent,
   StabilityAssessment,
   StabilityDecision,
 } from '../lib/types';
 import {
   getCameraOperationalGate,
   listCameraStabilityAssessments,
+  getStabilityAssessmentDetail,
   assessCameraStability,
+  cancelStabilityAssessment,
   acknowledgeStabilityAssessment,
+  listCameraStabilityAuditEvents,
 } from '../lib/parkingApi';
 import {
   AlertTriangle,
@@ -27,6 +31,8 @@ import {
   UploadCloud,
   Video,
   XCircle,
+  Ban,
+  Activity,
 } from 'lucide-react';
 
 interface CameraStabilityPanelProps {
@@ -46,14 +52,15 @@ export function CameraStabilityPanel({
 }: CameraStabilityPanelProps) {
   const [gate, setGate] = useState<CameraOperationalGate | null>(null);
   const [assessments, setAssessments] = useState<StabilityAssessment[]>([]);
+  const [auditEvents, setAuditEvents] = useState<CameraStabilityAuditEvent[]>([]);
   const [selectedAssessment, setSelectedAssessment] = useState<StabilityAssessment | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAssessing, setIsAssessing] = useState(false);
   const [assessmentError, setAssessmentError] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // File upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [useLocalFile, setUseLocalFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Acknowledgement modal state
@@ -61,15 +68,17 @@ export function CameraStabilityPanel({
   const [ackOperatorLabel, setAckOperatorLabel] = useState('Senior SiteOps Operator');
   const [ackNote, setAckNote] = useState('');
   const [ackTriggerInvalidation, setAckTriggerInvalidation] = useState(false);
+  const [ackConfirmInvalidation, setAckConfirmInvalidation] = useState(false);
   const [ackInvalidationReason, setAckInvalidationReason] = useState('Camera drift exceeds tolerance thresholds');
   const [isAcknowledging, setIsAcknowledging] = useState(false);
   const [ackError, setAckError] = useState<string | null>(null);
 
-  // Load Gate and Assessments
+  // Load Gate, Assessments, and Audit Events
   const loadStabilityData = useCallback(async () => {
     if (!cameraId) {
       setGate(null);
       setAssessments([]);
+      setAuditEvents([]);
       setSelectedAssessment(null);
       return;
     }
@@ -77,12 +86,14 @@ export function CameraStabilityPanel({
     setIsLoading(true);
     setAssessmentError(null);
     try {
-      const [gateRes, assessmentsRes] = await Promise.all([
+      const [gateRes, assessmentsRes, auditsRes] = await Promise.all([
         getCameraOperationalGate(cameraId),
         listCameraStabilityAssessments(cameraId),
+        listCameraStabilityAuditEvents(cameraId).catch(() => []),
       ]);
       setGate(gateRes);
       setAssessments(assessmentsRes);
+      setAuditEvents(auditsRes);
       if (assessmentsRes.length > 0) {
         setSelectedAssessment(assessmentsRes[0]);
       } else {
@@ -100,38 +111,76 @@ export function CameraStabilityPanel({
     loadStabilityData();
   }, [loadStabilityData]);
 
+  // Polling for in-progress assessment
+  useEffect(() => {
+    if (!selectedAssessment || !['QUEUED', 'VALIDATING', 'ANALYZING'].includes(selectedAssessment.status)) {
+      return;
+    }
+
+    const intervalId = setInterval(async () => {
+      try {
+        const updated = await getStabilityAssessmentDetail(selectedAssessment.id);
+        setSelectedAssessment(updated);
+        setAssessments((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+
+        if (['COMPLETE', 'FAILED', 'CANCELLED'].includes(updated.status)) {
+          if (cameraId) {
+            const [gateRes, auditsRes] = await Promise.all([
+              getCameraOperationalGate(cameraId),
+              listCameraStabilityAuditEvents(cameraId).catch(() => []),
+            ]);
+            setGate(gateRes);
+            setAuditEvents(auditsRes);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll assessment progress:', err);
+      }
+    }, 1500);
+
+    return () => clearInterval(intervalId);
+  }, [selectedAssessment?.id, selectedAssessment?.status, cameraId]);
+
   // Handle run assessment
   const handleRunAssessment = async () => {
     if (!cameraId) return;
-    if (!useLocalFile && !selectedFile) {
-      setAssessmentError('Please select a video file or choose the local negative test video.');
+    if (!selectedFile) {
+      setAssessmentError('Please select a video file to upload for stability analysis.');
       return;
     }
 
     setIsAssessing(true);
     setAssessmentError(null);
     try {
-      let result: StabilityAssessment;
-      if (useLocalFile) {
-        result = await assessCameraStability(cameraId, undefined, 'PARKING LOT TEST.mp4');
-      } else if (selectedFile) {
-        result = await assessCameraStability(cameraId, selectedFile);
-      } else {
-        throw new Error('No video selected');
-      }
-
-      // Refresh gate and assessments list
-      await loadStabilityData();
+      const result = await assessCameraStability(cameraId, selectedFile);
+      setAssessments((prev) => [result, ...prev]);
       setSelectedAssessment(result);
       setSelectedFile(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
     } catch (err: any) {
-      console.error('Stability assessment failed:', err);
-      setAssessmentError(err.message || 'Assessment execution failed');
+      console.error('Stability assessment submission failed:', err);
+      setAssessmentError(err.message || 'Assessment submission failed');
     } finally {
       setIsAssessing(false);
+    }
+  };
+
+  // Handle cancel assessment
+  const handleCancelAssessment = async () => {
+    if (!selectedAssessment) return;
+    setIsCancelling(true);
+    try {
+      await cancelStabilityAssessment(selectedAssessment.id);
+      const updated = await getStabilityAssessmentDetail(selectedAssessment.id);
+      setSelectedAssessment(updated);
+      setAssessments((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+    } catch (err: any) {
+      console.error('Failed to cancel assessment:', err);
+      setAssessmentError(err.message || 'Failed to cancel assessment');
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -148,6 +197,7 @@ export function CameraStabilityPanel({
         ackOperatorLabel,
         ackNote,
         ackTriggerInvalidation,
+        ackTriggerInvalidation ? ackConfirmInvalidation : false,
         ackTriggerInvalidation ? ackInvalidationReason : undefined
       );
 
@@ -165,6 +215,7 @@ export function CameraStabilityPanel({
   };
 
   const isGateAllowed = gate?.operational_gate === 'ALLOWED';
+  const isJobRunning = selectedAssessment && ['QUEUED', 'VALIDATING', 'ANALYZING'].includes(selectedAssessment.status);
 
   if (!cameraId) {
     return (
@@ -249,7 +300,7 @@ export function CameraStabilityPanel({
             <Video className="w-4 h-4 text-radar-bright" />
             <span>Assess Camera Stability</span>
           </div>
-          <span className="text-[10px] text-command-muted">OpenCV ORB + RANSAC</span>
+          <span className="text-[10px] text-command-muted">Asynchronous ORB + RANSAC Engine</span>
         </div>
 
         {!hasReferenceImage ? (
@@ -258,9 +309,8 @@ export function CameraStabilityPanel({
           </div>
         ) : (
           <div className="space-y-2.5">
-            {/* Input Selection: Local video or file upload */}
             <div className="space-y-1.5">
-              <label className="text-[10px] text-command-muted uppercase">Select Assessment Video</label>
+              <label className="text-[10px] text-command-muted uppercase">Select Assessment Video File (Max 200 MB)</label>
               <div className="flex items-center space-x-2">
                 <input
                   type="file"
@@ -269,7 +319,6 @@ export function CameraStabilityPanel({
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
                       setSelectedFile(e.target.files[0]);
-                      setUseLocalFile(false);
                     }
                   }}
                   className="hidden"
@@ -277,38 +326,16 @@ export function CameraStabilityPanel({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className={`flex-1 flex items-center justify-center space-x-1.5 px-3 py-1.5 rounded border text-xs transition-all ${
-                    selectedFile && !useLocalFile
+                  className={`flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded border text-xs transition-all ${
+                    selectedFile
                       ? 'bg-blue-900/40 border-blue-500 text-blue-200'
                       : 'bg-command-elevated border-command-border hover:border-radar-bright text-command-text'
                   }`}
                 >
-                  <UploadCloud className="w-3.5 h-3.5" />
-                  <span className="truncate">{selectedFile ? selectedFile.name : 'Choose Video File...'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUseLocalFile(!useLocalFile);
-                    setSelectedFile(null);
-                  }}
-                  className={`px-2.5 py-1.5 rounded border text-[11px] whitespace-nowrap transition-all ${
-                    useLocalFile
-                      ? 'bg-amber-900/40 border-amber-500 text-amber-200 font-bold'
-                      : 'bg-command-elevated border-command-border hover:text-white text-command-muted'
-                  }`}
-                  title="Use local negative test video (PARKING LOT TEST.mp4)"
-                >
-                  {useLocalFile ? '✓ Local Video' : 'Use Local Test Video'}
+                  <UploadCloud className="w-4 h-4" />
+                  <span className="truncate">{selectedFile ? selectedFile.name : 'Choose Video File from Computer...'}</span>
                 </button>
               </div>
-
-              {useLocalFile && (
-                <div className="p-2 rounded bg-command-bg border border-command-border text-[10px] text-command-muted">
-                  Using server negative test video: <span className="text-white font-bold">PARKING LOT TEST.mp4</span> (known camera pan/tilt drift).
-                </div>
-              )}
             </div>
 
             {assessmentError && (
@@ -319,18 +346,18 @@ export function CameraStabilityPanel({
 
             <button
               onClick={handleRunAssessment}
-              disabled={isAssessing || (!selectedFile && !useLocalFile)}
+              disabled={isAssessing || !selectedFile}
               className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded bg-radar-bright hover:bg-radar-green text-command-bg font-bold shadow-radar transition-all disabled:opacity-40"
             >
               {isAssessing ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Computing Homography & Drift...</span>
+                  <span>Staging & Submitting Job...</span>
                 </>
               ) : (
                 <>
                   <Sliders className="w-4 h-4" />
-                  <span>Run Stability Assessment</span>
+                  <span>Submit Stability Assessment</span>
                 </>
               )}
             </button>
@@ -338,8 +365,40 @@ export function CameraStabilityPanel({
         )}
       </div>
 
-      {/* 3. Active Assessment Inspection */}
-      {selectedAssessment && (
+      {/* 3. In-Progress Job Progress Banner */}
+      {isJobRunning && selectedAssessment && (
+        <div className="p-3.5 rounded-xl bg-blue-950/30 border border-blue-600/50 space-y-2">
+          <div className="flex items-center justify-between text-blue-300">
+            <div className="flex items-center space-x-2 font-bold">
+              <Activity className="w-4 h-4 animate-pulse text-blue-400" />
+              <span>Assessment Job In Progress ({selectedAssessment.status})</span>
+            </div>
+            <button
+              onClick={handleCancelAssessment}
+              disabled={isCancelling}
+              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-900/50 border border-rose-600 text-rose-200 text-[10px] hover:bg-rose-900"
+            >
+              <Ban className="w-3 h-3" />
+              <span>{isCancelling ? 'Cancelling...' : 'Cancel Job'}</span>
+            </button>
+          </div>
+
+          <div className="w-full bg-black/50 rounded-full h-2 overflow-hidden border border-blue-800">
+            <div
+              className="bg-blue-500 h-2 transition-all duration-300 rounded-full"
+              style={{ width: `${Math.max(5, selectedAssessment.progress_pct)}%` }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-blue-200/80">
+            <span>{selectedAssessment.stage_message || 'Processing frames...'}</span>
+            <span className="font-bold">{selectedAssessment.progress_pct.toFixed(0)}%</span>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Active Assessment Details */}
+      {selectedAssessment && selectedAssessment.status === 'COMPLETE' && (
         <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3">
           <div className="flex items-center justify-between border-b border-command-border pb-2">
             <div className="flex items-center space-x-2">
@@ -362,10 +421,10 @@ export function CameraStabilityPanel({
             <div className="p-2 rounded bg-command-bg border border-command-border space-y-0.5">
               <span className="text-[10px] text-command-muted uppercase">Max Translation</span>
               <div className="text-sm font-bold text-command-text">
-                {selectedAssessment.summary_metrics?.max_translation_px?.toFixed(1) ?? 'N/A'} px
+                {selectedAssessment.summary_metrics?.max_translation_magnitude_px?.toFixed(1) ?? 'N/A'} px
               </div>
               <span className="text-[9px] text-command-muted">
-                Norm: {((selectedAssessment.summary_metrics?.max_translation_normalized || 0) * 100).toFixed(2)}% (limit 2%)
+                Norm: {((selectedAssessment.summary_metrics?.max_translation_normalized || 0) * 100).toFixed(2)}% (limit 1.0%)
               </span>
             </div>
 
@@ -382,7 +441,7 @@ export function CameraStabilityPanel({
               <div className="text-sm font-bold text-command-text">
                 {((selectedAssessment.summary_metrics?.max_scale_change || 0) * 100).toFixed(2)}%
               </div>
-              <span className="text-[9px] text-command-muted">Limit: 2.00%</span>
+              <span className="text-[9px] text-command-muted">Limit: 3.00%</span>
             </div>
 
             <div className="p-2 rounded bg-command-bg border border-command-border space-y-0.5">
@@ -390,7 +449,7 @@ export function CameraStabilityPanel({
               <div className="text-sm font-bold text-command-text">
                 {((selectedAssessment.summary_metrics?.min_inlier_ratio || 0) * 100).toFixed(1)}%
               </div>
-              <span className="text-[9px] text-command-muted">Min required: 30.0%</span>
+              <span className="text-[9px] text-command-muted">Min required: 25.0%</span>
             </div>
           </div>
 
@@ -402,9 +461,12 @@ export function CameraStabilityPanel({
             </div>
             <div className="space-y-0.5 text-command-muted font-mono">
               <div>Ref Image SHA: <span className="text-command-text text-[9px] break-all">{selectedAssessment.reference_image_sha256.slice(0, 16)}...</span></div>
-              <div>Video SHA: <span className="text-command-text text-[9px] break-all">{selectedAssessment.video_sha256.slice(0, 16)}...</span></div>
-              <div>Algorithm: <span className="text-white">{selectedAssessment.algorithm_version}</span> ({selectedAssessment.opencv_version})</div>
-              <div>Timestamp: <span className="text-white">{new Date(selectedAssessment.created_at).toLocaleString()}</span></div>
+              {selectedAssessment.video_sha256 && (
+                <div>Video SHA: <span className="text-command-text text-[9px] break-all">{selectedAssessment.video_sha256.slice(0, 16)}...</span></div>
+              )}
+              <div>Config: <span className="text-white">v{selectedAssessment.config_version || '1.0.0'}</span> ({selectedAssessment.config_sha256 ? selectedAssessment.config_sha256.slice(0, 8) : 'default'})</div>
+              <div>Engine: <span className="text-white">{selectedAssessment.algorithm_version}</span> (OpenCV {selectedAssessment.opencv_version})</div>
+              <div>Completed: <span className="text-white">{new Date(selectedAssessment.created_at).toLocaleString()}</span></div>
             </div>
           </div>
 
@@ -449,37 +511,56 @@ export function CameraStabilityPanel({
             </div>
           )}
 
-          {/* Acknowledgement Status & Action */}
+          {/* Acknowledgement Action Button */}
           <div className="pt-1">
-            {selectedAssessment.operator_acknowledged_at ? (
-              <div className="p-2 rounded bg-blue-950/30 border border-blue-600/40 text-[10px] space-y-0.5 text-blue-300">
-                <div className="font-bold flex items-center space-x-1">
-                  <CheckCircle2 className="w-3 h-3 text-blue-400" />
-                  <span>Acknowledged by {selectedAssessment.operator_label}</span>
-                </div>
-                <div>At: {new Date(selectedAssessment.operator_acknowledged_at).toLocaleString()}</div>
-                {selectedAssessment.operator_note && (
-                  <div className="text-white italic">"{selectedAssessment.operator_note}"</div>
-                )}
-              </div>
-            ) : (
-              <button
-                id="open-ack-modal-btn"
-                onClick={() => {
-                  setAckError(null);
-                  setIsAckModalOpen(true);
-                }}
-                className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-amber-600/20 border border-amber-600/50 hover:bg-amber-600/30 text-amber-300 font-bold transition-all"
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>Acknowledge Assessment / Review Drift</span>
-              </button>
-            )}
+            <button
+              id="open-ack-modal-btn"
+              onClick={() => {
+                setAckError(null);
+                setAckConfirmInvalidation(false);
+                setAckTriggerInvalidation(false);
+                setIsAckModalOpen(true);
+              }}
+              className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-amber-600/20 border border-amber-600/50 hover:bg-amber-600/30 text-amber-300 font-bold transition-all"
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Record Operator Acknowledgement</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* 4. Assessment History */}
+      {/* 5. Audit Events Ledger */}
+      {auditEvents.length > 0 && (
+        <div className="p-3 rounded-xl glass-panel border border-command-border space-y-2">
+          <div className="flex items-center space-x-1.5 text-command-muted uppercase text-[10px]">
+            <Fingerprint className="w-3.5 h-3.5 text-radar-bright" />
+            <span>Immutable Stability Audit Log ({auditEvents.length})</span>
+          </div>
+          <div className="space-y-1.5 max-h-36 overflow-y-auto">
+            {auditEvents.map((evt) => (
+              <div
+                key={evt.id}
+                className="p-2 rounded bg-command-bg border border-command-border text-[10px] space-y-0.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white uppercase">{evt.event_type}</span>
+                  <span className="text-[9px] text-command-muted">{new Date(evt.created_at).toLocaleTimeString()}</span>
+                </div>
+                <div className="text-command-muted">
+                  Operator: <span className="text-command-text">{evt.operator_identity}</span>
+                </div>
+                <div className="text-command-muted">
+                  Reason: <span className="text-amber-300 italic">{evt.explicit_reason}</span>
+                </div>
+                {evt.note && <div className="text-[9px] text-command-muted italic">"{evt.note}"</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 6. Assessment History List */}
       {assessments.length > 1 && (
         <div className="p-3 rounded-xl glass-panel border border-command-border space-y-2">
           <div className="flex items-center space-x-1.5 text-command-muted uppercase text-[10px]">
@@ -504,16 +585,16 @@ export function CameraStabilityPanel({
                     }`}
                   />
                   <span>{new Date(a.created_at).toLocaleTimeString()}</span>
-                  <span className="text-[9px] text-command-muted font-mono">{a.video_sha256.slice(0, 8)}</span>
+                  <span className="text-[9px] text-command-muted font-mono">{a.video_sha256 ? a.video_sha256.slice(0, 8) : a.status}</span>
                 </div>
-                <span className="font-bold text-[9px]">{a.aggregate_decision}</span>
+                <span className="font-bold text-[9px]">{a.aggregate_decision || a.status}</span>
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* 5. Acknowledge Assessment Modal */}
+      {/* 7. Acknowledge Assessment Modal */}
       {isAckModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4 font-mono text-xs">
@@ -529,7 +610,7 @@ export function CameraStabilityPanel({
                 </div>
               )}
               <div>
-                <label className="block text-[10px] text-command-muted uppercase mb-1">Operator Label</label>
+                <label className="block text-[10px] text-command-muted uppercase mb-1">Operator Identifier</label>
                 <input
                   type="text"
                   value={ackOperatorLabel}
@@ -550,7 +631,7 @@ export function CameraStabilityPanel({
                 />
               </div>
 
-              {selectedAssessment?.aggregate_decision !== 'STABLE' && (
+              {selectedAssessment?.aggregate_decision === 'UNSTABLE' ? (
                 <div className="p-3 rounded bg-rose-950/30 border border-rose-600/40 space-y-2">
                   <label className="flex items-center space-x-2 cursor-pointer">
                     <input
@@ -563,24 +644,40 @@ export function CameraStabilityPanel({
                       Trigger Audited Layout Invalidation
                     </span>
                   </label>
-                  <p className="text-[10px] text-rose-200/80">
-                    If enabled, this will transition the camera's verified layout revision to INVALIDATED and lock it in the immutable audit ledger.
-                  </p>
 
                   {ackTriggerInvalidation && (
-                    <div className="pt-1">
-                      <label className="block text-[10px] text-command-muted uppercase mb-1">
-                        Invalidation Reason
+                    <div className="space-y-2 pt-1 border-t border-rose-800/40">
+                      <div>
+                        <label className="block text-[10px] text-command-muted uppercase mb-1">
+                          Invalidation Reason (Required)
+                        </label>
+                        <input
+                          type="text"
+                          value={ackInvalidationReason}
+                          onChange={(e) => setAckInvalidationReason(e.target.value)}
+                          required
+                          className="w-full px-2.5 py-1.5 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
+                        />
+                      </div>
+
+                      <label className="flex items-center space-x-2 cursor-pointer pt-1">
+                        <input
+                          type="checkbox"
+                          checked={ackConfirmInvalidation}
+                          onChange={(e) => setAckConfirmInvalidation(e.target.checked)}
+                          required
+                          className="rounded border-command-border bg-command-bg text-radar-bright focus:ring-0"
+                        />
+                        <span className="text-[10px] text-rose-200 font-bold">
+                          I explicitly confirm camera geometry is compromised and must be invalidated.
+                        </span>
                       </label>
-                      <input
-                        type="text"
-                        value={ackInvalidationReason}
-                        onChange={(e) => setAckInvalidationReason(e.target.value)}
-                        required
-                        className="w-full px-2.5 py-1.5 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
-                      />
                     </div>
                   )}
+                </div>
+              ) : (
+                <div className="p-2 rounded bg-command-bg border border-command-border text-[10px] text-command-muted">
+                  Note: Automated layout invalidation is restricted to UNSTABLE decisions. Assessment status is {selectedAssessment?.aggregate_decision || 'N/A'}.
                 </div>
               )}
 
@@ -595,7 +692,7 @@ export function CameraStabilityPanel({
                 <button
                   id="confirm-ack-submit-btn"
                   type="submit"
-                  disabled={isAcknowledging || !ackOperatorLabel.trim()}
+                  disabled={isAcknowledging || !ackOperatorLabel.trim() || (ackTriggerInvalidation && !ackConfirmInvalidation)}
                   className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold disabled:opacity-50"
                 >
                   {isAcknowledging ? 'Submitting...' : 'Confirm Acknowledgement'}

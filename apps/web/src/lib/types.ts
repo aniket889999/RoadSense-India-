@@ -244,6 +244,7 @@ export interface LayoutValidationResult {
 
 export type StabilityDecision = 'STABLE' | 'UNSTABLE' | 'INSUFFICIENT_EVIDENCE' | 'ERROR';
 export type OperationalGate = 'ALLOWED' | 'BLOCKED';
+export type StabilityStatus = 'QUEUED' | 'VALIDATING' | 'ANALYZING' | 'COMPLETE' | 'FAILED' | 'CANCELLED';
 
 export interface SampleMeasurement {
   sample_index: number;
@@ -271,19 +272,47 @@ export interface StabilityAssessment {
   layout_revision_id?: string | null;
   layout_canonical_sha256?: string | null;
   reference_image_sha256: string;
-  video_sha256: string;
-  algorithm_version: string;
-  opencv_version: string;
-  thresholds_snapshot: Record<string, any>;
+  video_sha256?: string | null;
+  status: StabilityStatus;
+  progress_pct: number;
+  stage_message?: string | null;
+  failure_code?: string | null;
+  failure_message?: string | null;
+  config_version?: string | null;
+  config_sha256?: string | null;
+  algorithm_version?: string | null;
+  opencv_version?: string | null;
+  thresholds_snapshot?: Record<string, any> | null;
   sample_measurements: SampleMeasurement[];
-  aggregate_decision: StabilityDecision;
-  operational_gate: OperationalGate;
+  aggregate_decision?: StabilityDecision | null;
+  operational_gate?: OperationalGate | null;
   gate_reasons: string[];
-  summary_metrics: Record<string, any>;
+  summary_metrics?: Record<string, any> | null;
   created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   operator_acknowledged_at?: string | null;
   operator_label?: string | null;
   operator_note?: string | null;
+}
+
+export interface CameraStabilityAuditEvent {
+  id: string;
+  assessment_id: string;
+  camera_id: string;
+  event_type: string;
+  operator_identity: string;
+  explicit_reason: string;
+  note?: string | null;
+  previous_gate_state?: string | null;
+  resulting_gate_state: string;
+  previous_calibration_status?: string | null;
+  resulting_calibration_status: string;
+  assessment_sha256?: string | null;
+  config_sha256?: string | null;
+  reference_image_sha256: string;
+  layout_canonical_sha256?: string | null;
+  created_at: string;
 }
 
 export interface CameraOperationalGate {

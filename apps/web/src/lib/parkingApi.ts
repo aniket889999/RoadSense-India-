@@ -11,6 +11,7 @@ import {
   Site,
   StabilityAssessment,
   CameraOperationalGate,
+  CameraStabilityAuditEvent,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -270,16 +271,10 @@ export async function getStabilityAssessmentDetail(assessmentId: string): Promis
 
 export async function assessCameraStability(
   cameraId: string,
-  videoFile?: File,
-  localVideoName?: string
+  videoFile: File
 ): Promise<StabilityAssessment> {
   const formData = new FormData();
-  if (videoFile) {
-    formData.append('file', videoFile, videoFile.name);
-  }
-  if (localVideoName) {
-    formData.append('local_video_name', localVideoName);
-  }
+  formData.append('file', videoFile, videoFile.name);
 
   const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/assess`, {
     method: 'POST',
@@ -292,13 +287,25 @@ export async function assessCameraStability(
   return res.json();
 }
 
+export async function cancelStabilityAssessment(assessmentId: string): Promise<{ assessment_id: string; status: string; cancelled: boolean; message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to cancel stability assessment');
+  }
+  return res.json();
+}
+
 export async function acknowledgeStabilityAssessment(
   assessmentId: string,
   operatorLabel: string,
   note?: string,
   triggerInvalidation?: boolean,
+  confirmInvalidation?: boolean,
   invalidationReason?: string
-): Promise<StabilityAssessment> {
+): Promise<CameraStabilityAuditEvent> {
   const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}/acknowledge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -306,12 +313,22 @@ export async function acknowledgeStabilityAssessment(
       local_operator_label: operatorLabel,
       note,
       trigger_calibration_invalidation: triggerInvalidation || false,
+      confirm_invalidation: confirmInvalidation || false,
       invalidation_reason: invalidationReason,
     }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || 'Failed to acknowledge stability assessment');
+  }
+  return res.json();
+}
+
+export async function listCameraStabilityAuditEvents(cameraId: string): Promise<CameraStabilityAuditEvent[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/audit-events`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list stability audit events');
   }
   return res.json();
 }

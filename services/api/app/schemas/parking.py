@@ -250,6 +250,7 @@ class LayoutRevisionResponse(BaseModel):
 
 StabilityDecisionLiteral = Literal["STABLE", "UNSTABLE", "INSUFFICIENT_EVIDENCE", "ERROR"]
 OperationalGateLiteral = Literal["ALLOWED", "BLOCKED"]
+StabilityStatusLiteral = Literal["QUEUED", "VALIDATING", "ANALYZING", "COMPLETE", "FAILED", "CANCELLED"]
 
 
 class SampleMeasurementSchema(BaseModel):
@@ -278,19 +279,47 @@ class StabilityAssessmentResponse(BaseModel):
     layout_revision_id: Optional[str] = None
     layout_canonical_sha256: Optional[str] = None
     reference_image_sha256: str
-    video_sha256: str
-    algorithm_version: str
-    opencv_version: str
-    thresholds_snapshot: dict[str, Any]
-    sample_measurements: List[SampleMeasurementSchema]
-    aggregate_decision: StabilityDecisionLiteral
-    operational_gate: OperationalGateLiteral
-    gate_reasons: List[str]
-    summary_metrics: dict[str, Any]
+    video_sha256: Optional[str] = None
+    status: StabilityStatusLiteral = "COMPLETE"
+    progress_pct: float = 100.0
+    stage_message: Optional[str] = None
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+    config_version: Optional[str] = None
+    config_sha256: Optional[str] = None
+    algorithm_version: Optional[str] = None
+    opencv_version: Optional[str] = None
+    thresholds_snapshot: Optional[dict[str, Any]] = None
+    sample_measurements: List[SampleMeasurementSchema] = Field(default_factory=list)
+    aggregate_decision: Optional[StabilityDecisionLiteral] = None
+    operational_gate: Optional[OperationalGateLiteral] = None
+    gate_reasons: List[str] = Field(default_factory=list)
+    summary_metrics: Optional[dict[str, Any]] = None
     created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     operator_acknowledged_at: Optional[datetime] = None
     operator_label: Optional[str] = None
     operator_note: Optional[str] = None
+
+
+class CameraStabilityAuditResponse(BaseModel):
+    id: str
+    assessment_id: str
+    camera_id: str
+    event_type: str
+    operator_identity: str
+    explicit_reason: str
+    note: Optional[str] = None
+    previous_gate_state: Optional[str] = None
+    resulting_gate_state: str
+    previous_calibration_status: Optional[str] = None
+    resulting_calibration_status: str
+    assessment_sha256: Optional[str] = None
+    config_sha256: Optional[str] = None
+    reference_image_sha256: str
+    layout_canonical_sha256: Optional[str] = None
+    created_at: datetime
 
 
 class CameraOperationalGateResponse(BaseModel):
@@ -306,12 +335,28 @@ class CameraOperationalGateResponse(BaseModel):
 
 
 class AcknowledgeStabilityRequest(BaseModel):
-    local_operator_label: str
+    local_operator_label: str = Field(..., min_length=1, max_length=128)
     note: Optional[str] = None
     trigger_calibration_invalidation: bool = False
+    confirm_invalidation: bool = False
     invalidation_reason: Optional[str] = None
 
     @field_validator("local_operator_label", mode="after")
     @classmethod
     def validate_operator(cls, v: str) -> str:
         return _strip_and_require_nonblank(v, "local_operator_label")
+
+    @field_validator("invalidation_reason", mode="after")
+    @classmethod
+    def validate_invalidation_reason(cls, v: Optional[str], values: Any) -> Optional[str]:
+        if v is not None:
+            cleaned = v.strip()
+            return cleaned if cleaned else None
+        return None
+
+
+class StabilityAssessmentCancelResponse(BaseModel):
+    assessment_id: str
+    status: str
+    cancelled: bool
+    message: str

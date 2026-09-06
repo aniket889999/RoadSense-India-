@@ -193,8 +193,9 @@ def evaluate_operational_gate(
       2. Assessment reference image SHA exactly matches the camera's current reference SHA.
       3. Assessment layout canonical SHA exactly matches the current verified layout SHA.
       4. Assessment is fresh (within max_age_seconds if timestamps provided).
+      5. Assessment timestamp is not in the future.
     - BLOCKED for all other conditions (UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR,
-      stale assessment, missing assessment, or SHA mismatch).
+      stale assessment, future timestamp, missing assessment, or SHA mismatch).
     """
     reasons: list[str] = []
 
@@ -221,11 +222,15 @@ def evaluate_operational_gate(
             f"differs from active verified layout SHA ({str(current_layout_sha)[:10]}...)."
         )
 
-    if assessment_timestamp and current_timestamp:
-        t_curr = current_timestamp.astimezone(timezone.utc) if current_timestamp.tzinfo else current_timestamp.replace(tzinfo=timezone.utc)
-        t_ass = assessment_timestamp.astimezone(timezone.utc) if assessment_timestamp.tzinfo else assessment_timestamp.replace(tzinfo=timezone.utc)
+    if assessment_timestamp is not None:
+        t_ass = assessment_timestamp if assessment_timestamp.tzinfo is not None else assessment_timestamp.replace(tzinfo=timezone.utc)
+        t_curr = current_timestamp if current_timestamp is not None else datetime.now(timezone.utc)
+        t_curr = t_curr if t_curr.tzinfo is not None else t_curr.replace(tzinfo=timezone.utc)
+
         age = (t_curr - t_ass).total_seconds()
-        if age > max_age_seconds:
+        if age < -10.0:  # Allow 10s clock drift
+            reasons.append(f"FUTURE_TIMESTAMP: Assessment timestamp is in the future by {abs(age):.1f}s.")
+        elif age > max_age_seconds:
             reasons.append(f"EXPIRED_ASSESSMENT: Assessment age ({int(age)}s) exceeds max allowed age ({max_age_seconds}s).")
 
     if reasons:

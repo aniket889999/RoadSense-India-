@@ -10,6 +10,7 @@ from services.api.app.core.config import settings
 connect_args = {}
 if "sqlite" in settings.DATABASE_URL:
     connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30.0
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -17,6 +18,16 @@ engine = create_async_engine(
     future=True,
     connect_args=connect_args,
 )
+
+if "sqlite" in settings.DATABASE_URL:
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.close()
 
 async_session_factory = async_sessionmaker(
     bind=engine,

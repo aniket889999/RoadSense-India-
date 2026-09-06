@@ -308,21 +308,34 @@ class CameraStabilityAssessment(Base):
     layout_revision_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="SET NULL"), nullable=True)
     layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    status: Mapped[str] = mapped_column(String(32), default="COMPLETE", nullable=False) # QUEUED, VALIDATING, ANALYZING, COMPLETE, FAILED, CANCELLED
+    progress_pct: Mapped[float] = mapped_column(Float, default=100.0, nullable=False)
+    stage_message: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    failure_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    config_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    config_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     reference_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    video_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    video_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
-    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    opencv_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    algorithm_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    opencv_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
-    thresholds_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    sample_measurements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    thresholds_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    sample_measurements: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
 
-    aggregate_decision: Mapped[str] = mapped_column(String(32), nullable=False) # STABLE, UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR
-    operational_gate: Mapped[str] = mapped_column(String(32), nullable=False) # ALLOWED, BLOCKED
-    gate_reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    summary_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    aggregate_decision: Mapped[Optional[str]] = mapped_column(String(32), nullable=True) # STABLE, UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR
+    operational_gate: Mapped[Optional[str]] = mapped_column(String(32), nullable=True) # ALLOWED, BLOCKED
+    gate_reasons: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    summary_metrics: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Legacy fields preserved as nullable
     operator_acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     operator_label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     operator_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -330,3 +343,29 @@ class CameraStabilityAssessment(Base):
     # Relationships
     camera: Mapped[Camera] = relationship("Camera", back_populates="stability_assessments")
     layout_revision: Mapped[Optional[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision")
+    audit_events: Mapped[list[CameraStabilityAuditEvent]] = relationship("CameraStabilityAuditEvent", back_populates="assessment", cascade="all, delete-orphan")
+
+
+class CameraStabilityAuditEvent(Base):
+    """Append-only audit event log for camera stability assessments and calibration state transitions."""
+    __tablename__ = "camera_stability_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    assessment_id: Mapped[str] = mapped_column(String(64), ForeignKey("camera_stability_assessments.id", ondelete="CASCADE"), nullable=False, index=True)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False) # OPERATOR_ACKNOWLEDGED, CALIBRATION_INVALIDATED
+    operator_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    explicit_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    previous_gate_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resulting_gate_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_calibration_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resulting_calibration_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    assessment_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    config_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    assessment: Mapped[CameraStabilityAssessment] = relationship("CameraStabilityAssessment", back_populates="audit_events")

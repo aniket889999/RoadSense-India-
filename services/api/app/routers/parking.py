@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -23,6 +24,7 @@ from services.api.app.models.entities import (
     ApproachZone,
     Camera,
     CameraStabilityAssessment,
+    CameraStabilityAuditEvent,
     LayoutAuditEvent,
     ParkingLayoutRevision,
     ParkingSpace,
@@ -35,6 +37,7 @@ from services.api.app.schemas.parking import (
     CameraInvalidateCalibrationRequest,
     CameraOperationalGateResponse,
     CameraResponse,
+    CameraStabilityAuditResponse,
     LayoutCreateRequest,
     LayoutInvalidateRequest,
     LayoutRevisionResponse,
@@ -49,6 +52,7 @@ from services.api.app.schemas.parking import (
     SampleMeasurementSchema,
     SiteCreateRequest,
     SiteResponse,
+    StabilityAssessmentCancelResponse,
     StabilityAssessmentResponse,
 )
 from services.api.app.services.reference_image_service import (
@@ -57,6 +61,7 @@ from services.api.app.services.reference_image_service import (
     process_and_store_upload_file,
     validate_served_file_path,
 )
+from services.api.app.services.stability_job_manager import stability_job_manager
 
 from src.parking.contracts import (
     CalibrationStatus,
@@ -1281,6 +1286,31 @@ async def invalidate_layout(
 
 
 def _build_stability_response(a: CameraStabilityAssessment) -> StabilityAssessmentResponse:
+    samples_out: List[SampleMeasurementSchema] = []
+    if a.sample_measurements:
+        for s in a.sample_measurements:
+            samples_out.append(
+                SampleMeasurementSchema(
+                    sample_index=int(s["sample_index"]),
+                    timestamp_seconds=float(s["timestamp_seconds"]),
+                    frame_index=int(s["frame_index"]),
+                    matched_features=int(s["matched_features"]),
+                    inlier_count=int(s["inlier_count"]),
+                    inlier_ratio=float(s["inlier_ratio"]),
+                    translation_px_x=float(s["translation_px_x"]),
+                    translation_px_y=float(s["translation_px_y"]),
+                    translation_magnitude_px=float(s["translation_magnitude_px"]),
+                    translation_normalized=float(s["translation_normalized"]),
+                    scale_factor=float(s["scale_factor"]),
+                    scale_change=float(s["scale_change"]),
+                    rotation_degrees=float(s["rotation_degrees"]),
+                    perspective_distortion=float(s["perspective_distortion"]),
+                    reprojection_error=float(s["reprojection_error"]),
+                    decision=s["decision"],
+                    rejection_reasons=s.get("rejection_reasons", []),
+                )
+            )
+
     return StabilityAssessmentResponse(
         id=a.id,
         camera_id=a.camera_id,
@@ -1288,36 +1318,24 @@ def _build_stability_response(a: CameraStabilityAssessment) -> StabilityAssessme
         layout_canonical_sha256=a.layout_canonical_sha256,
         reference_image_sha256=a.reference_image_sha256,
         video_sha256=a.video_sha256,
+        status=a.status or "COMPLETE",
+        progress_pct=a.progress_pct if a.progress_pct is not None else 100.0,
+        stage_message=a.stage_message,
+        failure_code=a.failure_code,
+        failure_message=a.failure_message,
+        config_version=a.config_version,
+        config_sha256=a.config_sha256,
         algorithm_version=a.algorithm_version,
         opencv_version=a.opencv_version,
         thresholds_snapshot=a.thresholds_snapshot,
-        sample_measurements=[
-            SampleMeasurementSchema(
-                sample_index=s["sample_index"],
-                timestamp_seconds=float(s["timestamp_seconds"]),
-                frame_index=int(s["frame_index"]),
-                matched_features=int(s["matched_features"]),
-                inlier_count=int(s["inlier_count"]),
-                inlier_ratio=float(s["inlier_ratio"]),
-                translation_px_x=float(s["translation_px_x"]),
-                translation_px_y=float(s["translation_px_y"]),
-                translation_magnitude_px=float(s["translation_magnitude_px"]),
-                translation_normalized=float(s["translation_normalized"]),
-                scale_factor=float(s["scale_factor"]),
-                scale_change=float(s["scale_change"]),
-                rotation_degrees=float(s["rotation_degrees"]),
-                perspective_distortion=float(s["perspective_distortion"]),
-                reprojection_error=float(s["reprojection_error"]),
-                decision=s["decision"],
-                rejection_reasons=s.get("rejection_reasons", []),
-            )
-            for s in a.sample_measurements
-        ],
+        sample_measurements=samples_out,
         aggregate_decision=a.aggregate_decision,
         operational_gate=a.operational_gate,
-        gate_reasons=a.gate_reasons,
+        gate_reasons=a.gate_reasons or [],
         summary_metrics=a.summary_metrics,
         created_at=a.created_at,
+        started_at=a.started_at,
+        completed_at=a.completed_at,
         operator_acknowledged_at=a.operator_acknowledged_at,
         operator_label=a.operator_label,
         operator_note=a.operator_note,
@@ -1328,16 +1346,15 @@ def _build_stability_response(a: CameraStabilityAssessment) -> StabilityAssessme
 # Camera Stability Endpoints
 # ============================================================================
 
-@router.post("/cameras/{camera_id}/stability/assess", response_model=StabilityAssessmentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/cameras/{camera_id}/stability/assess", response_model=StabilityAssessmentResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_camera_stability_assessment(
     camera_id: str,
-    file: Optional[UploadFile] = File(None),
-    local_video_name: Optional[str] = Form(None),
+    file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Execute a bounded local video camera stability assessment against the camera's reference image.
-    Computes motion metrics and fail-closed operational gate status.
+    Execute an asynchronous bounded camera stability assessment against the camera's reference image.
+    Accepts multipart video upload only, returns HTTP 202 with job progress tracking.
     """
     cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = cam_res.scalar_one_or_none()
@@ -1368,87 +1385,118 @@ async def create_camera_stability_assessment(
     active_layout_id = verified_layout.id if verified_layout else None
     active_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
 
-    # Handle incoming video
-    temp_video_path: Optional[Path] = None
-    target_video_path: Optional[Path] = None
+    # Stream video to secure staging path
+    camera_dir = storage_root / "staging" / camera_id
+    camera_dir.mkdir(parents=True, exist_ok=True)
+    assessment_id = str(uuid.uuid4())
+    temp_video_path = camera_dir / f"assess_stream_{assessment_id}.mp4"
+
+    cfg = stability_job_manager.config
+    MAX_VIDEO_BYTES = cfg.intake.max_upload_bytes
+    total_bytes = 0
 
     try:
-        if file is not None:
-            # Stream upload bounded to 100MB
-            camera_dir = storage_root / "staging" / camera_id
-            camera_dir.mkdir(parents=True, exist_ok=True)
-            temp_video_path = camera_dir / f"assess_stream_{uuid.uuid4().hex}.mp4"
+        with open(temp_video_path, "wb") as vf:
+            while chunk := await file.read(65536):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_VIDEO_BYTES:
+                    temp_video_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Uploaded video exceeds configured limit of {MAX_VIDEO_BYTES // (1024*1024)} MB.",
+                    )
+                vf.write(chunk)
 
-            MAX_VIDEO_BYTES = 100 * 1024 * 1024
-            total_bytes = 0
-            with open(temp_video_path, "wb") as vf:
-                while chunk := await file.read(65536):
-                    total_bytes += len(chunk)
-                    if total_bytes > MAX_VIDEO_BYTES:
-                        raise HTTPException(
-                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail=f"Uploaded video exceeds maximum allowed size ({MAX_VIDEO_BYTES // (1024*1024)} MiB).",
-                        )
-                    vf.write(chunk)
-            target_video_path = temp_video_path
-        elif local_video_name:
-            # Safe local video name lookup
-            clean_name = os.path.basename(local_video_name.strip())
-            candidate_paths = [
-                storage_root / "staging" / camera_id / clean_name,
-                Path("/Users/aniket/Downloads") / clean_name,
-            ]
-            for cp in candidate_paths:
-                if cp.exists() and cp.is_file():
-                    target_video_path = cp
-                    break
-            if not target_video_path:
-                raise HTTPException(status_code=404, detail=f"Local video '{clean_name}' not found.")
-        else:
-            raise HTTPException(status_code=400, detail="Either 'file' or 'local_video_name' must be provided.")
-
-        # Run stability assessment engine
-        result = evaluate_video_camera_stability(
-            video_path=target_video_path,
-            reference_image_bytes=ref_bytes,
-            expected_reference_sha256=cam.reference_image_sha256,
-            active_layout_canonical_sha256=active_layout_sha,
-            sample_count=5,
-            max_duration_sec=60.0,
-            max_bytes=100 * 1024 * 1024,
-        )
+        if total_bytes == 0:
+            temp_video_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded video file is empty (0 bytes).",
+            )
 
         assessment = CameraStabilityAssessment(
-            id=str(uuid.uuid4()),
+            id=assessment_id,
             camera_id=camera_id,
             layout_revision_id=active_layout_id,
             layout_canonical_sha256=active_layout_sha,
-            reference_image_sha256=result.reference_image_sha256,
-            video_sha256=result.video_sha256,
-            algorithm_version=result.algorithm_version,
-            opencv_version=result.opencv_version,
-            thresholds_snapshot=result.thresholds_snapshot,
-            sample_measurements=[s.to_dict() for s in result.samples],
-            aggregate_decision=result.aggregate_decision.value,
-            operational_gate=result.operational_gate.value,
-            gate_reasons=result.gate_reasons,
-            summary_metrics=result.summary_metrics,
+            reference_image_sha256=cam.reference_image_sha256,
+            video_sha256=None,
+            status="QUEUED",
+            progress_pct=0.0,
+            stage_message="Queued for stability evaluation",
+            config_version=cfg.version,
+            config_sha256=cfg.config_sha256,
+            algorithm_version=cfg.algorithm_version,
+            opencv_version=None,
+            thresholds_snapshot=cfg.thresholds_snapshot,
+            sample_measurements=[],
+            aggregate_decision=None,
+            operational_gate=OperationalGate.BLOCKED.value,
+            gate_reasons=["PROCESSING: Assessment job is currently running."],
+            summary_metrics=None,
             created_at=utc_now(),
         )
         db.add(assessment)
         await db.commit()
         await db.refresh(assessment)
 
+        # Launch background evaluation worker
+        stability_job_manager.submit_assessment_job(
+            assessment_id=assessment_id,
+            video_path=temp_video_path,
+            camera_id=camera_id,
+            reference_image_bytes=ref_bytes,
+            expected_reference_sha256=cam.reference_image_sha256,
+            active_layout_canonical_sha256=active_layout_sha,
+        )
+
         return _build_stability_response(assessment)
 
-    except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
-    finally:
-        if temp_video_path and temp_video_path.exists():
-            try:
-                temp_video_path.unlink()
-            except Exception:
-                pass
+    except HTTPException:
+        temp_video_path.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        temp_video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/stability/assessments/{assessment_id}/cancel", response_model=StabilityAssessmentCancelResponse)
+async def cancel_stability_assessment(
+    assessment_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Safely cancel an in-progress or queued stability assessment."""
+    res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
+    a = res.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Stability assessment not found")
+
+    if a.status in ("COMPLETE", "FAILED", "CANCELLED"):
+        return StabilityAssessmentCancelResponse(
+            assessment_id=assessment_id,
+            status=a.status,
+            cancelled=False,
+            message=f"Assessment is already in terminal state '{a.status}'.",
+        )
+
+    await stability_job_manager.cancel_assessment_job(assessment_id)
+    a.status = "CANCELLED"
+    a.progress_pct = 100.0
+    a.stage_message = "Assessment cancelled by operator"
+    a.failure_code = "CANCELLED"
+    a.failure_message = "Assessment cancelled by operator request."
+    a.aggregate_decision = StabilityDecision.ERROR.value
+    a.operational_gate = OperationalGate.BLOCKED.value
+    a.gate_reasons = ["CANCELLED: Assessment cancelled by operator."]
+    a.completed_at = utc_now()
+    await db.commit()
+
+    return StabilityAssessmentCancelResponse(
+        assessment_id=assessment_id,
+        status="CANCELLED",
+        cancelled=True,
+        message="Stability assessment cancelled successfully.",
+    )
 
 
 @router.get("/cameras/{camera_id}/stability/gate", response_model=CameraOperationalGateResponse)
@@ -1473,10 +1521,11 @@ async def get_camera_operational_gate(
     verified_layout = layout_res.scalar_one_or_none()
     current_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
 
-    # Get latest stability assessment
+    # Get latest completed stability assessment
     ass_res = await db.execute(
         select(CameraStabilityAssessment)
         .where(CameraStabilityAssessment.camera_id == camera_id)
+        .where(CameraStabilityAssessment.status == "COMPLETE")
         .order_by(desc(CameraStabilityAssessment.created_at))
         .limit(1)
     )
@@ -1509,6 +1558,9 @@ async def get_camera_operational_gate(
         pass
 
     now = utc_now()
+    cfg = stability_job_manager.config
+    max_age = (latest_assessment.thresholds_snapshot or {}).get("max_assessment_age_seconds", cfg.thresholds.max_assessment_age_seconds)
+
     gate, reasons = evaluate_operational_gate(
         decision=decision_enum,
         assessment_reference_sha=latest_assessment.reference_image_sha256,
@@ -1517,11 +1569,12 @@ async def get_camera_operational_gate(
         current_layout_sha=current_layout_sha,
         assessment_timestamp=latest_assessment.created_at,
         current_timestamp=now,
+        max_age_seconds=max_age,
     )
 
-    t_ass = latest_assessment.created_at.astimezone(timezone.utc) if latest_assessment.created_at.tzinfo else latest_assessment.created_at.replace(tzinfo=timezone.utc)
+    t_ass = latest_assessment.created_at if latest_assessment.created_at.tzinfo else latest_assessment.created_at.replace(tzinfo=timezone.utc)
     age_seconds = (now - t_ass).total_seconds()
-    is_fresh = (age_seconds <= 86400) and (gate == OperationalGate.ALLOWED)
+    is_fresh = (0.0 <= age_seconds <= max_age) and (gate == OperationalGate.ALLOWED)
 
     return CameraOperationalGateResponse(
         camera_id=camera_id,
@@ -1568,7 +1621,7 @@ async def get_stability_assessment_detail(
     return _build_stability_response(a)
 
 
-@router.post("/stability/assessments/{assessment_id}/acknowledge", response_model=StabilityAssessmentResponse)
+@router.post("/stability/assessments/{assessment_id}/acknowledge", response_model=CameraStabilityAuditResponse, status_code=status.HTTP_201_CREATED)
 async def acknowledge_stability_assessment(
     assessment_id: str,
     payload: AcknowledgeStabilityRequest,
@@ -1576,47 +1629,184 @@ async def acknowledge_stability_assessment(
 ):
     """
     Operator acknowledgement of a stability assessment outcome.
-    Optionally triggers audited camera calibration invalidation if the assessment is UNSTABLE.
+    Appends an immutable audit event and optionally triggers audited calibration invalidation for UNSTABLE assessments.
     """
-    res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
+    res = await db.execute(
+        select(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.id == assessment_id)
+    )
     a = res.scalar_one_or_none()
     if not a:
         raise HTTPException(status_code=404, detail="Stability assessment not found")
 
-    a.operator_acknowledged_at = utc_now()
-    a.operator_label = payload.local_operator_label
-    a.operator_note = payload.note
+    if a.status != "COMPLETE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot acknowledge assessment in non-terminal status '{a.status}'.",
+        )
+
+    cam_res = await db.execute(select(Camera).where(Camera.id == a.camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Associated camera not found")
+
+    # Get active verified layout if present
+    layout_res = await db.execute(
+        select(ParkingLayoutRevision)
+        .where(ParkingLayoutRevision.camera_id == a.camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+    )
+    verified_layouts = layout_res.scalars().all()
+    current_layout = verified_layouts[0] if verified_layouts else None
+    current_layout_sha = current_layout.canonical_sha256 if current_layout else None
+
+    prev_gate = a.operational_gate or OperationalGate.BLOCKED.value
+    prev_calib = cam.calibration_status
+    resulting_gate = prev_gate
+    resulting_calib = prev_calib
+    event_type = "OPERATOR_ACKNOWLEDGED"
 
     if payload.trigger_calibration_invalidation:
-        cam_res = await db.execute(select(Camera).where(Camera.id == a.camera_id))
-        cam = cam_res.scalar_one_or_none()
-        if cam:
-            cam.calibration_status = CalibrationStatus.INVALIDATED.value
-            cam.updated_at = utc_now()
-
-            # Invalidate any active verified layouts
-            rev_res = await db.execute(
-                select(ParkingLayoutRevision)
-                .where(ParkingLayoutRevision.camera_id == a.camera_id)
-                .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+        if not payload.confirm_invalidation:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Explicit confirmation (confirm_invalidation=True) is required to invalidate camera calibration.",
             )
-            for rev in rev_res.scalars().all():
-                rev.status = LayoutRevisionStatus.INVALIDATED.value
-                rev.invalidated_at = utc_now()
-                rev.invalidation_reason = f"Camera stability assessment UNSTABLE: {payload.invalidation_reason or payload.note or 'Geometry drift detected'}"
+        if not payload.invalidation_reason or not payload.invalidation_reason.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A non-blank invalidation reason is required to invalidate camera calibration.",
+            )
+        if a.aggregate_decision != StabilityDecision.UNSTABLE.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Calibration invalidation via this endpoint is strictly allowed only for UNSTABLE assessments; current assessment is {a.aggregate_decision}.",
+            )
+        if a.reference_image_sha256 != cam.reference_image_sha256:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assessment reference image SHA does not match the camera's current reference image SHA.",
+            )
+        if current_layout_sha and a.layout_canonical_sha256 != current_layout_sha:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assessment layout canonical SHA does not match the active verified layout SHA.",
+            )
 
-                audit = LayoutAuditEvent(
-                    id=str(uuid.uuid4()),
-                    layout_revision_id=rev.id,
-                    event_type="CALIBRATION_INVALIDATED",
-                    prior_status=LayoutRevisionStatus.VERIFIED.value,
-                    new_status=LayoutRevisionStatus.INVALIDATED.value,
-                    local_operator_label=payload.local_operator_label,
-                    note=payload.note or f"Stability assessment {assessment_id} flagged UNSTABLE.",
-                    created_at=utc_now(),
-                )
-                db.add(audit)
+        # Staleness check
+        max_age = (a.thresholds_snapshot or {}).get("max_assessment_age_seconds", 86400)
+        t_ass = a.created_at if a.created_at.tzinfo else a.created_at.replace(tzinfo=timezone.utc)
+        age = (utc_now() - t_ass).total_seconds()
+        if age > max_age:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot invalidate calibration from an expired assessment ({int(age)}s old > {max_age}s max age).",
+            )
+
+        # Invalidate camera calibration
+        cam.calibration_status = CalibrationStatus.INVALIDATED.value
+        cam.updated_at = utc_now()
+        resulting_calib = CalibrationStatus.INVALIDATED.value
+        resulting_gate = OperationalGate.BLOCKED.value
+        event_type = "CALIBRATION_INVALIDATED"
+
+        for rev in verified_layouts:
+            rev.status = LayoutRevisionStatus.INVALIDATED.value
+            rev.invalidated_at = utc_now()
+            rev.invalidation_reason = f"Camera stability assessment UNSTABLE: {payload.invalidation_reason.strip()}"
+            audit = LayoutAuditEvent(
+                id=str(uuid.uuid4()),
+                layout_revision_id=rev.id,
+                event_type="CALIBRATION_INVALIDATED",
+                prior_status=LayoutRevisionStatus.VERIFIED.value,
+                new_status=LayoutRevisionStatus.INVALIDATED.value,
+                local_operator_label=payload.local_operator_label,
+                note=payload.note or f"Stability assessment {assessment_id} flagged UNSTABLE.",
+                created_at=utc_now(),
+            )
+            db.add(audit)
+
+    # Compute assessment summary SHA
+    summary_str = f"{a.id}:{a.video_sha256}:{a.reference_image_sha256}:{a.aggregate_decision}:{a.operational_gate}"
+    ass_sha = hashlib.sha256(summary_str.encode("utf-8")).hexdigest()
+
+    audit_event = CameraStabilityAuditEvent(
+        id=str(uuid.uuid4()),
+        assessment_id=a.id,
+        camera_id=cam.id,
+        event_type=event_type,
+        operator_identity=payload.local_operator_label,
+        explicit_reason=payload.invalidation_reason.strip() if payload.invalidation_reason else (payload.note or "Operator acknowledged stability assessment outcome."),
+        note=payload.note,
+        previous_gate_state=prev_gate,
+        resulting_gate_state=resulting_gate,
+        previous_calibration_status=prev_calib,
+        resulting_calibration_status=resulting_calib,
+        assessment_sha256=ass_sha,
+        config_sha256=a.config_sha256,
+        reference_image_sha256=cam.reference_image_sha256,
+        layout_canonical_sha256=current_layout_sha,
+        created_at=utc_now(),
+    )
+    db.add(audit_event)
 
     await db.commit()
-    await db.refresh(a)
-    return _build_stability_response(a)
+    await db.refresh(audit_event)
+
+    return CameraStabilityAuditResponse(
+        id=audit_event.id,
+        assessment_id=audit_event.assessment_id,
+        camera_id=audit_event.camera_id,
+        event_type=audit_event.event_type,
+        operator_identity=audit_event.operator_identity,
+        explicit_reason=audit_event.explicit_reason,
+        note=audit_event.note,
+        previous_gate_state=audit_event.previous_gate_state,
+        resulting_gate_state=audit_event.resulting_gate_state,
+        previous_calibration_status=audit_event.previous_calibration_status,
+        resulting_calibration_status=audit_event.resulting_calibration_status,
+        assessment_sha256=audit_event.assessment_sha256,
+        config_sha256=audit_event.config_sha256,
+        reference_image_sha256=audit_event.reference_image_sha256,
+        layout_canonical_sha256=audit_event.layout_canonical_sha256,
+        created_at=audit_event.created_at,
+    )
+
+
+@router.get("/cameras/{camera_id}/stability/audit-events", response_model=List[CameraStabilityAuditResponse])
+async def list_camera_stability_audit_events(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List append-only camera stability audit and acknowledgement events."""
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    if not cam_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    res = await db.execute(
+        select(CameraStabilityAuditEvent)
+        .where(CameraStabilityAuditEvent.camera_id == camera_id)
+        .order_by(desc(CameraStabilityAuditEvent.created_at))
+    )
+    events = res.scalars().all()
+    return [
+        CameraStabilityAuditResponse(
+            id=e.id,
+            assessment_id=e.assessment_id,
+            camera_id=e.camera_id,
+            event_type=e.event_type,
+            operator_identity=e.operator_identity,
+            explicit_reason=e.explicit_reason,
+            note=e.note,
+            previous_gate_state=e.previous_gate_state,
+            resulting_gate_state=e.resulting_gate_state,
+            previous_calibration_status=e.previous_calibration_status,
+            resulting_calibration_status=e.resulting_calibration_status,
+            assessment_sha256=e.assessment_sha256,
+            config_sha256=e.config_sha256,
+            reference_image_sha256=e.reference_image_sha256,
+            layout_canonical_sha256=e.layout_canonical_sha256,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]

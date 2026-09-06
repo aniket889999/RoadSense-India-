@@ -211,6 +211,7 @@ class Camera(Base):
     # Relationships
     site: Mapped[Site] = relationship("Site", back_populates="cameras")
     layout_revisions: Mapped[List[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision", back_populates="camera", cascade="all, delete-orphan")
+    stability_assessments: Mapped[List["CameraStabilityAssessment"]] = relationship("CameraStabilityAssessment", back_populates="camera", cascade="all, delete-orphan")
 
 
 class ParkingLayoutRevision(Base):
@@ -296,3 +297,36 @@ class LayoutAuditEvent(Base):
 
     # Relationships
     layout_revision: Mapped[ParkingLayoutRevision] = relationship("ParkingLayoutRevision", back_populates="audit_events")
+
+
+class CameraStabilityAssessment(Base):
+    """Immutable operational camera stability assessment record."""
+    __tablename__ = "camera_stability_assessments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    layout_revision_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="SET NULL"), nullable=True)
+    layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    reference_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    video_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    opencv_version: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    thresholds_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    sample_measurements: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+
+    aggregate_decision: Mapped[str] = mapped_column(String(32), nullable=False) # STABLE, UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR
+    operational_gate: Mapped[str] = mapped_column(String(32), nullable=False) # ALLOWED, BLOCKED
+    gate_reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    summary_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    operator_acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    operator_label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    operator_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="stability_assessments")
+    layout_revision: Mapped[Optional[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision")

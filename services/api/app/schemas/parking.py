@@ -246,3 +246,72 @@ class LayoutRevisionResponse(BaseModel):
     parking_spaces: List[ParkingSpaceSchema] = Field(default_factory=list)
     approach_zones: List[ApproachZoneSchema] = Field(default_factory=list)
     audit_events: List[AuditEventResponse] = Field(default_factory=list)
+
+
+StabilityDecisionLiteral = Literal["STABLE", "UNSTABLE", "INSUFFICIENT_EVIDENCE", "ERROR"]
+OperationalGateLiteral = Literal["ALLOWED", "BLOCKED"]
+
+
+class SampleMeasurementSchema(BaseModel):
+    sample_index: int
+    timestamp_seconds: float
+    frame_index: int
+    matched_features: int
+    inlier_count: int
+    inlier_ratio: float
+    translation_px_x: float
+    translation_px_y: float
+    translation_magnitude_px: float
+    translation_normalized: float
+    scale_factor: float
+    scale_change: float
+    rotation_degrees: float
+    perspective_distortion: float
+    reprojection_error: float
+    decision: StabilityDecisionLiteral
+    rejection_reasons: List[str] = Field(default_factory=list)
+
+
+class StabilityAssessmentResponse(BaseModel):
+    id: str
+    camera_id: str
+    layout_revision_id: Optional[str] = None
+    layout_canonical_sha256: Optional[str] = None
+    reference_image_sha256: str
+    video_sha256: str
+    algorithm_version: str
+    opencv_version: str
+    thresholds_snapshot: dict[str, Any]
+    sample_measurements: List[SampleMeasurementSchema]
+    aggregate_decision: StabilityDecisionLiteral
+    operational_gate: OperationalGateLiteral
+    gate_reasons: List[str]
+    summary_metrics: dict[str, Any]
+    created_at: datetime
+    operator_acknowledged_at: Optional[datetime] = None
+    operator_label: Optional[str] = None
+    operator_note: Optional[str] = None
+
+
+class CameraOperationalGateResponse(BaseModel):
+    camera_id: str
+    operational_gate: OperationalGateLiteral
+    gate_reasons: List[str]
+    aggregate_decision: Optional[StabilityDecisionLiteral] = None
+    assessment_id: Optional[str] = None
+    reference_image_sha256: Optional[str] = None
+    layout_canonical_sha256: Optional[str] = None
+    created_at: Optional[datetime] = None
+    is_fresh: bool = False
+
+
+class AcknowledgeStabilityRequest(BaseModel):
+    local_operator_label: str
+    note: Optional[str] = None
+    trigger_calibration_invalidation: bool = False
+    invalidation_reason: Optional[str] = None
+
+    @field_validator("local_operator_label", mode="after")
+    @classmethod
+    def validate_operator(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "local_operator_label")

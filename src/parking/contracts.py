@@ -134,3 +134,99 @@ def derive_operator_availability(
             return DerivedAvailability.UNKNOWN
 
     return DerivedAvailability.UNKNOWN
+
+
+class StabilityDecision(str, Enum):
+    """Automated camera stability assessment outcome."""
+    STABLE = "STABLE"
+    UNSTABLE = "UNSTABLE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    ERROR = "ERROR"
+
+
+class OperationalGate(str, Enum):
+    """Operational inference gate status controlling downstream analytics."""
+    ALLOWED = "ALLOWED"
+    BLOCKED = "BLOCKED"
+
+
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass(frozen=True)
+class StabilityThresholds:
+    """
+    Configurable thresholds for geometric camera stability validation.
+
+    Note: These are operational research heuristics designed for fail-closed safety,
+    not scientifically universal invariants across all lenses and fields of view.
+    """
+    max_translation_px: float = 8.0
+    max_translation_norm: float = 0.01
+    max_rotation_deg: float = 1.0
+    max_scale_change: float = 0.03
+    max_perspective_distortion: float = 0.0005
+    min_matches: int = 25
+    min_inliers: int = 15
+    min_inlier_ratio: float = 0.25
+    max_reprojection_error: float = 2.5
+    max_assessment_age_seconds: int = 86400  # 24 hours validity window
+
+
+def evaluate_operational_gate(
+    decision: Optional[StabilityDecision],
+    assessment_reference_sha: Optional[str],
+    current_reference_sha: Optional[str],
+    assessment_layout_sha: Optional[str],
+    current_layout_sha: Optional[str],
+    assessment_timestamp: Optional[datetime] = None,
+    current_timestamp: Optional[datetime] = None,
+    max_age_seconds: int = 86400,
+) -> tuple[OperationalGate, list[str]]:
+    """
+    Derive fail-closed operational inference gate status.
+
+    Rules:
+    - ALLOWED only if:
+      1. Aggregate decision is STABLE.
+      2. Assessment reference image SHA exactly matches the camera's current reference SHA.
+      3. Assessment layout canonical SHA exactly matches the current verified layout SHA.
+      4. Assessment is fresh (within max_age_seconds if timestamps provided).
+    - BLOCKED for all other conditions (UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR,
+      stale assessment, missing assessment, or SHA mismatch).
+    """
+    reasons: list[str] = []
+
+    if decision is None:
+        reasons.append("NO_ASSESSMENT: Camera has no recorded stability assessment.")
+        return OperationalGate.BLOCKED, reasons
+
+    if decision != StabilityDecision.STABLE:
+        reasons.append(f"UNSTABLE_DECISION: Stability assessment decision is {decision.value}.")
+
+    if not assessment_reference_sha or not current_reference_sha:
+        reasons.append("MISSING_REFERENCE_SHA: Reference image SHA is missing from camera or assessment.")
+    elif assessment_reference_sha != current_reference_sha:
+        reasons.append(
+            f"STALE_REFERENCE_SHA: Assessment reference SHA ({assessment_reference_sha[:10]}...) "
+            f"differs from current camera reference SHA ({current_reference_sha[:10]}...)."
+        )
+
+    if not current_layout_sha:
+        reasons.append("NO_VERIFIED_LAYOUT: Camera has no active verified layout revision.")
+    elif not assessment_layout_sha or assessment_layout_sha != current_layout_sha:
+        reasons.append(
+            f"STALE_LAYOUT_SHA: Assessment layout SHA ({str(assessment_layout_sha)[:10]}...) "
+            f"differs from active verified layout SHA ({str(current_layout_sha)[:10]}...)."
+        )
+
+    if assessment_timestamp and current_timestamp:
+        age = (current_timestamp - assessment_timestamp).total_seconds()
+        if age > max_age_seconds:
+            reasons.append(f"EXPIRED_ASSESSMENT: Assessment age ({int(age)}s) exceeds max allowed age ({max_age_seconds}s).")
+
+    if reasons:
+        return OperationalGate.BLOCKED, reasons
+
+    return OperationalGate.ALLOWED, ["Camera geometry verified stable and aligned with active verified layout."]

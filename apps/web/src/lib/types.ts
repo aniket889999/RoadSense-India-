@@ -141,3 +141,103 @@ export interface SessionProgressEvent {
   message?: string | null;
   detections_found: number;
 }
+
+// ============================================================================
+// Parking Domain & ROI Editor Types (Phase 1)
+// ============================================================================
+
+export type CalibrationStatus = 'NOT_CONFIGURED' | 'PENDING_REVIEW' | 'VERIFIED' | 'INVALIDATED';
+
+export type LayoutRevisionStatus = 'DRAFT' | 'PENDING_REVIEW' | 'VERIFIED' | 'SUPERSEDED' | 'INVALIDATED';
+
+export type SpaceType = 'STANDARD' | 'ACCESSIBLE' | 'EV_CHARGING' | 'LOADING' | 'EMERGENCY' | 'OTHER';
+
+export interface NormalizedPoint {
+  x: number;
+  y: number;
+}
+
+export interface ParkingSpace {
+  id?: string;
+  operator_label: string;
+  space_type: SpaceType;
+  polygon_normalized: NormalizedPoint[];
+  active: boolean;
+}
+
+export interface ApproachZone {
+  id?: string;
+  parking_space_id: string;
+  polygon_normalized: NormalizedPoint[];
+}
+
+export interface Site {
+  id: string;
+  name: string;
+  description?: string | null;
+  timezone: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  cameras_count: number;
+}
+
+export interface Camera {
+  id: string;
+  site_id: string;
+  name: string;
+  description?: string | null;
+  reference_image_path?: string | null;
+  reference_image_sha256?: string | null;
+  reference_width?: number | null;
+  reference_height?: number | null;
+  calibration_status: CalibrationStatus;
+  camera_position_description?: string | null;
+  created_at: string;
+  updated_at: string;
+  active_verified_layout_id?: string | null;
+}
+
+export interface LayoutAuditEvent {
+  id: string;
+  layout_revision_id: string;
+  event_type: string;
+  prior_status?: string | null;
+  new_status: string;
+  local_operator_label?: string | null;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface ParkingLayoutRevision {
+  id: string;
+  camera_id: string;
+  revision_number: number;
+  status: LayoutRevisionStatus;
+  canonical_sha256?: string | null;
+  reference_image_sha256?: string | null;
+  reference_width?: number | null;
+  reference_height?: number | null;
+  created_at: string;
+  submitted_at?: string | null;
+  verified_at?: string | null;
+  invalidated_at?: string | null;
+  invalidation_reason?: string | null;
+  parking_spaces: ParkingSpace[];
+  approach_zones: ApproachZone[];
+  audit_events: LayoutAuditEvent[];
+}
+
+export interface LayoutValidationError {
+  rule_id: string;
+  message: string;
+  space_id?: string | null;
+  space_label?: string | null;
+}
+
+export interface LayoutValidationResult {
+  is_valid: boolean;
+  errors: LayoutValidationError[];
+  spaces_count: number;
+  approach_zones_count: number;
+}

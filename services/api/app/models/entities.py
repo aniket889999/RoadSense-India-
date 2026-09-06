@@ -10,10 +10,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     JSON,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from services.api.app.db.base import Base
@@ -163,3 +166,133 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     session: Mapped[DriveSession] = relationship("DriveSession", back_populates="artifacts")
+
+
+# ============================================================================
+# RoadSense SiteOps: Parking Domain Entities (Phase 1)
+# ============================================================================
+
+class Site(Base):
+    """Physical facility campus entity."""
+    __tablename__ = "sites"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    cameras: Mapped[List[Camera]] = relationship("Camera", back_populates="site", cascade="all, delete-orphan")
+
+
+class Camera(Base):
+    """Fixed CCTV camera sensor covering a parking zone."""
+    __tablename__ = "cameras"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    site_id: Mapped[str] = mapped_column(String(64), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    reference_image_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    reference_image_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reference_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    calibration_status: Mapped[str] = mapped_column(String(32), default="NOT_CONFIGURED", nullable=False) # NOT_CONFIGURED, PENDING_REVIEW, VERIFIED, INVALIDATED
+    camera_position_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    site: Mapped[Site] = relationship("Site", back_populates="cameras")
+    layout_revisions: Mapped[List[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision", back_populates="camera", cascade="all, delete-orphan")
+
+
+class ParkingLayoutRevision(Base):
+    """Versioned parking layout revision for a camera."""
+    __tablename__ = "parking_layout_revisions"
+
+    __table_args__ = (
+        UniqueConstraint("camera_id", "revision_number", name="uq_parking_layout_camera_revision"),
+        Index(
+            "uq_one_verified_layout_per_camera",
+            "camera_id",
+            unique=True,
+            postgresql_where=text("status = 'VERIFIED'"),
+            sqlite_where=text("status = 'VERIFIED'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False) # DRAFT, PENDING_REVIEW, VERIFIED, SUPERSEDED, INVALIDATED
+    canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Reference Image Snapshot (immutable per layout revision)
+    reference_image_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reference_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    invalidation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="layout_revisions")
+    parking_spaces: Mapped[List[ParkingSpace]] = relationship("ParkingSpace", back_populates="layout_revision", cascade="all, delete-orphan")
+    audit_events: Mapped[List[LayoutAuditEvent]] = relationship("LayoutAuditEvent", back_populates="layout_revision", cascade="all, delete-orphan")
+
+
+class ParkingSpace(Base):
+    """Individual configured parking bay polygon."""
+    __tablename__ = "parking_spaces"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    layout_revision_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    operator_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    space_type: Mapped[str] = mapped_column(String(32), default="STANDARD", nullable=False)
+    polygon_normalized: Mapped[list[dict[str, float]]] = mapped_column(JSON, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    layout_revision: Mapped[ParkingLayoutRevision] = relationship("ParkingLayoutRevision", back_populates="parking_spaces")
+    approach_zone: Mapped[Optional[ApproachZone]] = relationship("ApproachZone", back_populates="parking_space", uselist=False, cascade="all, delete-orphan")
+
+
+class ApproachZone(Base):
+    """Access / ingress zone polygon associated with a parking bay."""
+    __tablename__ = "approach_zones"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    parking_space_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_spaces.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    polygon_normalized: Mapped[list[dict[str, float]]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    parking_space: Mapped[ParkingSpace] = relationship("ParkingSpace", back_populates="approach_zone")
+
+
+class LayoutAuditEvent(Base):
+    """Append-only audit history log for parking layout lifecycle transitions."""
+    __tablename__ = "layout_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    layout_revision_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False) # CREATED, UPDATED, SUBMITTED, VERIFIED, INVALIDATED, SUPERSEDED
+    prior_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    local_operator_label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    layout_revision: Mapped[ParkingLayoutRevision] = relationship("ParkingLayoutRevision", back_populates="audit_events")

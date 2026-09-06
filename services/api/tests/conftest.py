@@ -2,15 +2,14 @@
 
 import os
 import pytest
-import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from services.api.app.db.base import Base
 from services.api.app.db.session import get_db
-from services.api.app.main import app
 
 # Use in-memory SQLite for tests
+
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(
@@ -27,7 +26,12 @@ TestSessionLocal = async_sessionmaker(
 )
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
 async def db_session():
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -39,8 +43,10 @@ async def db_session():
         await conn.run_sync(Base.metadata.drop_all)
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest.fixture
 async def client(db_session):
+    from services.api.app.main import app
+
     async def override_get_db():
         yield db_session
 

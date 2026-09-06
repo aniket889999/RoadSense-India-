@@ -10,7 +10,7 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 
-export type ActiveTab = 'command' | 'sessions' | 'map' | 'live';
+export type ActiveTab = 'command' | 'sessions' | 'map' | 'live' | 'parking';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -25,6 +25,11 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
       label: 'Command Center',
       icon: <LayoutDashboard className="w-4 h-4" />,
       badge: pendingReviewsCount > 0 ? pendingReviewsCount : undefined,
+    },
+    {
+      id: 'parking',
+      label: 'Parking Layout',
+      icon: <Layers className="w-4 h-4" />,
     },
     {
       id: 'sessions',
@@ -42,6 +47,7 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
       icon: <Camera className="w-4 h-4" />,
     },
   ];
+
 
   return (
     <aside className="w-64 border-r border-command-border bg-command-surface flex flex-col justify-between p-4 min-h-[calc(100vh-4rem)]">

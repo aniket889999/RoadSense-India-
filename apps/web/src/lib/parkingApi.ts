@@ -62,10 +62,20 @@ export async function fetchCamera(cameraId: string): Promise<Camera> {
   return res.json();
 }
 
-export async function uploadCameraReferenceImage(cameraId: string, file: File): Promise<Camera> {
-  // Direct binary stream or FormData
+export async function uploadCameraReferenceImage(
+  cameraId: string,
+  file: File,
+  confirmReplacement?: boolean,
+  operatorLabel?: string,
+  reason?: string
+): Promise<Camera> {
   const formData = new FormData();
   formData.append('file', file, file.name);
+  if (confirmReplacement) {
+    formData.append('confirm_replacement', 'true');
+    if (operatorLabel) formData.append('operator_label', operatorLabel);
+    if (reason) formData.append('reason', reason);
+  }
 
   const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/reference-image`, {
     method: 'POST',

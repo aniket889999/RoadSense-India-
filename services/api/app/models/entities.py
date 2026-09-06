@@ -10,10 +10,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     JSON,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from services.api.app.db.base import Base
@@ -214,11 +217,27 @@ class ParkingLayoutRevision(Base):
     """Versioned parking layout revision for a camera."""
     __tablename__ = "parking_layout_revisions"
 
+    __table_args__ = (
+        UniqueConstraint("camera_id", "revision_number", name="uq_parking_layout_camera_revision"),
+        Index(
+            "uq_one_verified_layout_per_camera",
+            "camera_id",
+            unique=True,
+            postgresql_where=text("status = 'VERIFIED'"),
+            sqlite_where=text("status = 'VERIFIED'"),
+        ),
+    )
+
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
     camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False) # DRAFT, PENDING_REVIEW, VERIFIED, SUPERSEDED, INVALIDATED
     canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Reference Image Snapshot (immutable per layout revision)
+    reference_image_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reference_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

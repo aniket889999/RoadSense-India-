@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -275,6 +276,9 @@ async def get_camera(camera_id: str, db: AsyncSession = Depends(get_db)):
 async def upload_reference_image(
     camera_id: str,
     file: UploadFile = File(...),
+    confirm_replacement: bool = Form(False),
+    operator_label: Optional[str] = Form(None),
+    reason: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload and normalize a reference frame image for a camera."""
@@ -284,6 +288,38 @@ async def upload_reference_image(
         raise HTTPException(status_code=404, detail="Camera not found")
 
     storage_root = get_storage_root()
+
+    # Check if camera has existing layouts
+    layout_res = await db.execute(
+        select(ParkingLayoutRevision).where(ParkingLayoutRevision.camera_id == camera_id)
+    )
+    existing_layouts = layout_res.scalars().all()
+    has_active_layouts = any(
+        l.status in (LayoutRevisionStatus.DRAFT.value, LayoutRevisionStatus.PENDING_REVIEW.value, LayoutRevisionStatus.VERIFIED.value)
+        for l in existing_layouts
+    )
+
+    clean_op: Optional[str] = None
+    clean_reason: Optional[str] = None
+
+    if has_active_layouts:
+        if not confirm_replacement:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CONFIRMATION_REQUIRED: Replacing reference image on a camera with active layouts requires explicit confirmation (confirm_replacement=true), a non-blank operator label, and a meaningful reason.",
+            )
+        if not operator_label or not operator_label.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Non-blank operator label is required when replacing reference image.",
+            )
+        if not reason or not reason.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Meaningful reason is required when replacing reference image.",
+            )
+        clean_op = operator_label.strip()
+        clean_reason = reason.strip()
 
     try:
         processed = await process_and_store_upload_file(
@@ -299,15 +335,57 @@ async def upload_reference_image(
         logger.exception("Unexpected error processing reference image upload")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal image processing error")
 
-    # Update camera with reference image metadata
-    cam.reference_image_path = processed.relative_path
-    cam.reference_image_sha256 = processed.sha256
-    cam.reference_width = processed.width
-    cam.reference_height = processed.height
-    cam.updated_at = utc_now()
+    old_file_path = cam.reference_image_path
+    old_sha = cam.reference_image_sha256
 
-    await db.commit()
-    await db.refresh(cam)
+    try:
+        # Transactionally invalidate existing layouts tied to prior image
+        if has_active_layouts and clean_op and clean_reason:
+            for rev in existing_layouts:
+                if rev.status in (LayoutRevisionStatus.DRAFT.value, LayoutRevisionStatus.PENDING_REVIEW.value, LayoutRevisionStatus.VERIFIED.value):
+                    prior_status = rev.status
+                    rev.status = LayoutRevisionStatus.INVALIDATED.value
+                    rev.invalidated_at = utc_now()
+                    rev.invalidation_reason = f"Reference image replaced by {clean_op}: {clean_reason}"
+                    db.add(LayoutAuditEvent(
+                        id=str(uuid.uuid4()),
+                        layout_revision_id=rev.id,
+                        event_type="REFERENCE_IMAGE_REPLACED",
+                        prior_status=prior_status,
+                        new_status=LayoutRevisionStatus.INVALIDATED.value,
+                        local_operator_label=clean_op,
+                        note=f"Image SHA changed from {old_sha} to {processed.sha256}. Reason: {clean_reason}",
+                        created_at=utc_now(),
+                    ))
+
+        # Update camera reference image metadata and set calibration status to PENDING_REVIEW (never VERIFIED)
+        cam.reference_image_path = processed.relative_path
+        cam.reference_image_sha256 = processed.sha256
+        cam.reference_width = processed.width
+        cam.reference_height = processed.height
+        cam.calibration_status = CalibrationStatus.PENDING_REVIEW.value
+        cam.updated_at = utc_now()
+
+        await db.commit()
+        await db.refresh(cam)
+
+    except Exception:
+        await db.rollback()
+        # Clean up the newly created image on DB failure to preserve atomic intake
+        try:
+            Path(processed.absolute_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+    # On DB commit success, clean up superseded image if no other camera references it
+    if old_file_path and old_file_path != processed.relative_path:
+        other_cams = await db.execute(select(Camera.id).where(Camera.reference_image_path == old_file_path))
+        if not other_cams.scalars().all():
+            try:
+                (storage_root / old_file_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
     return CameraResponse(
         id=cam.id,
@@ -382,7 +460,6 @@ async def invalidate_camera_calibration(
         rev.invalidated_at = utc_now()
         rev.invalidation_reason = f"Camera calibration invalidated: {payload.invalidation_reason}"
 
-        # Add audit event
         audit = LayoutAuditEvent(
             id=str(uuid.uuid4()),
             layout_revision_id=rev.id,
@@ -466,13 +543,15 @@ def _build_layout_response(rev: ParkingLayoutRevision) -> LayoutRevisionResponse
         for a in sorted(rev.audit_events, key=lambda x: _dt_sort_key(x.created_at))
     ]
 
-
     return LayoutRevisionResponse(
         id=rev.id,
         camera_id=rev.camera_id,
         revision_number=rev.revision_number,
         status=rev.status,
         canonical_sha256=rev.canonical_sha256,
+        reference_image_sha256=rev.reference_image_sha256,
+        reference_width=rev.reference_width,
+        reference_height=rev.reference_height,
         created_at=rev.created_at,
         submitted_at=rev.submitted_at,
         verified_at=rev.verified_at,
@@ -496,6 +575,12 @@ async def create_draft_layout(
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
 
+    if not cam.reference_image_sha256 or not cam.reference_width or not cam.reference_height:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Camera has no valid reference image. Upload a reference image before creating a layout.",
+        )
+
     # Get max revision number for this camera
     max_rev_res = await db.execute(
         select(func.coalesce(func.max(ParkingLayoutRevision.revision_number), 0)).where(
@@ -510,6 +595,9 @@ async def create_draft_layout(
         camera_id=camera_id,
         revision_number=next_rev,
         status=LayoutRevisionStatus.DRAFT.value,
+        reference_image_sha256=cam.reference_image_sha256,
+        reference_width=cam.reference_width,
+        reference_height=cam.reference_height,
         created_at=utc_now(),
     )
     db.add(layout_rev)
@@ -559,7 +647,14 @@ async def create_draft_layout(
     )
     db.add(audit)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict: A layout revision with this revision number was created concurrently.",
+        ) from e
 
     # Re-fetch with relationships loaded
     full_rev = await db.execute(
@@ -616,13 +711,14 @@ async def update_layout(
     """
     Update a parking layout revision.
     If the layout is DRAFT, updates in place.
-    If VERIFIED or PENDING_REVIEW, creates a new DRAFT revision to preserve immutability.
+    If VERIFIED, PENDING_REVIEW, SUPERSEDED, or INVALIDATED, creates a new DRAFT revision to preserve immutability.
     """
     result = await db.execute(
         select(ParkingLayoutRevision)
         .options(
             selectinload(ParkingLayoutRevision.parking_spaces).selectinload(ParkingSpace.approach_zone),
             selectinload(ParkingLayoutRevision.audit_events),
+            selectinload(ParkingLayoutRevision.camera),
         )
         .where(ParkingLayoutRevision.id == layout_id)
     )
@@ -630,9 +726,23 @@ async def update_layout(
     if not rev:
         raise HTTPException(status_code=404, detail="Layout revision not found")
 
+    cam = rev.camera
+    if not cam or not cam.reference_image_sha256:
+        raise HTTPException(status_code=400, detail="Camera has no valid reference image.")
+
     if rev.status == LayoutRevisionStatus.DRAFT.value:
+        # Verify snapshot matches current camera image
+        if (
+            rev.reference_image_sha256 != cam.reference_image_sha256
+            or rev.reference_width != cam.reference_width
+            or rev.reference_height != cam.reference_height
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Layout reference snapshot does not match current camera reference image. Geometry is stale.",
+            )
+
         # Update DRAFT in place
-        # Remove old spaces (cascades to approach zones)
         for old_sp in list(rev.parking_spaces):
             await db.delete(old_sp)
         await db.flush()
@@ -681,7 +791,6 @@ async def update_layout(
         db.add(audit)
         await db.commit()
 
-        # Re-fetch
         reloaded = await db.execute(
             select(ParkingLayoutRevision)
             .options(
@@ -693,7 +802,7 @@ async def update_layout(
         return _build_layout_response(reloaded.scalar_one())
 
     else:
-        # Non-draft: create a new DRAFT revision
+        # Non-draft: create a new DRAFT revision without mutating history
         max_rev_res = await db.execute(
             select(func.coalesce(func.max(ParkingLayoutRevision.revision_number), 0)).where(
                 ParkingLayoutRevision.camera_id == rev.camera_id
@@ -707,6 +816,9 @@ async def update_layout(
             camera_id=rev.camera_id,
             revision_number=next_rev,
             status=LayoutRevisionStatus.DRAFT.value,
+            reference_image_sha256=cam.reference_image_sha256,
+            reference_width=cam.reference_width,
+            reference_height=cam.reference_height,
             created_at=utc_now(),
         )
         db.add(new_rev)
@@ -745,15 +857,23 @@ async def update_layout(
         audit = LayoutAuditEvent(
             id=str(uuid.uuid4()),
             layout_revision_id=new_rev_id,
-            event_type="BRANCHED_FROM_VERIFIED",
+            event_type="BRANCHED_FROM_REVISION",
             prior_status=rev.status,
             new_status=LayoutRevisionStatus.DRAFT.value,
             local_operator_label="operator",
-            note=f"Created new draft revision {next_rev} branched from revision {rev.revision_number}",
+            note=f"Created new draft revision {next_rev} branched from revision {rev.revision_number} ({rev.status})",
             created_at=utc_now(),
         )
         db.add(audit)
-        await db.commit()
+
+        try:
+            await db.commit()
+        except IntegrityError as e:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Conflict: Concurrent layout creation assigned the same revision number.",
+            ) from e
 
         reloaded = await db.execute(
             select(ParkingLayoutRevision)
@@ -781,6 +901,21 @@ async def validate_layout_endpoint(layout_id: str, db: AsyncSession = Depends(ge
     if not rev:
         raise HTTPException(status_code=404, detail="Layout revision not found")
 
+    cam = rev.camera
+    if not cam or not cam.reference_image_sha256 or not cam.reference_width or not cam.reference_height:
+        raise HTTPException(status_code=400, detail="Camera has no valid reference image.")
+    if not rev.reference_image_sha256 or not rev.reference_width or not rev.reference_height:
+        raise HTTPException(status_code=400, detail="Layout revision lacks reference image snapshot.")
+    if (
+        rev.reference_image_sha256 != cam.reference_image_sha256
+        or rev.reference_width != cam.reference_width
+        or rev.reference_height != cam.reference_height
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Layout reference snapshot does not match current camera reference image. Layout geometry is stale.",
+        )
+
     spaces_dicts = [
         {
             "id": sp.id,
@@ -802,14 +937,11 @@ async def validate_layout_endpoint(layout_id: str, db: AsyncSession = Depends(ge
         if sp.approach_zone
     ]
 
-    ref_w = rev.camera.reference_width if rev.camera else None
-    ref_h = rev.camera.reference_height if rev.camera else None
-
     raw_errors = validate_parking_layout(
         parking_spaces=spaces_dicts,
         approach_zones=approaches_dicts,
-        reference_width=ref_w,
-        reference_height=ref_h,
+        reference_width=cam.reference_width,
+        reference_height=cam.reference_height,
     )
 
     error_items = [
@@ -856,6 +988,25 @@ async def submit_layout_for_review(
             detail=f"Cannot submit layout in '{rev.status}' status. Only DRAFT layouts can be submitted.",
         )
 
+    clean_op = payload.local_operator_label.strip()
+    if not clean_op:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Non-blank operator identity is required.")
+
+    cam = rev.camera
+    if not cam or not cam.reference_image_sha256 or not cam.reference_width or not cam.reference_height:
+        raise HTTPException(status_code=400, detail="Camera has no valid reference image.")
+    if not rev.reference_image_sha256 or not rev.reference_width or not rev.reference_height:
+        raise HTTPException(status_code=400, detail="Layout revision lacks reference image snapshot.")
+    if (
+        rev.reference_image_sha256 != cam.reference_image_sha256
+        or rev.reference_width != cam.reference_width
+        or rev.reference_height != cam.reference_height
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Layout reference snapshot does not match current camera reference image. Layout is stale.",
+        )
+
     # Perform geometry validation before allowing submission
     spaces_dicts = [
         {
@@ -879,6 +1030,8 @@ async def submit_layout_for_review(
     validation_errors = validate_parking_layout(
         parking_spaces=spaces_dicts,
         approach_zones=approaches_dicts,
+        reference_width=cam.reference_width,
+        reference_height=cam.reference_height,
     )
     if validation_errors:
         err_msgs = "; ".join([e.message for e in validation_errors[:3]])
@@ -896,7 +1049,7 @@ async def submit_layout_for_review(
         event_type="SUBMITTED",
         prior_status=LayoutRevisionStatus.DRAFT.value,
         new_status=LayoutRevisionStatus.PENDING_REVIEW.value,
-        local_operator_label=payload.local_operator_label or "operator",
+        local_operator_label=clean_op,
         note=payload.note or "Submitted for human review",
         created_at=utc_now(),
     )
@@ -924,6 +1077,10 @@ async def verify_layout(
             detail="Verification requires explicit confirmation acknowledgement.",
         )
 
+    clean_op = payload.local_operator_label.strip()
+    if not clean_op:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Non-blank operator identity is required.")
+
     result = await db.execute(
         select(ParkingLayoutRevision)
         .options(
@@ -937,10 +1094,26 @@ async def verify_layout(
     if not rev:
         raise HTTPException(status_code=404, detail="Layout revision not found")
 
-    if rev.status not in (LayoutRevisionStatus.PENDING_REVIEW.value, LayoutRevisionStatus.DRAFT.value):
+    # STEP 3.8: Verification must accept PENDING_REVIEW only. DRAFT -> VERIFIED directly must fail.
+    if rev.status != LayoutRevisionStatus.PENDING_REVIEW.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot verify layout in '{rev.status}' status.",
+            detail=f"Cannot verify layout in '{rev.status}' status. Only layouts in PENDING_REVIEW status can be verified.",
+        )
+
+    cam = rev.camera
+    if not cam or not cam.reference_image_sha256 or not cam.reference_width or not cam.reference_height:
+        raise HTTPException(status_code=400, detail="Camera has no valid reference image.")
+    if not rev.reference_image_sha256 or not rev.reference_width or not rev.reference_height:
+        raise HTTPException(status_code=400, detail="Layout revision lacks reference image snapshot.")
+    if (
+        rev.reference_image_sha256 != cam.reference_image_sha256
+        or rev.reference_width != cam.reference_width
+        or rev.reference_height != cam.reference_height
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Layout reference snapshot does not match current camera reference image. Layout is stale.",
         )
 
     # Validate layout geometry
@@ -966,6 +1139,8 @@ async def verify_layout(
     validation_errors = validate_parking_layout(
         parking_spaces=spaces_dicts,
         approach_zones=approaches_dicts,
+        reference_width=cam.reference_width,
+        reference_height=cam.reference_height,
     )
     if validation_errors:
         err_msgs = "; ".join([e.message for e in validation_errors[:3]])
@@ -975,21 +1150,17 @@ async def verify_layout(
         )
 
     # Compute deterministic canonical fingerprint
-    ref_sha = rev.camera.reference_image_sha256 if rev.camera else ""
     canonical_sha = compute_canonical_layout_sha256(
         schema_version="1.0.0",
         camera_id=rev.camera_id,
-        reference_image_sha256=ref_sha or "",
+        reference_image_sha256=cam.reference_image_sha256,
         parking_spaces=spaces_dicts,
         approach_zones=approaches_dicts,
     )
 
     prior_status = rev.status
-    rev.status = LayoutRevisionStatus.VERIFIED.value
-    rev.verified_at = utc_now()
-    rev.canonical_sha256 = canonical_sha
 
-    # Mark any prior VERIFIED revision for this camera as SUPERSEDED
+    # Mark any prior VERIFIED revision for this camera as SUPERSEDED in the same transaction
     prior_verified_res = await db.execute(
         select(ParkingLayoutRevision)
         .where(ParkingLayoutRevision.camera_id == rev.camera_id)
@@ -1004,16 +1175,19 @@ async def verify_layout(
             event_type="SUPERSEDED",
             prior_status=LayoutRevisionStatus.VERIFIED.value,
             new_status=LayoutRevisionStatus.SUPERSEDED.value,
-            local_operator_label=payload.local_operator_label,
+            local_operator_label=clean_op,
             note=f"Superseded by verified revision {rev.revision_number}",
             created_at=utc_now(),
         )
         db.add(supersede_audit)
 
-    # If camera has reference image, mark calibration status as VERIFIED
-    if rev.camera and rev.camera.reference_image_path:
-        rev.camera.calibration_status = CalibrationStatus.VERIFIED.value
-        rev.camera.updated_at = utc_now()
+    rev.status = LayoutRevisionStatus.VERIFIED.value
+    rev.verified_at = utc_now()
+    rev.canonical_sha256 = canonical_sha
+
+    # Update camera calibration status to VERIFIED
+    cam.calibration_status = CalibrationStatus.VERIFIED.value
+    cam.updated_at = utc_now()
 
     # Record audit event
     audit = LayoutAuditEvent(
@@ -1022,15 +1196,22 @@ async def verify_layout(
         event_type="VERIFIED",
         prior_status=prior_status,
         new_status=LayoutRevisionStatus.VERIFIED.value,
-        local_operator_label=payload.local_operator_label,
-        note=payload.note or f"Manually verified by local operator: {payload.local_operator_label}",
+        local_operator_label=clean_op,
+        note=payload.note or f"Manually verified by local operator: {clean_op}",
         created_at=utc_now(),
     )
     db.add(audit)
 
-    await db.commit()
-    await db.refresh(rev)
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict: Another layout revision was verified concurrently for this camera.",
+        ) from e
 
+    await db.refresh(rev)
     return _build_layout_response(rev)
 
 

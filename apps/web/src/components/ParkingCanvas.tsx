@@ -5,10 +5,18 @@ import {
   ApproachZone,
   CalibrationStatus,
   LayoutRevisionStatus,
+  LayoutValidationError,
   NormalizedPoint,
   ParkingSpace,
   SpaceType,
 } from '../lib/types';
+import {
+  ViewportBox,
+  canvasToImageNormalized,
+  computeContainViewport,
+  imageNormalizedToCanvas,
+  setupHiDPICanvas,
+} from '../lib/canvasTransform';
 
 export type DrawingMode = 'idle' | 'draw_space' | 'draw_approach' | 'edit_vertices';
 
@@ -21,6 +29,7 @@ interface ParkingCanvasProps {
   selectedSpaceId: string | null;
   drawingMode: DrawingMode;
   currentPoints: NormalizedPoint[];
+  validationErrors?: LayoutValidationError[];
   onSelectSpace: (spaceId: string | null) => void;
   onAddPoint: (point: NormalizedPoint) => void;
   onClosePolygon: () => void;
@@ -37,7 +46,8 @@ const STATUS_COLORS: Record<LayoutRevisionStatus, { stroke: string; fill: string
 };
 
 const SELECTED_COLOR = { stroke: '#06B6D4', fill: 'rgba(6, 182, 212, 0.35)' };
-const APPROACH_COLOR = { stroke: '#8B5CF6', fill: 'rgba(139, 92, 246, 0.15)' };
+const APPROACH_COLOR = { stroke: '#8B5CF6', fill: 'rgba(139, 92, 246, 0.20)' };
+const ERROR_COLOR = { stroke: '#EF4444', fill: 'rgba(239, 68, 68, 0.35)' };
 
 export function ParkingCanvas({
   referenceImageUrl,
@@ -48,6 +58,7 @@ export function ParkingCanvas({
   selectedSpaceId,
   drawingMode,
   currentPoints,
+  validationErrors = [],
   onSelectSpace,
   onAddPoint,
   onClosePolygon,
@@ -59,6 +70,7 @@ export function ParkingCanvas({
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [viewport, setViewport] = useState<ViewportBox>({ x0: 0, y0: 0, width: 0, height: 0 });
   const [activeHandle, setActiveHandle] = useState<{ spaceId: string; isApproach: boolean; vertexIndex: number } | null>(null);
 
   // Load image
@@ -82,17 +94,39 @@ export function ParkingCanvas({
     };
   }, [referenceImageUrl]);
 
-  // Coordinate transforms
-  const normalizedToCanvas = useCallback((pt: NormalizedPoint, width: number, height: number) => {
-    return { x: pt.x * width, y: pt.y * height };
-  }, []);
+  // Compute viewport on resize
+  const updateDimensions = useCallback(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
 
-  const canvasToNormalized = useCallback((canvasX: number, canvasY: number, width: number, height: number): NormalizedPoint => {
-    return {
-      x: Math.max(0.0, Math.min(1.0, canvasX / width)),
-      y: Math.max(0.0, Math.min(1.0, canvasY / height)),
-    };
-  }, []);
+    const cssW = container.clientWidth;
+    const cssH = container.clientHeight;
+    if (cssW <= 0 || cssH <= 0) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    setupHiDPICanvas(canvas, cssW, cssH, dpr);
+
+    const imgW = imageRef.current && imageLoaded ? imageRef.current.naturalWidth : cssW;
+    const imgH = imageRef.current && imageLoaded ? imageRef.current.naturalHeight : cssH;
+
+    const vp = computeContainViewport(cssW, cssH, imgW, imgH);
+    setViewport(vp);
+  }, [imageLoaded]);
+
+  useEffect(() => {
+    updateDimensions();
+  }, [updateDimensions]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => {
+      updateDimensions();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [updateDimensions]);
 
   // Main Render loop
   const drawScene = useCallback(() => {
@@ -101,37 +135,55 @@ export function ParkingCanvas({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const container = containerRef.current;
+    const cssW = container ? container.clientWidth : canvas.width;
+    const cssH = container ? container.clientHeight : canvas.height;
 
-    ctx.clearRect(0, 0, width, height);
+    // Clear outer canvas with dark margin color
+    ctx.fillStyle = '#0B0F12';
+    ctx.fillRect(0, 0, cssW, cssH);
 
-    // 1. Draw Reference Image or Placeholder
-    if (imageRef.current && imageLoaded) {
-      ctx.drawImage(imageRef.current, 0, 0, width, height);
+    // 1. Draw Reference Image or Placeholder within letterboxed viewport
+    if (imageRef.current && imageLoaded && viewport.width > 0 && viewport.height > 0) {
+      ctx.drawImage(
+        imageRef.current,
+        viewport.x0,
+        viewport.y0,
+        viewport.width,
+        viewport.height
+      );
+      // Subtle frame outline
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(viewport.x0, viewport.y0, viewport.width, viewport.height);
     } else {
+      // Placeholder Grid
       ctx.fillStyle = '#12181F';
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(viewport.x0, viewport.y0, viewport.width || cssW, viewport.height || cssH);
 
-      // Grid lines
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
       ctx.lineWidth = 1;
       const gridSize = 40;
-      for (let x = 0; x < width; x += gridSize) {
+      for (let x = 0; x < cssW; x += gridSize) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
+        ctx.lineTo(x, cssH);
         ctx.stroke();
       }
-      for (let y = 0; y < height; y += gridSize) {
+      for (let y = 0; y < cssH; y += gridSize) {
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
+        ctx.lineTo(cssW, y);
         ctx.stroke();
       }
     }
 
+    if (viewport.width <= 0 || viewport.height <= 0) return;
+
     const statusStyle = STATUS_COLORS[status] || STATUS_COLORS.DRAFT;
+    const errorSpaceIds = new Set(
+      validationErrors.map((e) => e.space_id).filter(Boolean) as string[]
+    );
 
     // 2. Draw Approach Zones (Dashed lines)
     approachZones.forEach((az) => {
@@ -140,10 +192,10 @@ export function ParkingCanvas({
 
       ctx.save();
       ctx.beginPath();
-      const p0 = normalizedToCanvas(az.polygon_normalized[0], width, height);
+      const p0 = imageNormalizedToCanvas(az.polygon_normalized[0], viewport);
       ctx.moveTo(p0.x, p0.y);
       for (let i = 1; i < az.polygon_normalized.length; i++) {
-        const p = normalizedToCanvas(az.polygon_normalized[i], width, height);
+        const p = imageNormalizedToCanvas(az.polygon_normalized[i], viewport);
         ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
@@ -154,6 +206,20 @@ export function ParkingCanvas({
       ctx.fillStyle = isLinkedToSelected ? SELECTED_COLOR.fill : APPROACH_COLOR.fill;
       ctx.fill();
       ctx.stroke();
+
+      // Vertex Handles for Approach Zone if linked to selected space in DRAFT
+      if (isLinkedToSelected && status === 'DRAFT') {
+        az.polygon_normalized.forEach((p) => {
+          const cp = imageNormalizedToCanvas(p, viewport);
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#8B5CF6';
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 2;
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
       ctx.restore();
     });
 
@@ -161,28 +227,37 @@ export function ParkingCanvas({
     parkingSpaces.forEach((sp) => {
       if (sp.polygon_normalized.length < 3) return;
       const isSelected = sp.id === selectedSpaceId;
+      const hasError = sp.id ? errorSpaceIds.has(sp.id) : false;
 
       ctx.save();
       ctx.beginPath();
-      const p0 = normalizedToCanvas(sp.polygon_normalized[0], width, height);
+      const p0 = imageNormalizedToCanvas(sp.polygon_normalized[0], viewport);
       ctx.moveTo(p0.x, p0.y);
       for (let i = 1; i < sp.polygon_normalized.length; i++) {
-        const p = normalizedToCanvas(sp.polygon_normalized[i], width, height);
+        const p = imageNormalizedToCanvas(sp.polygon_normalized[i], viewport);
         ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
 
       ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.strokeStyle = isSelected ? SELECTED_COLOR.stroke : statusStyle.stroke;
-      ctx.fillStyle = isSelected ? SELECTED_COLOR.fill : statusStyle.fill;
+      ctx.strokeStyle = hasError
+        ? ERROR_COLOR.stroke
+        : isSelected
+        ? SELECTED_COLOR.stroke
+        : statusStyle.stroke;
+      ctx.fillStyle = hasError
+        ? ERROR_COLOR.fill
+        : isSelected
+        ? SELECTED_COLOR.fill
+        : statusStyle.fill;
       ctx.fill();
       ctx.stroke();
 
-      // Compute Centroid for Label
+      // Centroid for Label
       let cx = 0;
       let cy = 0;
       sp.polygon_normalized.forEach((p) => {
-        const cp = normalizedToCanvas(p, width, height);
+        const cp = imageNormalizedToCanvas(p, viewport);
         cx += cp.x;
         cy += cp.y;
       });
@@ -197,21 +272,21 @@ export function ParkingCanvas({
       const boxW = textMetrics.width + padding * 2;
       const boxH = 18;
 
-      ctx.fillStyle = isSelected ? '#06B6D4' : '#0B0F12';
-      ctx.strokeStyle = isSelected ? '#FFFFFF' : statusStyle.stroke;
+      ctx.fillStyle = hasError ? '#EF4444' : isSelected ? '#06B6D4' : '#0B0F12';
+      ctx.strokeStyle = hasError ? '#FFFFFF' : isSelected ? '#FFFFFF' : statusStyle.stroke;
       ctx.lineWidth = 1;
       ctx.fillRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH);
       ctx.strokeRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH);
 
-      ctx.fillStyle = isSelected ? '#0B0F12' : '#E2E8F0';
+      ctx.fillStyle = hasError || isSelected ? '#0B0F12' : '#E2E8F0';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(labelText, cx, cy);
 
-      // Draw Vertex Handles if Selected and in DRAFT mode
+      // Vertex Handles if Selected and in DRAFT mode
       if (isSelected && status === 'DRAFT') {
-        sp.polygon_normalized.forEach((p, idx) => {
-          const cp = normalizedToCanvas(p, width, height);
+        sp.polygon_normalized.forEach((p) => {
+          const cp = imageNormalizedToCanvas(p, viewport);
           ctx.beginPath();
           ctx.arc(cp.x, cp.y, 6, 0, Math.PI * 2);
           ctx.fillStyle = '#06B6D4';
@@ -228,10 +303,10 @@ export function ParkingCanvas({
     if (currentPoints.length > 0) {
       ctx.save();
       ctx.beginPath();
-      const p0 = normalizedToCanvas(currentPoints[0], width, height);
+      const p0 = imageNormalizedToCanvas(currentPoints[0], viewport);
       ctx.moveTo(p0.x, p0.y);
       for (let i = 1; i < currentPoints.length; i++) {
-        const p = normalizedToCanvas(currentPoints[i], width, height);
+        const p = imageNormalizedToCanvas(currentPoints[i], viewport);
         ctx.lineTo(p.x, p.y);
       }
 
@@ -240,9 +315,8 @@ export function ParkingCanvas({
       ctx.setLineDash([4, 4]);
       ctx.stroke();
 
-      // Draw point markers
       currentPoints.forEach((p, idx) => {
-        const cp = normalizedToCanvas(p, width, height);
+        const cp = imageNormalizedToCanvas(p, viewport);
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
         ctx.fillStyle = idx === 0 ? '#10B981' : '#38BDF8';
@@ -255,42 +329,21 @@ export function ParkingCanvas({
     }
   }, [
     imageLoaded,
+    viewport,
     status,
     parkingSpaces,
     approachZones,
     selectedSpaceId,
     drawingMode,
     currentPoints,
-    normalizedToCanvas,
+    validationErrors,
   ]);
 
-  // Handle Resize
-  useEffect(() => {
-    const container = containerRef.current;
-    const canvas = canvasRef.current;
-    if (!container || !canvas) return;
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          canvas.width = Math.floor(width);
-          canvas.height = Math.floor(height);
-          drawScene();
-        }
-      }
-    });
-
-    resizeObserver.observe(container);
-    return () => resizeObserver.disconnect();
-  }, [drawScene]);
-
-  // Redraw when dependencies change
   useEffect(() => {
     drawScene();
   }, [drawScene]);
 
-  // Hit test helper for point inside polygon (ray casting)
+  // Ray-casting point inside polygon
   const isPointInPolygon = (pt: { x: number; y: number }, poly: { x: number; y: number }[]) => {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -305,16 +358,19 @@ export function ParkingCanvas({
   // Canvas Mouse Interactions
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || viewport.width <= 0 || viewport.height <= 0) return;
+
     const rect = canvas.getBoundingClientRect();
     const canvasX = e.clientX - rect.left;
     const canvasY = e.clientY - rect.top;
-    const normPt = canvasToNormalized(canvasX, canvasY, canvas.width, canvas.height);
+
+    // Reject events in letterbox margins
+    const normPt = canvasToImageNormalized({ x: canvasX, y: canvasY }, viewport);
+    if (!normPt) return;
 
     if (drawingMode === 'draw_space' || drawingMode === 'draw_approach') {
-      // Check if clicking near start point to close polygon
       if (currentPoints.length >= 3) {
-        const startCanvas = normalizedToCanvas(currentPoints[0], canvas.width, canvas.height);
+        const startCanvas = imageNormalizedToCanvas(currentPoints[0], viewport);
         const dist = Math.hypot(canvasX - startCanvas.x, canvasY - startCanvas.y);
         if (dist < 15) {
           onClosePolygon();
@@ -325,42 +381,54 @@ export function ParkingCanvas({
       return;
     }
 
-    // Edit Mode: Check for vertex handle dragging if space is selected and DRAFT
+    // Edit Mode: Check handles for space vertices and approach vertices
     if (selectedSpaceId && status === 'DRAFT') {
       const space = parkingSpaces.find((s) => s.id === selectedSpaceId);
       if (space) {
         for (let i = 0; i < space.polygon_normalized.length; i++) {
-          const cp = normalizedToCanvas(space.polygon_normalized[i], canvas.width, canvas.height);
+          const cp = imageNormalizedToCanvas(space.polygon_normalized[i], viewport);
           if (Math.hypot(canvasX - cp.x, canvasY - cp.y) <= 10) {
             setActiveHandle({ spaceId: space.id!, isApproach: false, vertexIndex: i });
             return;
           }
         }
       }
+
+      const az = approachZones.find((a) => a.parking_space_id === selectedSpaceId);
+      if (az) {
+        for (let i = 0; i < az.polygon_normalized.length; i++) {
+          const cp = imageNormalizedToCanvas(az.polygon_normalized[i], viewport);
+          if (Math.hypot(canvasX - cp.x, canvasY - cp.y) <= 10) {
+            setActiveHandle({ spaceId: selectedSpaceId, isApproach: true, vertexIndex: i });
+            return;
+          }
+        }
+      }
     }
 
-    // Selection Mode: Click to select polygon
+    // Selection Mode
     for (const sp of parkingSpaces) {
-      const canvasPoly = sp.polygon_normalized.map((p) => normalizedToCanvas(p, canvas.width, canvas.height));
+      const canvasPoly = sp.polygon_normalized.map((p) => imageNormalizedToCanvas(p, viewport));
       if (isPointInPolygon({ x: canvasX, y: canvasY }, canvasPoly)) {
         onSelectSpace(sp.id || null);
         return;
       }
     }
 
-    // Deselect if clicking empty area
     onSelectSpace(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!activeHandle) return;
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || viewport.width <= 0 || viewport.height <= 0) return;
 
     const rect = canvas.getBoundingClientRect();
     const canvasX = e.clientX - rect.left;
     const canvasY = e.clientY - rect.top;
-    const normPt = canvasToNormalized(canvasX, canvasY, canvas.width, canvas.height);
+
+    const normPt = canvasToImageNormalized({ x: canvasX, y: canvasY }, viewport);
+    if (!normPt) return;
 
     if (!activeHandle.isApproach) {
       const space = parkingSpaces.find((s) => s.id === activeHandle.spaceId);
@@ -368,6 +436,13 @@ export function ParkingCanvas({
         const newPts = [...space.polygon_normalized];
         newPts[activeHandle.vertexIndex] = normPt;
         onUpdateSpacePolygon(space.id!, newPts);
+      }
+    } else {
+      const az = approachZones.find((a) => a.parking_space_id === activeHandle.spaceId);
+      if (az) {
+        const newPts = [...az.polygon_normalized];
+        newPts[activeHandle.vertexIndex] = normPt;
+        onUpdateApproachPolygon(activeHandle.spaceId, newPts);
       }
     }
   };
@@ -379,7 +454,7 @@ export function ParkingCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full min-h-[480px] bg-command-bg rounded-xl border border-command-border overflow-hidden select-none"
+      className="relative w-full h-full min-h-[480px] bg-[#0B0F12] rounded-xl border border-command-border overflow-hidden select-none"
     >
       <canvas
         ref={canvasRef}
@@ -402,7 +477,7 @@ export function ParkingCanvas({
             : drawingMode === 'draw_approach'
             ? 'DRAWING APPROACH ZONE (Click points, click start to close)'
             : drawingMode === 'edit_vertices'
-            ? 'EDIT VERTICES (Drag cyan handles)'
+            ? 'EDIT VERTICES (Drag cyan/purple handles)'
             : 'INSPECT MODE (Click space to select)'}
         </span>
       </div>

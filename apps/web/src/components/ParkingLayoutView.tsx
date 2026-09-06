@@ -29,6 +29,8 @@ import {
 } from '../lib/parkingApi';
 import { DrawingMode, ParkingCanvas } from './ParkingCanvas';
 import { LayoutVerificationModal } from './LayoutVerificationModal';
+import { LayoutSubmitModal } from './LayoutSubmitModal';
+import { ReferenceImageReplaceModal } from './ReferenceImageReplaceModal';
 import { CameraCalibrationModal } from './CameraCalibrationModal';
 import {
   AlertCircle,
@@ -37,6 +39,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Edit3,
   Fingerprint,
   Layers,
   MapPin,
@@ -78,10 +81,14 @@ export function ParkingLayoutView() {
   const [validationErrors, setValidationErrors] = useState<LayoutValidationError[]>([]);
   const [isValidating, setIsValidating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isBranchingDraft, setIsBranchingDraft] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   // Modals
+  const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
+  const [isReplaceImageModalOpen, setIsReplaceImageModalOpen] = useState(false);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [isInvalidateModalOpen, setIsInvalidateModalOpen] = useState(false);
   const [isNewSiteModalOpen, setIsNewSiteModalOpen] = useState(false);
   const [isNewCameraModalOpen, setIsNewCameraModalOpen] = useState(false);
@@ -134,12 +141,21 @@ export function ParkingLayoutView() {
   }, [selectedSiteId]);
 
   // Load Layouts when selectedCameraId changes
-  const loadCameraLayouts = useCallback(async (camId: string) => {
+  // STEP 6.8: Choose the latest editable draft by default when present; otherwise show active verified
+  const loadCameraLayouts = useCallback(async (camId: string, preferredRevisionId?: string) => {
     try {
       const revs = await fetchCameraLayouts(camId);
       setLayouts(revs);
       if (revs.length > 0) {
-        const primary = revs.find((r) => r.status === 'VERIFIED') || revs[0];
+        let primary: ParkingLayoutRevision;
+        if (preferredRevisionId) {
+          primary = revs.find((r) => r.id === preferredRevisionId) || revs[0];
+        } else {
+          const latestDraft = revs.find((r) => r.status === 'DRAFT');
+          const activeVerified = revs.find((r) => r.status === 'VERIFIED');
+          primary = latestDraft || activeVerified || revs[0];
+        }
+
         setActiveLayout(primary);
         setParkingSpaces(primary.parking_spaces || []);
         setApproachZones(primary.approach_zones || []);
@@ -155,8 +171,8 @@ export function ParkingLayoutView() {
         setSelectedSpaceId(null);
       }
       setValidationErrors([]);
-    } catch (err) {
-      console.error('Failed to load camera layouts:', err);
+    } catch (err: any) {
+      console.error('Failed to load layouts:', err);
     }
   }, []);
 
@@ -166,37 +182,67 @@ export function ParkingLayoutView() {
     }
   }, [selectedCameraId, loadCameraLayouts]);
 
-  const activeCamera = cameras.find((c) => c.id === selectedCameraId) || null;
-  const isDraft = activeLayout?.status === 'DRAFT';
-
-  // Reference Image URL
+  const activeCamera = cameras.find((c) => c.id === selectedCameraId);
   const referenceImageUrl = activeCamera?.reference_image_path
     ? getCameraReferenceImageUrl(activeCamera.id)
     : null;
 
-  // Handle Reference Image Upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // STEP 6.6: Editing is enabled ONLY for DRAFT revisions
+  const isDraft = activeLayout ? activeLayout.status === 'DRAFT' : true;
+
+  // Handle image file selection
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedCameraId) return;
 
-    try {
-      setFeedbackMessage({ type: 'info', text: 'Uploading reference image...' });
-      const updatedCam = await uploadCameraReferenceImage(selectedCameraId, file);
-      setCameras((prev) => prev.map((c) => (c.id === updatedCam.id ? updatedCam : c)));
-      setFeedbackMessage({ type: 'success', text: 'Reference image uploaded and normalized.' });
-    } catch (err: any) {
-      setFeedbackMessage({ type: 'error', text: err.message || 'Upload failed' });
+    // Check if camera already has any layouts
+    const hasExistingLayouts = layouts.length > 0;
+    if (hasExistingLayouts) {
+      setPendingImageFile(file);
+      setIsReplaceImageModalOpen(true);
+    } else {
+      // First upload: upload directly
+      performDirectImageUpload(file);
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
+  const performDirectImageUpload = async (file: File) => {
+    if (!selectedCameraId) return;
+    try {
+      const updatedCam = await uploadCameraReferenceImage(selectedCameraId, file);
+      setCameras((prev) => prev.map((c) => (c.id === updatedCam.id ? updatedCam : c)));
+      setFeedbackMessage({ type: 'success', text: 'Reference image uploaded and calibrated!' });
+      await loadCameraLayouts(selectedCameraId);
+    } catch (err: any) {
+      setFeedbackMessage({ type: 'error', text: err.message || 'Failed to upload reference image' });
+    }
+  };
+
+  const handleConfirmReplaceImage = async (file: File, operatorLabel: string, reason: string) => {
+    if (!selectedCameraId) return;
+    const updatedCam = await uploadCameraReferenceImage(selectedCameraId, file, true, operatorLabel, reason);
+    setCameras((prev) => prev.map((c) => (c.id === updatedCam.id ? updatedCam : c)));
+    setFeedbackMessage({
+      type: 'success',
+      text: 'Reference image replaced! All previous layouts have been invalidated for occupancy safety.',
+    });
+    await loadCameraLayouts(selectedCameraId);
+  };
+
   // Drawing Handlers
-  const handleAddPoint = (pt: NormalizedPoint) => {
-    setCurrentPoints((prev) => [...prev, pt]);
+  const handleAddPoint = (point: NormalizedPoint) => {
+    if (!isDraft) return;
+    setCurrentPoints((prev) => [...prev, point]);
   };
 
   const handleClosePolygon = () => {
+    if (!isDraft) return;
     if (currentPoints.length < 3) {
-      setFeedbackMessage({ type: 'error', text: 'A polygon requires at least 3 points.' });
+      setFeedbackMessage({ type: 'error', text: 'Polygons require at least 3 vertices.' });
       return;
     }
 
@@ -227,25 +273,28 @@ export function ParkingLayoutView() {
   };
 
   const handleUpdateSpacePolygon = (spaceId: string, newPoints: NormalizedPoint[]) => {
+    if (!isDraft) return;
     setParkingSpaces((prev) =>
       prev.map((s) => (s.id === spaceId ? { ...s, polygon_normalized: newPoints } : s))
     );
   };
 
   const handleUpdateApproachPolygon = (spaceId: string, newPoints: NormalizedPoint[]) => {
+    if (!isDraft) return;
     setApproachZones((prev) =>
       prev.map((a) => (a.parking_space_id === spaceId ? { ...a, polygon_normalized: newPoints } : a))
     );
   };
 
   const handleDeleteSelectedSpace = () => {
-    if (!selectedSpaceId) return;
+    if (!isDraft || !selectedSpaceId) return;
     setParkingSpaces((prev) => prev.filter((s) => s.id !== selectedSpaceId));
     setApproachZones((prev) => prev.filter((a) => a.parking_space_id !== selectedSpaceId));
     setSelectedSpaceId(null);
   };
 
   const handleClearDraft = () => {
+    if (!isDraft) return;
     if (window.confirm('Are you sure you want to clear all drawn polygons in this draft?')) {
       setParkingSpaces([]);
       setApproachZones([]);
@@ -255,8 +304,67 @@ export function ParkingLayoutView() {
     }
   };
 
-  // API Actions
-  const handleSaveDraft = async () => {
+  // STEP 6.1 & 6.2: One-click Save and Validate
+  const handleSaveAndValidate = async () => {
+    if (!selectedCameraId) return;
+    setIsValidating(true);
+    try {
+      let saved: ParkingLayoutRevision;
+      if (!activeLayout) {
+        saved = await createDraftLayout(selectedCameraId, parkingSpaces, approachZones);
+      } else {
+        saved = await updateLayout(activeLayout.id, parkingSpaces, approachZones);
+      }
+
+      // Validate the EXACT returned layout ID
+      const valResult = await validateLayout(saved.id);
+      setValidationErrors(valResult.errors);
+
+      // Refresh layout list and update active layout with returned object
+      const refreshedRevs = await fetchCameraLayouts(selectedCameraId);
+      setLayouts(refreshedRevs);
+      const updatedActive = refreshedRevs.find((r) => r.id === saved.id) || saved;
+      setActiveLayout(updatedActive);
+      setParkingSpaces(updatedActive.parking_spaces || []);
+      setApproachZones(updatedActive.approach_zones || []);
+
+      if (valResult.is_valid) {
+        setFeedbackMessage({
+          type: 'success',
+          text: `Layout Rev #${saved.revision_number} saved and validated! Zero geometry errors.`,
+        });
+      } else {
+        setFeedbackMessage({
+          type: 'error',
+          text: `Validation found ${valResult.errors.length} errors. Review issues below.`,
+        });
+      }
+    } catch (err: any) {
+      setFeedbackMessage({ type: 'error', text: err.message || 'Save and validate failed' });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // STEP 6.6: Explicitly branch a new draft from any non-draft revision
+  const handleCreateNewDraftFromRevision = async () => {
+    if (!activeLayout || !selectedCameraId) return;
+    setIsBranchingDraft(true);
+    try {
+      const newDraft = await updateLayout(activeLayout.id, parkingSpaces, approachZones);
+      await loadCameraLayouts(selectedCameraId, newDraft.id);
+      setFeedbackMessage({
+        type: 'success',
+        text: `Created new editable draft Rev #${newDraft.revision_number} branched from Rev #${activeLayout.revision_number}!`,
+      });
+    } catch (err: any) {
+      setFeedbackMessage({ type: 'error', text: err.message || 'Failed to branch new draft' });
+    } finally {
+      setIsBranchingDraft(false);
+    }
+  };
+
+  const handleSaveDraftOnly = async () => {
     if (!selectedCameraId) return;
     setIsSaving(true);
     try {
@@ -267,10 +375,7 @@ export function ParkingLayoutView() {
         saved = await updateLayout(activeLayout.id, parkingSpaces, approachZones);
       }
       setFeedbackMessage({ type: 'success', text: `Layout draft saved (Rev #${saved.revision_number}).` });
-      await loadCameraLayouts(selectedCameraId);
-      setActiveLayout(saved);
-      setParkingSpaces(saved.parking_spaces || []);
-      setApproachZones(saved.approach_zones || []);
+      await loadCameraLayouts(selectedCameraId, saved.id);
     } catch (err: any) {
       setFeedbackMessage({ type: 'error', text: err.message || 'Failed to save draft' });
     } finally {
@@ -278,46 +383,19 @@ export function ParkingLayoutView() {
     }
   };
 
-  const handleValidate = async () => {
-    if (!activeLayout) {
-      await handleSaveDraft();
-      return;
-    }
-    setIsValidating(true);
-    try {
-      // Save changes first
-      await updateLayout(activeLayout.id, parkingSpaces, approachZones);
-      const res = await validateLayout(activeLayout.id);
-      setValidationErrors(res.errors);
-      if (res.is_valid) {
-        setFeedbackMessage({ type: 'success', text: 'Layout validation passed! Zero geometry errors.' });
-      } else {
-        setFeedbackMessage({ type: 'error', text: `Validation failed: ${res.errors.length} errors found.` });
-      }
-    } catch (err: any) {
-      setFeedbackMessage({ type: 'error', text: err.message || 'Validation request failed' });
-    } finally {
-      setIsValidating(false);
-    }
-  };
-
-  const handleSubmitForReview = async () => {
-    if (!activeLayout) return;
-    try {
-      const res = await submitLayout(activeLayout.id, 'operator', 'Submitted via ROI Editor');
-      setFeedbackMessage({ type: 'success', text: `Layout submitted for human review (Rev #${res.revision_number}).` });
-      await loadCameraLayouts(selectedCameraId!);
-    } catch (err: any) {
-      setFeedbackMessage({ type: 'error', text: err.message || 'Submission failed' });
-    }
+  // STEP 6.3: Submission modal with entered operator label
+  const handleSubmitConfirm = async (operatorLabel: string, note?: string) => {
+    if (!activeLayout || !selectedCameraId) return;
+    const res = await submitLayout(activeLayout.id, operatorLabel, note);
+    setFeedbackMessage({ type: 'success', text: `Layout submitted for human review (Rev #${res.revision_number}).` });
+    await loadCameraLayouts(selectedCameraId, res.id);
   };
 
   const handleVerifyConfirm = async (operatorLabel: string, note?: string) => {
-    if (!activeLayout) return;
+    if (!activeLayout || !selectedCameraId) return;
     const res = await verifyLayout(activeLayout.id, operatorLabel, true, note);
     setFeedbackMessage({ type: 'success', text: `Layout Rev #${res.revision_number} successfully verified and activated!` });
-    await loadCameraLayouts(selectedCameraId!);
-    // Refresh camera
+    await loadCameraLayouts(selectedCameraId, res.id);
     if (selectedSiteId) {
       const camList = await fetchSiteCameras(selectedSiteId);
       setCameras(camList);
@@ -330,6 +408,36 @@ export function ParkingLayoutView() {
     setCameras((prev) => prev.map((c) => (c.id === res.id ? res : c)));
     setFeedbackMessage({ type: 'success', text: `Camera calibration invalidated.` });
     await loadCameraLayouts(selectedCameraId);
+  };
+
+  const handleCreateSite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSiteName.trim()) return;
+    try {
+      const site = await createSite(newSiteName.trim());
+      setSites((prev) => [site, ...prev]);
+      setSelectedSiteId(site.id);
+      setIsNewSiteModalOpen(false);
+      setNewSiteName('');
+      setFeedbackMessage({ type: 'success', text: `Created site "${site.name}".` });
+    } catch (err: any) {
+      setFeedbackMessage({ type: 'error', text: err.message || 'Failed to create site' });
+    }
+  };
+
+  const handleCreateCamera = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSiteId || !newCameraName.trim()) return;
+    try {
+      const cam = await createCamera(selectedSiteId, newCameraName.trim());
+      setCameras((prev) => [cam, ...prev]);
+      setSelectedCameraId(cam.id);
+      setIsNewCameraModalOpen(false);
+      setNewCameraName('');
+      setFeedbackMessage({ type: 'success', text: `Created camera "${cam.name}".` });
+    } catch (err: any) {
+      setFeedbackMessage({ type: 'error', text: err.message || 'Failed to create camera' });
+    }
   };
 
   const selectedSpace = parkingSpaces.find((s) => s.id === selectedSpaceId) || null;
@@ -412,7 +520,7 @@ export function ParkingLayoutView() {
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleFileUpload}
+            onChange={handleFileInputChange}
             accept="image/jpeg,image/png"
             className="hidden"
           />
@@ -422,7 +530,7 @@ export function ParkingLayoutView() {
             className="w-full flex items-center justify-center space-x-2 px-3 py-1.5 rounded bg-command-elevated border border-command-border hover:border-radar-bright text-command-text hover:text-radar-bright transition-all disabled:opacity-50"
           >
             <UploadCloud className="w-4 h-4" />
-            <span>{activeCamera?.reference_image_path ? 'Replace Reference Image' : 'Upload Reference Frame'}</span>
+            <span>{activeCamera?.reference_image_path ? 'Replace Reference Frame' : 'Upload Reference Frame'}</span>
           </button>
         </div>
 
@@ -438,6 +546,7 @@ export function ParkingLayoutView() {
                   setActiveLayout(rev);
                   setParkingSpaces(rev.parking_spaces || []);
                   setApproachZones(rev.approach_zones || []);
+                  setValidationErrors([]);
                 }
               }}
               disabled={layouts.length === 0}
@@ -448,7 +557,7 @@ export function ParkingLayoutView() {
               ) : (
                 layouts.map((l) => (
                   <option key={l.id} value={l.id}>
-                    Rev #{l.revision_number} ({l.status})
+                    Rev #{l.revision_number} [{l.status}]
                   </option>
                 ))
               )}
@@ -464,76 +573,92 @@ export function ParkingLayoutView() {
           {/* Drawing Toolbar */}
           <div className="flex flex-wrap items-center justify-between p-2 rounded-lg bg-command-surface border border-command-border text-xs gap-2">
             <div className="flex items-center space-x-1.5">
-              <button
-                onClick={() => {
-                  setDrawingMode('draw_space');
-                  setCurrentPoints([]);
-                }}
-                disabled={!isDraft}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
-                  drawingMode === 'draw_space'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-command-elevated text-command-text hover:bg-command-elevated/70 disabled:opacity-50'
-                }`}
-              >
-                <PenTool className="w-3.5 h-3.5" />
-                <span>Draw Space</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  if (!selectedSpaceId) {
-                    setFeedbackMessage({ type: 'info', text: 'Select a space first to attach an approach zone.' });
-                    return;
-                  }
-                  setDrawingMode('draw_approach');
-                  setCurrentPoints([]);
-                }}
-                disabled={!isDraft || !selectedSpaceId}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
-                  drawingMode === 'draw_approach'
-                    ? 'bg-purple-600 text-white shadow-sm'
-                    : 'bg-command-elevated text-command-text hover:bg-command-elevated/70 disabled:opacity-50'
-                }`}
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span>Draw Approach</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setDrawingMode('edit_vertices');
-                  setCurrentPoints([]);
-                }}
-                disabled={!isDraft}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
-                  drawingMode === 'edit_vertices'
-                    ? 'bg-cyan-600 text-white shadow-sm'
-                    : 'bg-command-elevated text-command-text hover:bg-command-elevated/70 disabled:opacity-50'
-                }`}
-              >
-                <MousePointer className="w-3.5 h-3.5" />
-                <span>Edit Vertices</span>
-              </button>
-
-              {currentPoints.length > 0 && (
+              {isDraft ? (
                 <>
                   <button
-                    onClick={() => setCurrentPoints((prev) => prev.slice(0, -1))}
-                    className="flex items-center space-x-1 px-2.5 py-1.5 rounded bg-command-elevated text-command-muted hover:text-command-text"
+                    onClick={() => {
+                      setDrawingMode('draw_space');
+                      setCurrentPoints([]);
+                    }}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
+                      drawingMode === 'draw_space'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-command-elevated text-command-text hover:bg-command-elevated/70'
+                    }`}
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Undo Point</span>
+                    <PenTool className="w-3.5 h-3.5" />
+                    <span>Draw Space</span>
                   </button>
+
                   <button
-                    onClick={handleClosePolygon}
-                    disabled={currentPoints.length < 3}
-                    className="flex items-center space-x-1 px-2.5 py-1.5 rounded bg-emerald-600 text-white font-bold disabled:opacity-50"
+                    onClick={() => {
+                      if (!selectedSpaceId) {
+                        setFeedbackMessage({ type: 'info', text: 'Select a space first to attach an approach zone.' });
+                        return;
+                      }
+                      setDrawingMode('draw_approach');
+                      setCurrentPoints([]);
+                    }}
+                    disabled={!selectedSpaceId}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
+                      drawingMode === 'draw_approach'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-command-elevated text-command-text hover:bg-command-elevated/70 disabled:opacity-50'
+                    }`}
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Close Polygon</span>
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>Draw Approach</span>
                   </button>
+
+                  <button
+                    onClick={() => {
+                      setDrawingMode('edit_vertices');
+                      setCurrentPoints([]);
+                    }}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded transition-all ${
+                      drawingMode === 'edit_vertices'
+                        ? 'bg-cyan-600 text-white shadow-sm'
+                        : 'bg-command-elevated text-command-text hover:bg-command-elevated/70'
+                    }`}
+                  >
+                    <MousePointer className="w-3.5 h-3.5" />
+                    <span>Edit Vertices</span>
+                  </button>
+
+                  {currentPoints.length > 0 && (
+                    <>
+                      <button
+                        onClick={() => setCurrentPoints((prev) => prev.slice(0, -1))}
+                        className="flex items-center space-x-1 px-2.5 py-1.5 rounded bg-command-elevated text-command-muted hover:text-command-text"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Undo Point</span>
+                      </button>
+                      <button
+                        onClick={handleClosePolygon}
+                        disabled={currentPoints.length < 3}
+                        className="flex items-center space-x-1 px-2.5 py-1.5 rounded bg-emerald-600 text-white font-bold disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Close Polygon</span>
+                      </button>
+                    </>
+                  )}
                 </>
+              ) : (
+                <div className="flex items-center space-x-2 text-command-muted text-xs">
+                  <span className="px-2 py-1 rounded bg-command-elevated border border-command-border">
+                    Revision #{activeLayout?.revision_number} is {activeLayout?.status} (Read-only)
+                  </span>
+                  <button
+                    onClick={handleCreateNewDraftFromRevision}
+                    disabled={isBranchingDraft}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-sm transition-all disabled:opacity-50"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>{isBranchingDraft ? 'Branching...' : 'Create New Draft From This Revision'}</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -548,22 +673,24 @@ export function ParkingLayoutView() {
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={handleSaveDraft}
+                    onClick={handleSaveDraftOnly}
                     disabled={isSaving}
-                    className="flex items-center space-x-1 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-sm disabled:opacity-50"
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded bg-command-elevated border border-command-border text-command-text hover:border-radar-bright font-bold disabled:opacity-50"
                   >
                     <Save className="w-3.5 h-3.5" />
                     <span>{isSaving ? 'Saving...' : 'Save Draft'}</span>
                   </button>
                 </>
               )}
+
+              {/* STEP 6.1: One-Click Save and Validate */}
               <button
-                onClick={handleValidate}
-                disabled={isValidating}
-                className="flex items-center space-x-1 px-3 py-1.5 rounded bg-command-elevated border border-command-border text-command-text hover:border-radar-bright"
+                onClick={handleSaveAndValidate}
+                disabled={isValidating || isSaving}
+                className="flex items-center space-x-1 px-3 py-1.5 rounded bg-radar-bright hover:bg-radar-green text-command-bg font-bold shadow-radar transition-all disabled:opacity-50"
               >
-                <CheckCircle2 className="w-3.5 h-3.5 text-radar-bright" />
-                <span>Validate</span>
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{isValidating ? 'Validating...' : 'Save & Validate'}</span>
               </button>
             </div>
           </div>
@@ -597,6 +724,7 @@ export function ParkingLayoutView() {
               selectedSpaceId={selectedSpaceId}
               drawingMode={drawingMode}
               currentPoints={currentPoints}
+              validationErrors={validationErrors}
               onSelectSpace={setSelectedSpaceId}
               onAddPoint={handleAddPoint}
               onClosePolygon={handleClosePolygon}
@@ -669,7 +797,7 @@ export function ParkingLayoutView() {
                   <div className="flex justify-between text-[11px]">
                     <span className="text-command-muted">Approach Zone:</span>
                     <span className={selectedApproach ? 'text-purple-400 font-bold' : 'text-command-muted'}>
-                      {selectedApproach ? 'Attached (4-pt polygon)' : 'None'}
+                      {selectedApproach ? 'Attached' : 'None'}
                     </span>
                   </div>
                   <div className="flex justify-between text-[11px]">
@@ -692,9 +820,16 @@ export function ParkingLayoutView() {
             </span>
 
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-command-muted">Status:</span>
+              <span className="text-command-muted">Revision Status:</span>
               <span className="font-bold text-command-text">{activeLayout?.status || 'NO LAYOUT'}</span>
             </div>
+
+            {activeLayout?.reference_image_sha256 && (
+              <div className="text-[10px] text-command-muted space-y-0.5">
+                <span className="text-command-muted uppercase tracking-wider">Snapshot Frame SHA-256:</span>
+                <p className="font-mono break-all text-command-text text-[9px]">{activeLayout.reference_image_sha256}</p>
+              </div>
+            )}
 
             {activeLayout?.canonical_sha256 && (
               <div className="p-2 rounded bg-command-bg border border-command-border text-[10px] space-y-1">
@@ -710,7 +845,7 @@ export function ParkingLayoutView() {
             <div className="space-y-2 pt-1">
               {activeLayout?.status === 'DRAFT' && (
                 <button
-                  onClick={handleSubmitForReview}
+                  onClick={() => setIsSubmitModalOpen(true)}
                   className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold shadow-sm"
                 >
                   <Send className="w-3.5 h-3.5" />
@@ -718,7 +853,7 @@ export function ParkingLayoutView() {
                 </button>
               )}
 
-              {(activeLayout?.status === 'PENDING_REVIEW' || activeLayout?.status === 'DRAFT') && (
+              {activeLayout?.status === 'PENDING_REVIEW' && (
                 <button
                   onClick={() => setIsVerifyModalOpen(true)}
                   className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-radar-bright hover:bg-radar-green text-command-bg font-bold shadow-radar"
@@ -749,12 +884,12 @@ export function ParkingLayoutView() {
               </div>
               <ul className="space-y-1.5 text-[11px] text-accent-red/90 max-h-40 overflow-y-auto">
                 {validationErrors.map((err, idx) => (
-                  <li
-                    key={idx}
-                    onClick={() => err.space_id && setSelectedSpaceId(err.space_id)}
-                    className="p-1.5 rounded bg-accent-red/10 border border-accent-red/20 cursor-pointer hover:bg-accent-red/20"
-                  >
-                    <strong>[{err.rule_id}]</strong> {err.message}
+                  <li key={idx} className="flex items-start space-x-1.5">
+                    <span className="font-bold shrink-0">•</span>
+                    <span>
+                      {err.space_label ? `[${err.space_label}] ` : ''}
+                      {err.message}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -762,34 +897,50 @@ export function ParkingLayoutView() {
           )}
 
           {/* Audit History Timeline */}
-          {activeLayout?.audit_events && activeLayout.audit_events.length > 0 && (
-            <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-2 text-xs flex-1">
-              <span className="font-bold text-command-text uppercase tracking-wider block border-b border-command-border pb-2">
-                Append-Only Audit Log
-              </span>
-              <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                {activeLayout.audit_events.map((evt) => (
-                  <div
-                    key={evt.id}
-                    className="p-2 rounded bg-command-bg border border-command-border text-[11px] space-y-1"
-                  >
-                    <div className="flex items-center justify-between font-bold">
-                      <span className="text-radar-bright">{evt.event_type}</span>
-                      <span className="text-command-muted text-[10px]">
-                        {new Date(evt.created_at).toLocaleTimeString()}
+          <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3 text-xs flex-1 min-h-[160px]">
+            <div className="flex items-center space-x-2 text-command-text font-bold uppercase tracking-wider border-b border-command-border pb-2">
+              <Clock className="w-4 h-4 text-command-muted" />
+              <span>Audit Ledger ({activeLayout?.audit_events?.length || 0})</span>
+            </div>
+
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {!activeLayout?.audit_events || activeLayout.audit_events.length === 0 ? (
+                <p className="text-[11px] text-command-muted italic">No audit events recorded yet.</p>
+              ) : (
+                activeLayout.audit_events.map((ev) => (
+                  <div key={ev.id} className="p-2 rounded bg-command-bg border border-command-border text-[11px] space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-radar-bright">{ev.event_type}</span>
+                      <span className="text-[10px] text-command-muted">
+                        {new Date(ev.created_at).toLocaleTimeString()}
                       </span>
                     </div>
-                    <div className="text-[10px] text-command-muted">
-                      Operator: <span className="text-command-text">{evt.local_operator_label || 'system'}</span>
-                    </div>
-                    {evt.note && <p className="text-[10px] text-command-text">{evt.note}</p>}
+                    {ev.prior_status && (
+                      <div className="text-[10px] text-command-muted">
+                        Transition: {ev.prior_status} &rarr; {ev.new_status}
+                      </div>
+                    )}
+                    {ev.local_operator_label && (
+                      <div className="text-[10px] text-command-muted">
+                        Operator: <span className="text-white font-mono">{ev.local_operator_label}</span>
+                      </div>
+                    )}
+                    {ev.note && <div className="text-[10px] text-command-muted italic">{ev.note}</div>}
                   </div>
-                ))}
-              </div>
+                ))
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
+
+      {/* Submission Modal */}
+      <LayoutSubmitModal
+        isOpen={isSubmitModalOpen}
+        onClose={() => setIsSubmitModalOpen(false)}
+        onSubmitConfirm={handleSubmitConfirm}
+        revisionNumber={activeLayout?.revision_number || 1}
+      />
 
       {/* Verification Modal */}
       <LayoutVerificationModal
@@ -798,6 +949,18 @@ export function ParkingLayoutView() {
         onVerify={handleVerifyConfirm}
         revisionNumber={activeLayout?.revision_number || 1}
         spacesCount={parkingSpaces.length}
+      />
+
+      {/* Reference Image Replace Confirmation Modal */}
+      <ReferenceImageReplaceModal
+        isOpen={isReplaceImageModalOpen}
+        onClose={() => {
+          setIsReplaceImageModalOpen(false);
+          setPendingImageFile(null);
+        }}
+        onConfirmReplace={handleConfirmReplaceImage}
+        pendingFile={pendingImageFile}
+        cameraName={activeCamera?.name || 'Camera'}
       />
 
       {/* Calibration Invalidation Modal */}
@@ -810,75 +973,76 @@ export function ParkingLayoutView() {
 
       {/* New Site Modal */}
       {isNewSiteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-xl glass-panel bg-command-surface p-5 border border-command-border space-y-4 text-xs">
-            <h3 className="font-bold text-command-text uppercase">Create New Facility Site</h3>
-            <input
-              type="text"
-              value={newSiteName}
-              onChange={(e) => setNewSiteName(e.target.value)}
-              placeholder="Site Name (e.g. City Central Hospital)"
-              className="w-full px-3 py-2 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
-            />
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setIsNewSiteModalOpen(false)}
-                className="px-3 py-1.5 rounded bg-command-elevated text-command-muted"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!newSiteName.trim()) return;
-                  const s = await createSite(newSiteName.trim());
-                  setNewSiteName('');
-                  setIsNewSiteModalOpen(false);
-                  await loadSites();
-                  setSelectedSiteId(s.id);
-                }}
-                className="px-4 py-1.5 rounded bg-radar-bright text-command-bg font-bold"
-              >
-                Create
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
+            <h3 className="font-bold text-sm text-command-text">Create New Site</h3>
+            <form onSubmit={handleCreateSite} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-command-muted mb-1">Site Name</label>
+                <input
+                  type="text"
+                  value={newSiteName}
+                  onChange={(e) => setNewSiteName(e.target.value)}
+                  placeholder="e.g. South Terminal Deck"
+                  required
+                  className="w-full px-3 py-2 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewSiteModalOpen(false)}
+                  className="px-3 py-1.5 rounded bg-command-elevated text-command-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newSiteName.trim()}
+                  className="px-3 py-1.5 rounded bg-radar-bright text-command-bg font-bold disabled:opacity-50"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
       {/* New Camera Modal */}
       {isNewCameraModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-xl glass-panel bg-command-surface p-5 border border-command-border space-y-4 text-xs">
-            <h3 className="font-bold text-command-text uppercase">Create New CCTV Camera</h3>
-            <input
-              type="text"
-              value={newCameraName}
-              onChange={(e) => setNewCameraName(e.target.value)}
-              placeholder="Camera Name (e.g. North-Mast-1080p)"
-              className="w-full px-3 py-2 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
-            />
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setIsNewCameraModalOpen(false)}
-                className="px-3 py-1.5 rounded bg-command-elevated text-command-muted"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (!newCameraName.trim() || !selectedSiteId) return;
-                  const c = await createCamera(selectedSiteId, newCameraName.trim());
-                  setNewCameraName('');
-                  setIsNewCameraModalOpen(false);
-                  const camList = await fetchSiteCameras(selectedSiteId);
-                  setCameras(camList);
-                  setSelectedCameraId(c.id);
-                }}
-                className="px-4 py-1.5 rounded bg-radar-bright text-command-bg font-bold"
-              >
-                Create
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
+            <h3 className="font-bold text-sm text-command-text">Create New Camera</h3>
+            <form onSubmit={handleCreateCamera} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-command-muted mb-1">Camera Name</label>
+                <input
+                  type="text"
+                  value={newCameraName}
+                  onChange={(e) => setNewCameraName(e.target.value)}
+                  placeholder="e.g. North Mast Cam 02"
+                  required
+                  className="w-full px-3 py-2 rounded bg-command-bg border border-command-border text-command-text focus:outline-none focus:border-radar-bright"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewCameraModalOpen(false)}
+                  className="px-3 py-1.5 rounded bg-command-elevated text-command-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newCameraName.trim()}
+                  className="px-3 py-1.5 rounded bg-radar-bright text-command-bg font-bold disabled:opacity-50"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -215,6 +215,9 @@ export interface ParkingLayoutRevision {
   revision_number: number;
   status: LayoutRevisionStatus;
   canonical_sha256?: string | null;
+  reference_image_sha256?: string | null;
+  reference_width?: number | null;
+  reference_height?: number | null;
   created_at: string;
   submitted_at?: string | null;
   verified_at?: string | null;

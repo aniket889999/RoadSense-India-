@@ -38,6 +38,24 @@ def _compute_iou(box1: Tuple[float, float, float, float], box2: Tuple[float, flo
     return float(inter_area / union_area)
 
 
+def _validate_float(val: Any, name: str, min_v: float = 0.0, max_v: float = 1.0) -> float:
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise ValueError(f"ByteTrack field '{name}' must be a float, got {type(val).__name__} ({val})")
+    f_v = float(val)
+    import math
+    if not math.isfinite(f_v) or f_v < min_v or f_v > max_v:
+        raise ValueError(f"ByteTrack field '{name}' ({f_v}) out of valid range [{min_v}, {max_v}]")
+    return f_v
+
+
+def _validate_int(val: Any, name: str, min_v: int = 1, max_v: int = 1000) -> int:
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise ValueError(f"ByteTrack field '{name}' must be an int, got {type(val).__name__} ({val})")
+    if val < min_v or val > max_v:
+        raise ValueError(f"ByteTrack field '{name}' ({val}) out of valid range [{min_v}, {max_v}]")
+    return int(val)
+
+
 class ParkingByteTracker:
     """
     Session-local ByteTrack wrapper for multi-vehicle tracking across parking video frames.
@@ -48,7 +66,7 @@ class ParkingByteTracker:
 
     def __init__(
         self,
-        config_path: Optional[Path] = None,
+        config_path: Optional[Path | str] = None,
         track_high_thresh: float = 0.25,
         track_low_thresh: float = 0.10,
         new_track_thresh: float = 0.30,
@@ -56,21 +74,67 @@ class ParkingByteTracker:
         match_thresh: float = 0.80,
         fps: int = 30,
         min_hits: int = 2,
+        root_dir: Optional[Path] = None,
     ) -> None:
+        self.root_dir = (root_dir or Path(__file__).resolve().parent.parent.parent).resolve()
+        tracking_dir = self.root_dir / "configs" / "tracking"
         self.config_sha256 = ""
-        if config_path and Path(config_path).is_file():
-            p = Path(config_path).resolve()
-            content = p.read_text(encoding="utf-8")
-            self.config_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            raw = yaml.safe_load(content) or {}
-            track_high_thresh = float(raw.get("track_high_thresh", track_high_thresh))
-            track_low_thresh = float(raw.get("track_low_thresh", track_low_thresh))
-            new_track_thresh = float(raw.get("new_track_thresh", new_track_thresh))
-            track_buffer = int(raw.get("track_buffer", track_buffer))
-            match_thresh = float(raw.get("match_thresh", match_thresh))
-            fps = int(raw.get("fps", fps))
-            min_hits = int(raw.get("min_hits", min_hits))
 
+        if config_path is not None:
+            config_path_str = str(config_path).strip()
+            p_cand = Path(config_path_str) if Path(config_path_str).is_absolute() else (self.root_dir / config_path_str)
+
+            if ".." in p_cand.parts:
+                raise ValueError(f"Path traversal ('..') prohibited in tracking config path: {config_path_str}")
+
+            curr = p_cand
+            while curr != self.root_dir and curr != curr.parent:
+                if curr.is_symlink():
+                    raise ValueError(f"Symlink found in tracking config path component: {curr}")
+                curr = curr.parent
+
+            if tracking_dir.is_symlink():
+                raise ValueError(f"Tracking configs directory cannot be a symlink: {tracking_dir}")
+
+            resolved_path = p_cand.resolve()
+            resolved_tracking_dir = tracking_dir.resolve()
+
+            try:
+                resolved_path.relative_to(resolved_tracking_dir)
+            except ValueError:
+                raise ValueError(f"Tracking config path {resolved_path} escapes tracking configs directory {resolved_tracking_dir}")
+
+            if not resolved_path.exists() or not resolved_path.is_file():
+                raise FileNotFoundError(f"ByteTrack config file not found at: {resolved_path}")
+            if resolved_path.is_symlink():
+                raise ValueError(f"ByteTrack config file {resolved_path} cannot be a symlink.")
+
+            content_bytes = resolved_path.read_bytes()
+            self.config_sha256 = hashlib.sha256(content_bytes).hexdigest()
+            raw = yaml.safe_load(content_bytes.decode("utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError(f"ByteTrack YAML content must be a dictionary, got {type(raw).__name__}")
+
+            ALLOWED_KEYS = {
+                "schema_version", "tracker_type", "track_high_thresh",
+                "track_low_thresh", "new_track_thresh", "track_buffer",
+                "match_thresh", "fps", "min_hits"
+            }
+            for k in raw.keys():
+                if k not in ALLOWED_KEYS:
+                    raise ValueError(f"Unknown field in ByteTrack YAML config: '{k}'")
+
+            track_high_thresh = _validate_float(raw.get("track_high_thresh", track_high_thresh), "track_high_thresh", 0.01, 1.0)
+            track_low_thresh = _validate_float(raw.get("track_low_thresh", track_low_thresh), "track_low_thresh", 0.01, 1.0)
+            new_track_thresh = _validate_float(raw.get("new_track_thresh", new_track_thresh), "new_track_thresh", 0.01, 1.0)
+            track_buffer = _validate_int(raw.get("track_buffer", track_buffer), "track_buffer", 1, 1000)
+            match_thresh = _validate_float(raw.get("match_thresh", match_thresh), "match_thresh", 0.01, 1.0)
+            fps = _validate_int(raw.get("fps", fps), "fps", 1, 240)
+            if "min_hits" in raw:
+                min_hits = _validate_int(raw["min_hits"], "min_hits", 1, 100)
+
+        self.min_hits = min_hits
+        self._track_hit_counts: Dict[int, int] = {}
         import types
         self._args = types.SimpleNamespace(
             tracker_type="bytetrack",
@@ -79,6 +143,7 @@ class ParkingByteTracker:
             new_track_thresh=new_track_thresh,
             track_buffer=track_buffer,
             match_thresh=match_thresh,
+            fps=fps,
             fuse_score=True,
             gmc_method="none",
             proximity_thresh=0.5,
@@ -92,6 +157,7 @@ class ParkingByteTracker:
         """Reset tracker state completely between jobs."""
         self._tracker = BYTETracker(self._args)
         self._last_frame_idx = -1
+        self._track_hit_counts.clear()
 
     def update_tracks(
         self,
@@ -167,12 +233,14 @@ class ParkingByteTracker:
 
             if matched_tid is not None:
                 matched_track_ids.add(matched_tid)
+                self._track_hit_counts[matched_tid] = self._track_hit_counts.get(matched_tid, 0) + 1
+                assigned_tid = matched_tid if self._track_hit_counts[matched_tid] >= self.min_hits else None
                 updated_det = VehicleDetection(
                     class_id=det.class_id,
                     class_name=det.class_name,
                     confidence=det.confidence,
                     bbox_xyxy=det.bbox_xyxy,
-                    track_id=matched_tid,
+                    track_id=assigned_tid,
                     center_xy=det.center_xy,
                 )
             else:

@@ -13,28 +13,6 @@ from httpx import ASGITransport, AsyncClient
 import cv2
 import numpy as np
 
-from services.api.app.db.session import get_db
-from services.api.app.routers.parking import router as parking_router
-
-
-@pytest.fixture
-def parking_app():
-    test_app = FastAPI(title="RoadSense Stability Test API")
-    test_app.include_router(parking_router)
-    return test_app
-
-
-@pytest.fixture
-async def client(parking_app, db_session):
-    async def override_get_db():
-        yield db_session
-
-    parking_app.dependency_overrides[get_db] = override_get_db
-    transport = ASGITransport(app=parking_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-    parking_app.dependency_overrides.clear()
-
 
 def _create_rich_test_image_bytes(width: int = 640, height: int = 480) -> bytes:
     img = np.zeros((height, width, 3), dtype=np.uint8)
@@ -92,7 +70,7 @@ async def _poll_assessment_until_complete(client: AsyncClient, assessment_id: st
     raise TimeoutError(f"Assessment {assessment_id} did not complete within {timeout}s")
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_gate_fail_closed_before_assessment(client):
     """A camera with verified layout must still have gate BLOCKED until stable assessment runs."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Gate Test Site"})
@@ -118,7 +96,7 @@ async def test_gate_fail_closed_before_assessment(client):
     assert gate_with_ref.json()["operational_gate"] == "BLOCKED"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_api_rejects_empty_file_and_missing_file(client):
     """Public API strictly requires non-empty multipart upload and rejects local_video_name."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Validation Site"})
@@ -148,7 +126,7 @@ async def test_api_rejects_empty_file_and_missing_file(client):
     assert legacy_resp.status_code == 422
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_async_stability_assessment_and_operational_gate_lifecycle(client):
     """Full async lifecycle: submit video (202) -> poll COMPLETE -> STABLE -> ALLOWED -> replace image -> BLOCKED."""
     # 1. Setup camera & layout
@@ -235,7 +213,7 @@ async def test_async_stability_assessment_and_operational_gate_lifecycle(client)
     assert any("STALE_REFERENCE_SHA" in r or "NO_VERIFIED_LAYOUT" in r for r in gate_after_replace.json()["gate_reasons"])
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_unstable_assessment_and_immutable_audit_logging(client):
     """Unstable video yields BLOCKED; operator can acknowledge and invalidate calibration with audit log."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Unstable Site"})
@@ -333,7 +311,7 @@ async def test_unstable_assessment_and_immutable_audit_logging(client):
     assert layout_check.json()["status"] == "INVALIDATED"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_cancel_in_progress_assessment(client):
     """Cancelling an active assessment transitions status to CANCELLED and blocks gate."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Cancel Site"})

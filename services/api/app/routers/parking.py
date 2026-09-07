@@ -1821,9 +1821,72 @@ async def list_camera_stability_audit_events(
 # Phase 2B: Gate-Controlled Parking Occupancy & Video Inference Endpoints
 # ============================================================================
 
+def _resolve_safe_parking_artifact(
+    job_id: str,
+    artifact_filename: str,
+    expected_sha256: Optional[str] = None,
+) -> Optional[Path]:
+    """
+    Safely resolve a parking job artifact path under the configured media root.
+    Strictly rejects lexical traversal, symlink components, and non-confined paths.
+    Verifies stored SHA-256 if expected_sha256 is provided.
+    """
+    import re
+    if not job_id or not re.match(r"^[a-f0-9\-]{36}$", job_id):
+        return None
+
+    ALLOWED_ARTIFACTS = {
+        "annotated.mp4",
+        "occupancy_timeline.jsonl",
+        "processing_manifest.json",
+        "parking_summary.json",
+    }
+    if artifact_filename not in ALLOWED_ARTIFACTS:
+        return None
+
+    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    jobs_root = (media_root / "parking_jobs").resolve()
+
+    candidate = jobs_root / job_id / artifact_filename
+    if ".." in candidate.parts:
+        return None
+
+    # Check symlinks in all path components up to jobs_root
+    curr = candidate
+    while curr != jobs_root and curr != curr.parent:
+        if curr.is_symlink():
+            return None
+        curr = curr.parent
+
+    if jobs_root.is_symlink():
+        return None
+
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(jobs_root)
+    except ValueError:
+        return None
+
+    if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
+        return None
+
+    if expected_sha256:
+        h = hashlib.sha256()
+        with open(resolved, "rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        if h.hexdigest().lower() != expected_sha256.lower():
+            logger.warning(f"Artifact SHA-256 verification failed for {resolved}: expected {expected_sha256}, got {h.hexdigest()}")
+            return None
+
+    return resolved
+
+
 def _build_occupancy_job_response(job: ParkingOccupancyJob) -> ParkingOccupancyJobResponse:
-    has_video = bool(job.output_video_path and Path(job.output_video_path).exists())
-    has_timeline = bool(job.timeline_jsonl_path and Path(job.timeline_jsonl_path).exists())
+    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256)
+    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl")
+    has_video = safe_video is not None
+    has_timeline = safe_timeline is not None
     has_manifest = bool(job.manifest_json is not None)
     return ParkingOccupancyJobResponse(
         id=job.id,
@@ -2018,11 +2081,12 @@ async def get_parking_job_annotated_video(
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    if not job.output_video_path or not Path(job.output_video_path).exists():
-        raise HTTPException(status_code=404, detail="Annotated video file not available for this job.")
+    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256)
+    if not safe_path:
+        raise HTTPException(status_code=404, detail="Annotated video file not available or failed integrity verification.")
 
     return FileResponse(
-        path=job.output_video_path,
+        path=safe_path,
         media_type="video/mp4",
         filename=f"annotated_parking_{job_id[:8]}.mp4",
     )
@@ -2056,11 +2120,12 @@ async def get_parking_job_timeline(
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    if not job.timeline_jsonl_path or not Path(job.timeline_jsonl_path).exists():
-        raise HTTPException(status_code=404, detail="Timeline ledger file not available for this job.")
+    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl")
+    if not safe_path:
+        raise HTTPException(status_code=404, detail="Timeline ledger file not available or failed integrity verification.")
 
     return FileResponse(
-        path=job.timeline_jsonl_path,
+        path=safe_path,
         media_type="application/x-ndjson",
         filename=f"occupancy_timeline_{job_id[:8]}.jsonl",
     )

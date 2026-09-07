@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from pathlib import Path
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -12,12 +13,7 @@ import services.api.app.services.stability_job_manager as job_mgr_module
 import services.api.app.services.parking_occupancy_job_manager as occ_job_mgr_module
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session(monkeypatch):
     tmp_dir = tempfile.mkdtemp(prefix="roadsense_test_db_")
     db_path = Path(tmp_dir) / "test.db"
@@ -56,7 +52,7 @@ async def db_session(monkeypatch):
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client(db_session):
     from services.api.app.main import app
 

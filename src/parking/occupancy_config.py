@@ -14,11 +14,11 @@ import yaml
 class DetectorConfig:
     """Validated parameters for local vehicle detection."""
     model_path: str
-    expected_model_sha256: str
-    confidence_threshold: float
-    iou_threshold: float
-    allowed_classes: List[int]
-    class_names: Dict[int, str]
+    expected_model_sha256: str = ""
+    confidence_threshold: float = 0.25
+    iou_threshold: float = 0.45
+    allowed_classes: List[int] = field(default_factory=lambda: [2, 3, 5, 7])
+    class_names: Dict[int, str] = field(default_factory=lambda: {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"})
     device: str = "cpu"
 
 

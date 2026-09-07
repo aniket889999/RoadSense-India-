@@ -23,51 +23,79 @@ class LocalVehicleDetector:
 
     def __init__(self, config: DetectorConfig, root_dir: Optional[Path] = None) -> None:
         self.config = config
-        self.root_dir = root_dir or Path(__file__).resolve().parent.parent.parent
-        self.model_path = (self.root_dir / self.config.model_path).resolve()
+        self.root_dir = (root_dir or Path(__file__).resolve().parent.parent.parent).resolve()
         self._model = None
         self._checkpoint_sha256 = ""
-        self._verify_and_load_checkpoint()
+        self.model_path = self._verify_and_load_checkpoint()
 
     @property
     def checkpoint_sha256(self) -> str:
         return self._checkpoint_sha256
 
-    def _verify_and_load_checkpoint(self) -> None:
-        """Verify checkpoint is a regular non-symlink file matching the expected SHA-256."""
-        if not self.model_path.exists():
+    def _verify_and_load_checkpoint(self) -> Path:
+        """
+        Verify checkpoint is lexically valid, confined beneath <repo>/models,
+        contains no symlink in any path component, and matches expected SHA-256 before importing ultralytics.
+        """
+        model_path_str = str(self.config.model_path).strip()
+        if Path(model_path_str).is_absolute():
+            raise ValueError(f"Absolute model paths are prohibited: {model_path_str}")
+
+        if ".." in Path(model_path_str).parts:
+            raise ValueError(f"Path traversal ('..') is prohibited in model path: {model_path_str}")
+
+        raw_path = self.root_dir / model_path_str
+
+        # Check each lexical path component for symlinks
+        curr = raw_path
+        while curr != self.root_dir and curr != curr.parent:
+            if curr.is_symlink():
+                raise ValueError(f"Symlink found in model path component: {curr}")
+            curr = curr.parent
+
+        models_dir = self.root_dir / "models"
+        if models_dir.is_symlink():
+            raise ValueError(f"models directory cannot be a symlink: {models_dir}")
+
+        resolved_path = raw_path.resolve()
+        resolved_models_dir = models_dir.resolve()
+
+        try:
+            resolved_path.relative_to(resolved_models_dir)
+        except ValueError:
+            raise ValueError(f"Model path {resolved_path} escapes models directory {resolved_models_dir}")
+
+        if not resolved_path.exists() or not resolved_path.is_file():
             raise FileNotFoundError(
-                f"Vehicle detector checkpoint not found at: {self.model_path}. "
+                f"Vehicle detector checkpoint not found at: {resolved_path}. "
                 "Runtime checkpoint downloads are strictly prohibited."
             )
 
-        if self.model_path.is_symlink():
-            raise ValueError(f"Vehicle detector checkpoint at {self.model_path} is a symlink, which is prohibited.")
-
-        if not self.model_path.is_file():
-            raise ValueError(f"Vehicle detector checkpoint at {self.model_path} is not a regular file.")
+        if resolved_path.is_symlink():
+            raise ValueError(f"Vehicle detector checkpoint at {resolved_path} is a symlink, which is prohibited.")
 
         # Hash checkpoint file
         h = hashlib.sha256()
-        with open(self.model_path, "rb") as f:
+        with open(resolved_path, "rb") as f:
             while chunk := f.read(65536):
                 h.update(chunk)
         self._checkpoint_sha256 = h.hexdigest()
 
         if self.config.expected_model_sha256 and self._checkpoint_sha256 != self.config.expected_model_sha256:
             raise ValueError(
-                f"Checkpoint SHA-256 mismatch for {self.model_path}. "
+                f"Checkpoint SHA-256 mismatch for {resolved_path}. "
                 f"Expected: {self.config.expected_model_sha256}, Actual: {self._checkpoint_sha256}"
             )
 
-        # Import ultralytics fail-closed
+        # Import ultralytics fail-closed only after all path and hash validations pass
         try:
             from ultralytics import YOLO
-            self._model = YOLO(str(self.model_path))
+            self._model = YOLO(str(resolved_path))
         except Exception as e:
-            raise RuntimeError(f"Failed to load YOLO model from {self.model_path}: {e}")
+            raise RuntimeError(f"Failed to load YOLO model from {resolved_path}: {e}")
 
-        logger.info(f"Loaded local vehicle detector from {self.model_path} (SHA: {self._checkpoint_sha256[:12]})")
+        logger.info(f"Loaded local vehicle detector from {resolved_path} (SHA: {self._checkpoint_sha256[:12]})")
+        return resolved_path
 
     def detect_vehicles(self, frame_bgr: np.ndarray) -> List[VehicleDetection]:
         """

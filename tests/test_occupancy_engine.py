@@ -541,3 +541,106 @@ def test_temporal_bay_tracker_no_false_frame_zero_transition(base_config):
     assert summary.current_state == OccupancyState.UNKNOWN
     assert summary.last_transition_frame == -1
     assert tl is None  # NO transition emitted
+
+
+def test_model_path_traversal_and_symlink_rejection(tmp_path):
+    """Verify LocalVehicleDetector strictly rejects absolute paths, '..', symlinks, and directory escapes."""
+    from src.parking.occupancy_config import DetectorConfig
+    from src.parking.vehicle_detector import LocalVehicleDetector
+
+    fake_root = tmp_path / "repo"
+    fake_models = fake_root / "models"
+    fake_models.mkdir(parents=True)
+    real_ckpt = fake_models / "model.pt"
+    real_ckpt.write_bytes(b"dummy model bytes")
+
+    # 1. Reject absolute path
+    cfg_abs = DetectorConfig(model_path=str(real_ckpt.resolve()))
+    with pytest.raises(ValueError, match="Absolute model paths are prohibited"):
+        LocalVehicleDetector(cfg_abs, root_dir=fake_root)
+
+    # 2. Reject '..' traversal
+    cfg_trav = DetectorConfig(model_path="models/../models/model.pt")
+    with pytest.raises(ValueError, match="Path traversal"):
+        LocalVehicleDetector(cfg_trav, root_dir=fake_root)
+
+    # 3. Reject symlink checkpoint
+    sym_ckpt = fake_models / "sym_model.pt"
+    sym_ckpt.symlink_to(real_ckpt)
+    cfg_sym = DetectorConfig(model_path="models/sym_model.pt")
+    with pytest.raises(ValueError, match="Symlink found|is a symlink"):
+        LocalVehicleDetector(cfg_sym, root_dir=fake_root)
+
+    # 4. Reject escape from models directory
+    outside_file = fake_root / "outside.pt"
+    outside_file.write_bytes(b"outside")
+    cfg_out = DetectorConfig(model_path="outside.pt")
+    with pytest.raises(ValueError, match="escapes models directory"):
+        LocalVehicleDetector(cfg_out, root_dir=fake_root)
+
+
+def test_bytetrack_yaml_validation_and_symlink_rejection(tmp_path):
+    """Verify ParkingByteTracker strictly validates YAML schema, numbers, and symlinks."""
+    from src.parking.vehicle_tracker import ParkingByteTracker
+
+    fake_root = tmp_path / "repo"
+    fake_tracking = fake_root / "configs" / "tracking"
+    fake_tracking.mkdir(parents=True)
+
+    # 1. Reject unknown field
+    bad_yaml = fake_tracking / "bad.yaml"
+    bad_yaml.write_text("unknown_field: 123\nfps: 30\n")
+    with pytest.raises(ValueError, match="Unknown field in ByteTrack YAML config"):
+        ParkingByteTracker(config_path="configs/tracking/bad.yaml", root_dir=fake_root)
+
+    # 2. Reject invalid float (boolean or negative)
+    bad_float = fake_tracking / "bad_float.yaml"
+    bad_float.write_text("track_high_thresh: true\n")
+    with pytest.raises(ValueError, match="must be a float"):
+        ParkingByteTracker(config_path="configs/tracking/bad_float.yaml", root_dir=fake_root)
+
+    # 3. Reject out-of-range float
+    bad_range = fake_tracking / "bad_range.yaml"
+    bad_range.write_text("track_high_thresh: 2.5\n")
+    with pytest.raises(ValueError, match="out of valid range"):
+        ParkingByteTracker(config_path="configs/tracking/bad_range.yaml", root_dir=fake_root)
+
+    # 4. Reject symlink config
+    real_yaml = fake_tracking / "real.yaml"
+    real_yaml.write_text("fps: 30\ntrack_buffer: 30\n")
+    sym_yaml = fake_tracking / "sym.yaml"
+    sym_yaml.symlink_to(real_yaml)
+    with pytest.raises(ValueError, match="Symlink found|cannot be a symlink"):
+        ParkingByteTracker(config_path="configs/tracking/sym.yaml", root_dir=fake_root)
+
+
+def test_bytetrack_fps_configuration(tmp_path):
+    """Verify configured FPS is passed to BYTETracker."""
+    from src.parking.vehicle_tracker import ParkingByteTracker
+
+    tracker = ParkingByteTracker(fps=60)
+    assert tracker._args.fps == 60
+    assert tracker.min_hits >= 1
+
+
+def test_validate_staging_artifacts_strict(tmp_path):
+    """Verify ParkingOccupancyJobManager._validate_staging_artifacts detects inconsistencies."""
+    from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
+    import hashlib
+    import json
+
+    staging = tmp_path / "staging_test"
+    staging.mkdir()
+
+    # 1. Missing artifacts raise error
+    with pytest.raises(ValueError, match="Staging artifact missing"):
+        parking_occupancy_job_manager._validate_staging_artifacts(
+            staging_dir=staging,
+            expected_width=1920,
+            expected_height=1080,
+            expected_fps=30.0,
+            expected_frames=10,
+            expected_output_sha="a" * 64,
+            expected_timeline_sha="b" * 64,
+            expected_summary_sha="c" * 64,
+        )

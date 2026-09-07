@@ -198,6 +198,8 @@ class ParkingJobManifest:
     ultralytics_version: str = ""
     software_versions: Dict[str, Any] = field(default_factory=dict)
     job_created_at: Optional[str] = None
+    timeline_sha256: str = ""
+    summary_sha256: str = ""
     operational_gate: str = "ALLOWED"
     gate_reasons: List[str] = field(default_factory=list)
     errors_or_warnings: List[str] = field(default_factory=list)

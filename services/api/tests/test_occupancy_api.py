@@ -6,34 +6,14 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import shutil
 import tempfile
+import uuid
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import cv2
 import numpy as np
-
-from services.api.app.db.session import get_db
-from services.api.app.routers.parking import router as parking_router
-
-
-@pytest.fixture
-def parking_app():
-    test_app = FastAPI(title="RoadSense Parking Occupancy Test API")
-    test_app.include_router(parking_router)
-    return test_app
-
-
-@pytest.fixture
-async def client(parking_app, db_session):
-    async def override_get_db():
-        yield db_session
-
-    parking_app.dependency_overrides[get_db] = override_get_db
-    transport = ASGITransport(app=parking_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-    parking_app.dependency_overrides.clear()
 
 
 def _create_rich_test_image_bytes(width: int = 640, height: int = 480) -> bytes:
@@ -91,7 +71,7 @@ async def _poll_job_until_terminal(client: AsyncClient, job_id: str, timeout: fl
     raise TimeoutError(f"Job {job_id} did not reach terminal state within {timeout}s")
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_occupancy_job_blocked_by_stability_gate_when_no_assessment(client):
     """Submitting an occupancy job without camera stability assessment fails closed to BLOCKED_BY_STABILITY_GATE."""
     s_resp = await client.post("/api/v1/sites", json={"name": "No Stability Site"})
@@ -114,7 +94,7 @@ async def test_occupancy_job_blocked_by_stability_gate_when_no_assessment(client
     assert any("LAYOUT" in r or "ASSESSMENT" in r for r in job_data["gate_reasons"])
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_occupancy_job_rejects_empty_file_and_missing_file(client):
     """API strictly rejects empty upload or invalid file payload."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Upload Test Site"})
@@ -131,7 +111,7 @@ async def test_occupancy_job_rejects_empty_file_and_missing_file(client):
     assert "empty" in r_empty.json()["detail"].lower()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_occupancy_job_lifecycle_when_gate_allowed(client):
     """
     Full positive workflow:
@@ -229,7 +209,7 @@ async def test_occupancy_job_lifecycle_when_gate_allowed(client):
     assert time_resp.status_code == 200
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_occupancy_job_cancellation(client):
     """Cancelling an active occupancy job immediately transitions status to CANCELLED."""
     s_resp = await client.post("/api/v1/sites", json={"name": "Cancel Occupancy Site"})
@@ -253,7 +233,7 @@ async def test_occupancy_job_cancellation(client):
     assert detail_resp.json()["status"] == "CANCELLED"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_terminal_state_race_prevention(client, db_session):
     """Verify that CAS terminal state transitions prevent terminal state overwrites (race conditions)."""
     from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
@@ -295,3 +275,170 @@ async def test_terminal_state_race_prevention(client, db_session):
     )
     d3 = (await client.get(f"/api/v1/parking/jobs/{job_id}")).json()
     assert d3["status"] == "CANCELLED"  # Remains CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_occupancy_missing_stability_config_sha_blocks(client, db_session):
+    """Verify that an assessment missing config_sha256 blocks occupancy fail-closed."""
+    from services.api.app.models.entities import CameraStabilityAssessment
+    from sqlalchemy import update
+
+    # 1. Setup camera and verified layout
+    site_res = await client.post("/api/v1/sites", json={"name": "No Config SHA Site"})
+    site_id = site_res.json()["id"]
+    cam_res = await client.post(f"/api/v1/sites/{site_id}/cameras", json={"name": "No Config SHA Cam"})
+    camera_id = cam_res.json()["id"]
+
+    ref_bytes = _create_rich_test_image_bytes()
+    await client.post(
+        f"/api/v1/cameras/{camera_id}/reference-image",
+        files={"file": ("ref.jpg", ref_bytes, "image/jpeg")},
+    )
+
+    draft_payload = {
+        "local_operator_label": "Op1",
+        "parking_spaces": [{
+            "operator_label": "B1",
+            "space_type": "STANDARD",
+            "polygon_normalized": [{"x": 0.1, "y": 0.1}, {"x": 0.3, "y": 0.1}, {"x": 0.3, "y": 0.5}, {"x": 0.1, "y": 0.5}],
+            "active": True,
+        }],
+    }
+    l_resp = await client.post(f"/api/v1/cameras/{camera_id}/layouts", json=draft_payload)
+    layout_id = l_resp.json()["id"]
+    await client.post(f"/api/v1/layouts/{layout_id}/submit", json={"local_operator_label": "Op1"})
+    await client.post(f"/api/v1/layouts/{layout_id}/verify", json={"local_operator_label": "Lead1", "confirmation_acknowledged": True})
+
+    # 2. Run Stability Assessment
+    stat_vid = _create_synthetic_video_bytes(stationary=True, frames=15)
+    ass_resp = await client.post(
+        f"/api/v1/cameras/{camera_id}/stability/assess",
+        files={"file": ("stab.mp4", stat_vid, "video/mp4")},
+    )
+    ass_id = ass_resp.json()["id"]
+    for _ in range(30):
+        r = await client.get(f"/api/v1/stability/assessments/{ass_id}")
+        if r.json()["status"] == "COMPLETE":
+            break
+        await asyncio.sleep(0.1)
+
+    # Corrupt config_sha256 to empty string / None in DB
+    await db_session.execute(
+        update(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.id == ass_id)
+        .values(config_sha256="")
+    )
+    await db_session.commit()
+
+    # 3. Submit Occupancy Job -> Must BLOCK fail-closed
+    occ_vid = _create_synthetic_video_bytes(stationary=True, frames=10)
+    occ_resp = await client.post(
+        f"/api/v1/cameras/{camera_id}/occupancy/jobs",
+        files={"file": ("stream.mp4", occ_vid, "video/mp4")},
+    )
+    assert occ_resp.status_code == 202
+    job_id = occ_resp.json()["id"]
+
+    job_data = await _poll_job_until_terminal(client, job_id, timeout=10.0)
+    assert job_data["status"] == "BLOCKED_BY_STABILITY_GATE"
+    assert any("MISSING_CONFIG_SHA" in r for r in job_data["gate_reasons"])
+
+
+@pytest.mark.asyncio
+async def test_occupancy_malformed_max_assessment_age_blocks(client, db_session):
+    """Verify that a non-finite or non-positive max_assessment_age_seconds blocks fail-closed."""
+    from services.api.app.models.entities import CameraStabilityAssessment
+    from sqlalchemy import update
+
+    site_res = await client.post("/api/v1/sites", json={"name": "Bad Age Site"})
+    site_id = site_res.json()["id"]
+    cam_res = await client.post(f"/api/v1/sites/{site_id}/cameras", json={"name": "Bad Age Cam"})
+    camera_id = cam_res.json()["id"]
+
+    ref_bytes = _create_rich_test_image_bytes()
+    await client.post(
+        f"/api/v1/cameras/{camera_id}/reference-image",
+        files={"file": ("ref.jpg", ref_bytes, "image/jpeg")},
+    )
+
+    draft_payload = {
+        "local_operator_label": "Op1",
+        "parking_spaces": [{
+            "operator_label": "B1",
+            "space_type": "STANDARD",
+            "polygon_normalized": [{"x": 0.1, "y": 0.1}, {"x": 0.3, "y": 0.1}, {"x": 0.3, "y": 0.5}, {"x": 0.1, "y": 0.5}],
+            "active": True,
+        }],
+    }
+    l_resp = await client.post(f"/api/v1/cameras/{camera_id}/layouts", json=draft_payload)
+    layout_id = l_resp.json()["id"]
+    await client.post(f"/api/v1/layouts/{layout_id}/submit", json={"local_operator_label": "Op1"})
+    await client.post(f"/api/v1/layouts/{layout_id}/verify", json={"local_operator_label": "Lead1", "confirmation_acknowledged": True})
+
+    stat_vid = _create_synthetic_video_bytes(stationary=True, frames=15)
+    ass_resp = await client.post(
+        f"/api/v1/cameras/{camera_id}/stability/assess",
+        files={"file": ("stab.mp4", stat_vid, "video/mp4")},
+    )
+    ass_id = ass_resp.json()["id"]
+    for _ in range(30):
+        r = await client.get(f"/api/v1/stability/assessments/{ass_id}")
+        if r.json()["status"] == "COMPLETE":
+            break
+        await asyncio.sleep(0.1)
+
+    # Set bad max age
+    await db_session.execute(
+        update(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.id == ass_id)
+        .values(thresholds_snapshot={"max_assessment_age_seconds": -50.0})
+    )
+    await db_session.commit()
+
+    occ_vid = _create_synthetic_video_bytes(stationary=True, frames=10)
+    occ_resp = await client.post(
+        f"/api/v1/cameras/{camera_id}/occupancy/jobs",
+        files={"file": ("stream.mp4", occ_vid, "video/mp4")},
+    )
+    job_id = occ_resp.json()["id"]
+
+    job_data = await _poll_job_until_terminal(client, job_id, timeout=10.0)
+    assert job_data["status"] == "BLOCKED_BY_STABILITY_GATE"
+    assert any("INVALID_THRESHOLD" in r for r in job_data["gate_reasons"])
+
+
+@pytest.mark.asyncio
+async def test_safe_serving_helper_blocks_traversal_symlinks_and_hash_tampering(tmp_path):
+    """Verify _resolve_safe_parking_artifact blocks '..', symlinks, and hash mismatches."""
+    from services.api.app.routers.parking import _resolve_safe_parking_artifact
+    from services.api.app.core.config import settings
+    import hashlib
+
+    real_media = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    jobs_dir = real_media / "parking_jobs"
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    dummy_job_id = str(uuid.uuid4())
+    job_dir = jobs_dir / dummy_job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    real_vid = job_dir / "annotated.mp4"
+    real_vid.write_bytes(b"dummy video content")
+    correct_sha = hashlib.sha256(b"dummy video content").hexdigest()
+
+    # 1. Valid resolve with correct SHA
+    resolved = _resolve_safe_parking_artifact(dummy_job_id, "annotated.mp4", correct_sha)
+    assert resolved == real_vid.resolve()
+
+    # 2. Rejection on wrong SHA
+    wrong_sha = "0" * 64
+    assert _resolve_safe_parking_artifact(dummy_job_id, "annotated.mp4", wrong_sha) is None
+
+    # 3. Rejection on non-allowed filename
+    assert _resolve_safe_parking_artifact(dummy_job_id, "passwords.txt") is None
+
+    # 4. Rejection on invalid job ID
+    assert _resolve_safe_parking_artifact("../../etc", "annotated.mp4") is None
+
+    # Cleanup
+    shutil.rmtree(job_dir, ignore_errors=True)

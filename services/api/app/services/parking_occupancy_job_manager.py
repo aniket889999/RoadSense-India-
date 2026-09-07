@@ -107,13 +107,6 @@ class ParkingOccupancyJobManager:
         evt = self._cancellation_events.get(job_id)
         if evt:
             evt.set()
-
-        # Only directly cancel the asyncio task if it has not yet started execution in thread
-        if job_id not in self._running_jobs:
-            task = self._active_tasks.get(job_id)
-            if task and not task.done():
-                task.cancel()
-                return True
         return True
 
     async def _execute_job(
@@ -124,337 +117,381 @@ class ParkingOccupancyJobManager:
         video_path: Path,
         cancel_event: threading.Event,
     ) -> None:
-        async with self.semaphore:
-            job_started_at = _utc_now()
-            main_loop = asyncio.get_running_loop()
-
-            # 1. Update initial status to VALIDATING
-            try:
-                async with async_session_factory() as db:
-                    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                    job = res.scalar_one_or_none()
-                    if job:
-                        job.status = "VALIDATING"
-                        job.started_at = job_started_at
-                        job.progress_pct = 5.0
-                        job.stage_message = "Validating camera layout and camera stability gate"
-                        await db.commit()
-            except Exception as e:
-                logger.error(f"Failed to update initial status for job {job_id}: {e}")
-
+        try:
             if job_id in self._cancel_requested or cancel_event.is_set():
                 await self._persist_cancellation(job_id, video_path)
                 return
 
-            # 2. Gate Verification Query & Stability Config Verification
-            current_stability_config = load_stability_config()
-            verified_layout_id = None
-            current_layout_sha = None
-            latest_assessment_id = None
-            latest_assessment_ref_sha = None
-            latest_assessment_layout_sha = None
-            latest_assessment_config_sha = None
-            latest_assessment_created_at = None
-            latest_assessment_decision = None
-            latest_assessment_thresholds = None
-            current_ref_sha = None
-            parking_spaces_payload: List[Dict[str, Any]] = []
+            async with self.semaphore:
+                if job_id in self._cancel_requested or cancel_event.is_set():
+                    await self._persist_cancellation(job_id, video_path)
+                    return
 
-            try:
-                async with async_session_factory() as db:
-                    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
-                    cam = cam_res.scalar_one_or_none()
-                    if not cam:
-                        raise ValueError(f"Camera {camera_id} not found.")
-                    current_ref_sha = cam.reference_image_sha256
+                job_started_at = _utc_now()
+                main_loop = asyncio.get_running_loop()
 
-                    from sqlalchemy.orm import selectinload
-                    layout_res = await db.execute(
-                        select(ParkingLayoutRevision)
-                        .options(selectinload(ParkingLayoutRevision.parking_spaces))
-                        .where(ParkingLayoutRevision.camera_id == camera_id)
-                        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
-                    )
-                    verified_layout = layout_res.scalar_one_or_none()
-                    if verified_layout:
-                        verified_layout_id = verified_layout.id
-                        current_layout_sha = verified_layout.canonical_sha256
-                        parking_spaces_payload = [
-                            {
-                                "id": sp.id,
-                                "operator_label": sp.operator_label,
-                                "space_type": sp.space_type,
-                                "polygon_normalized": sp.polygon_normalized,
-                            }
-                            for sp in verified_layout.parking_spaces
-                            if sp.active
-                        ]
-
-                    assess_res = await db.execute(
-                        select(CameraStabilityAssessment)
-                        .where(CameraStabilityAssessment.camera_id == camera_id)
-                        .where(CameraStabilityAssessment.status == "COMPLETE")
-                        .order_by(desc(CameraStabilityAssessment.created_at))
-                    )
-                    latest_assessment = assess_res.scalars().first()
-                    if latest_assessment:
-                        latest_assessment_id = latest_assessment.id
-                        latest_assessment_ref_sha = latest_assessment.reference_image_sha256
-                        latest_assessment_layout_sha = latest_assessment.layout_canonical_sha256
-                        latest_assessment_config_sha = latest_assessment.config_sha256
-                        latest_assessment_created_at = latest_assessment.created_at
-                        latest_assessment_decision = latest_assessment.aggregate_decision
-                        latest_assessment_thresholds = latest_assessment.thresholds_snapshot
-
-            except Exception as e:
-                logger.error(f"Error reading gate requirements for job {job_id}: {e}")
-                await self._persist_failure(job_id, "DB_READ_ERROR", str(e), video_path)
-                return
-
-            if job_id in self._cancel_requested or cancel_event.is_set():
-                await self._persist_cancellation(job_id, video_path)
-                return
-
-            # Evaluate Gate
-            decision_enum = None
-            if latest_assessment_decision:
-                try:
-                    decision_enum = StabilityDecision(latest_assessment_decision)
-                except Exception:
-                    pass
-
-            import math
-            raw_max_age = (latest_assessment_thresholds or {}).get(
-                "max_assessment_age_seconds",
-                current_stability_config.thresholds.max_assessment_age_seconds,
-            )
-            if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, (int, float)) or not math.isfinite(raw_max_age) or raw_max_age <= 0:
-                logger.warning(f"Occupancy job {job_id} BLOCKED: max_assessment_age_seconds must be a finite positive number, got {raw_max_age}")
-                await self._persist_blocked_by_gate(
-                    job_id,
-                    [f"INVALID_THRESHOLD: max_assessment_age_seconds must be a finite positive number, got {raw_max_age}"],
-                    video_path,
-                )
-                return
-
-            max_age = float(raw_max_age)
-
-            gate_decision, gate_reasons = evaluate_operational_gate(
-                decision=decision_enum,
-                assessment_reference_sha=latest_assessment_ref_sha,
-                current_reference_sha=current_ref_sha,
-                assessment_layout_sha=latest_assessment_layout_sha,
-                current_layout_sha=current_layout_sha,
-                assessment_timestamp=latest_assessment_created_at,
-                current_timestamp=job_started_at,
-                max_age_seconds=max_age,
-            )
-
-            # Strict Stability Configuration SHA Check: missing config_sha256 must block
-            if not latest_assessment_config_sha:
-                gate_decision = OperationalGate.BLOCKED
-                gate_reasons.append("MISSING_CONFIG_SHA: Camera stability assessment record is missing config_sha256.")
-            elif latest_assessment_config_sha != current_stability_config.config_sha256:
-                gate_decision = OperationalGate.BLOCKED
-                gate_reasons.append(
-                    f"CONFIG_MISMATCH: Stability assessment used config SHA {latest_assessment_config_sha[:8]}..., "
-                    f"current system requires {current_stability_config.config_sha256[:8]}..."
-                )
-
-            if gate_decision != OperationalGate.ALLOWED:
-                # FAIL-CLOSED BLOCK
-                logger.warning(f"Occupancy job {job_id} BLOCKED by stability gate: {gate_reasons}")
-                await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
-                return
-
-            if not parking_spaces_payload:
-                gate_reasons.append("NO_ACTIVE_SPACES: Verified layout contains 0 active parking spaces.")
-                await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
-                return
-
-            # Capture reservation snapshot for exact provenance re-validation
-            reserved_ref_sha = current_ref_sha
-            reserved_layout_id = verified_layout_id
-            reserved_layout_sha = current_layout_sha
-            reserved_assessment_id = latest_assessment_id
-            reserved_assessment_decision = latest_assessment_decision
-            reserved_assessment_timestamp = latest_assessment_created_at
-            reserved_assessment_config_sha = latest_assessment_config_sha
-            reserved_stability_config_sha = current_stability_config.config_sha256
-
-            # 3. Media Preflight Inspection
-            try:
-                media_info = inspect_video_media_safe(
-                    video_path=video_path,
-                    timeout_sec=self.config.execution.ffprobe_timeout_seconds,
-                )
-            except Exception as e:
-                logger.warning(f"Video media inspection rejected for job {job_id}: {e}")
-                await self._persist_failure(job_id, "MEDIA_VALIDATION_ERROR", str(e), video_path)
-                return
-
-            if job_id in self._cancel_requested or cancel_event.is_set():
-                await self._persist_cancellation(job_id, video_path)
-                return
-
-            # Compute input video SHA
-            h_vid = hashlib.sha256()
-            with open(video_path, "rb") as vf:
-                while chunk := vf.read(65536):
-                    h_vid.update(chunk)
-            input_video_sha = h_vid.hexdigest()
-
-            # 4. Provenance Re-Validation immediately prior to model / tracker loading
-            reval_stability_cfg = load_stability_config()
-            try:
-                async with async_session_factory() as db:
-                    c_res = await db.execute(select(Camera).where(Camera.id == camera_id))
-                    c_now = c_res.scalar_one_or_none()
-                    if not c_now or c_now.reference_image_sha256 != reserved_ref_sha:
-                        await self._persist_blocked_by_gate(
-                            job_id,
-                            [f"GATE_PROVENANCE_MUTATION: Camera reference SHA changed immediately prior to model construction"],
-                            video_path,
-                        )
-                        return
-
-                    from sqlalchemy.orm import selectinload
-                    l_res = await db.execute(
-                        select(ParkingLayoutRevision)
-                        .options(selectinload(ParkingLayoutRevision.parking_spaces))
-                        .where(ParkingLayoutRevision.camera_id == camera_id)
-                        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
-                    )
-                    l_now = l_res.scalar_one_or_none()
-                    if not l_now or l_now.id != reserved_layout_id or l_now.canonical_sha256 != reserved_layout_sha:
-                        await self._persist_blocked_by_gate(
-                            job_id,
-                            [f"GATE_PROVENANCE_MUTATION: Verified layout changed immediately prior to model construction"],
-                            video_path,
-                        )
-                        return
-
-                    a_res = await db.execute(
-                        select(CameraStabilityAssessment)
-                        .where(CameraStabilityAssessment.camera_id == camera_id)
-                        .where(CameraStabilityAssessment.status == "COMPLETE")
-                        .order_by(desc(CameraStabilityAssessment.created_at))
-                    )
-                    a_now = a_res.scalars().first()
-                    if not a_now or a_now.id != reserved_assessment_id:
-                        await self._persist_blocked_by_gate(
-                            job_id,
-                            [f"GATE_PROVENANCE_MUTATION: Latest stability assessment changed immediately prior to model construction"],
-                            video_path,
-                        )
-                        return
-
-                    if (
-                        a_now.aggregate_decision != reserved_assessment_decision
-                        or a_now.created_at != reserved_assessment_timestamp
-                        or a_now.config_sha256 != reserved_assessment_config_sha
-                        or not a_now.config_sha256
-                    ):
-                        await self._persist_blocked_by_gate(
-                            job_id,
-                            [f"GATE_PROVENANCE_MUTATION: Stability assessment provenance mutated immediately prior to model construction"],
-                            video_path,
-                        )
-                        return
-
-                    if (
-                        reval_stability_cfg.config_sha256 != reserved_stability_config_sha
-                        or a_now.config_sha256 != reval_stability_cfg.config_sha256
-                    ):
-                        await self._persist_blocked_by_gate(
-                            job_id,
-                            [f"GATE_PROVENANCE_MUTATION: Stability configuration mutated immediately prior to model construction"],
-                            video_path,
-                        )
-                        return
-
-            except Exception as e:
-                logger.error(f"Error during provenance re-validation for job {job_id}: {e}")
-                await self._persist_failure(job_id, "PROVENANCE_REVALIDATION_ERROR", str(e), video_path)
-                return
-
-            # Thread-safe async progress updater
-            async def _update_db_progress(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
+                # 1. Update initial status to VALIDATING
                 try:
                     async with async_session_factory() as db:
                         res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                        j = res.scalar_one_or_none()
-                        if j and j.status not in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
-                            if stage_status:
-                                j.status = stage_status
-                            j.progress_pct = round(pct, 1)
-                            j.stage_message = msg
+                        job = res.scalar_one_or_none()
+                        if job:
+                            job.status = "VALIDATING"
+                            job.started_at = job_started_at
+                            job.progress_pct = 5.0
+                            job.stage_message = "Validating camera layout and camera stability gate"
                             await db.commit()
-                except Exception as ex:
-                    logger.debug(f"Progress update error: {ex}")
-
-            def sync_progress_callback(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
-                if main_loop and main_loop.is_running():
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            _update_db_progress(pct, msg, stage_status),
-                            main_loop,
-                        )
-                    except Exception as ex:
-                        logger.debug(f"Failed to dispatch progress update: {ex}")
-
-            # 5. Run Streaming Inference & Pipeline in Thread
-            try:
-                self._running_jobs.add(job_id)
-                result_payload = await asyncio.to_thread(
-                    self._run_streaming_pipeline,
-                    job_id=job_id,
-                    camera_id=camera_id,
-                    site_id=site_id,
-                    video_path=video_path,
-                    input_video_sha=input_video_sha,
-                    media_info=media_info,
-                    verified_layout_canonical_sha=current_layout_sha,
-                    latest_assessment_ref_sha=latest_assessment_ref_sha,
-                    latest_assessment_id=latest_assessment_id,
-                    latest_assessment_config_sha=latest_assessment_config_sha,
-                    parking_spaces_payload=parking_spaces_payload,
-                    job_started_at=job_started_at,
-                    progress_callback=sync_progress_callback,
-                    cancel_event=cancel_event,
-                )
+                except Exception as e:
+                    logger.error(f"Failed to update initial status for job {job_id}: {e}")
 
                 if job_id in self._cancel_requested or cancel_event.is_set():
                     await self._persist_cancellation(job_id, video_path)
                     return
 
-                # 6. Persist COMPLETE state atomically via CAS update
-                await self._persist_complete(
-                    job_id=job_id,
-                    input_video_sha=input_video_sha,
-                    current_ref_sha=current_ref_sha,
+                # 2. Gate Verification Query & Stability Config Verification
+                current_stability_config = load_stability_config()
+                verified_layout_id = None
+                current_layout_sha = None
+                latest_assessment_id = None
+                latest_assessment_ref_sha = None
+                latest_assessment_layout_sha = None
+                latest_assessment_config_sha = None
+                latest_assessment_created_at = None
+                latest_assessment_decision = None
+                latest_assessment_thresholds = None
+                current_ref_sha = None
+                parking_spaces_payload: List[Dict[str, Any]] = []
+
+                try:
+                    async with async_session_factory() as db:
+                        cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+                        cam = cam_res.scalar_one_or_none()
+                        if not cam:
+                            raise ValueError(f"Camera {camera_id} not found.")
+                        current_ref_sha = cam.reference_image_sha256
+
+                        from sqlalchemy.orm import selectinload
+                        layout_res = await db.execute(
+                            select(ParkingLayoutRevision)
+                            .options(selectinload(ParkingLayoutRevision.parking_spaces))
+                            .where(ParkingLayoutRevision.camera_id == camera_id)
+                            .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+                        )
+                        verified_layout = layout_res.scalar_one_or_none()
+                        if verified_layout:
+                            verified_layout_id = verified_layout.id
+                            current_layout_sha = verified_layout.canonical_sha256
+                            parking_spaces_payload = [
+                                {
+                                    "id": sp.id,
+                                    "operator_label": sp.operator_label,
+                                    "space_type": sp.space_type,
+                                    "polygon_normalized": sp.polygon_normalized,
+                                }
+                                for sp in verified_layout.parking_spaces
+                                if sp.active
+                            ]
+
+                        assess_res = await db.execute(
+                            select(CameraStabilityAssessment)
+                            .where(CameraStabilityAssessment.camera_id == camera_id)
+                            .where(CameraStabilityAssessment.status == "COMPLETE")
+                            .order_by(desc(CameraStabilityAssessment.created_at))
+                        )
+                        latest_assessment = assess_res.scalars().first()
+                        if latest_assessment:
+                            latest_assessment_id = latest_assessment.id
+                            latest_assessment_ref_sha = latest_assessment.reference_image_sha256
+                            latest_assessment_layout_sha = latest_assessment.layout_canonical_sha256
+                            latest_assessment_config_sha = latest_assessment.config_sha256
+                            latest_assessment_created_at = latest_assessment.created_at
+                            latest_assessment_decision = latest_assessment.aggregate_decision
+                            latest_assessment_thresholds = latest_assessment.thresholds_snapshot
+
+                except Exception as e:
+                    logger.error(f"Error reading gate requirements for job {job_id}: {e}")
+                    await self._persist_failure(job_id, "DB_READ_ERROR", str(e), video_path)
+                    return
+
+                if job_id in self._cancel_requested or cancel_event.is_set():
+                    await self._persist_cancellation(job_id, video_path)
+                    return
+
+                # Evaluate Gate
+                decision_enum = None
+                if latest_assessment_decision:
+                    try:
+                        decision_enum = StabilityDecision(latest_assessment_decision)
+                    except Exception:
+                        pass
+
+                import math
+                raw_max_age = (latest_assessment_thresholds or {}).get(
+                    "max_assessment_age_seconds",
+                    current_stability_config.thresholds.max_assessment_age_seconds,
+                )
+                if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, (int, float)) or not math.isfinite(raw_max_age) or raw_max_age <= 0:
+                    logger.warning(f"Occupancy job {job_id} BLOCKED: max_assessment_age_seconds must be a finite positive number, got {raw_max_age}")
+                    await self._persist_blocked_by_gate(
+                        job_id,
+                        [f"INVALID_THRESHOLD: max_assessment_age_seconds must be a finite positive number, got {raw_max_age}"],
+                        video_path,
+                    )
+                    return
+
+                max_age = float(raw_max_age)
+
+                gate_decision, gate_reasons = evaluate_operational_gate(
+                    decision=decision_enum,
+                    assessment_reference_sha=latest_assessment_ref_sha,
+                    current_reference_sha=current_ref_sha,
+                    assessment_layout_sha=latest_assessment_layout_sha,
                     current_layout_sha=current_layout_sha,
-                    verified_layout_id=verified_layout_id,
-                    latest_assessment_id=latest_assessment_id,
-                    result_payload=result_payload,
+                    assessment_timestamp=latest_assessment_created_at,
+                    current_timestamp=job_started_at,
+                    max_age_seconds=max_age,
                 )
 
-            except (ParkingJobCancelled, asyncio.CancelledError):
-                await self._persist_cancellation(job_id, video_path)
-            except Exception as e:
-                logger.error(f"Error during occupancy execution for job {job_id}: {e}", exc_info=True)
-                await self._persist_failure(job_id, "EXECUTION_ERROR", str(e), video_path)
-            finally:
-                self._running_jobs.discard(job_id)
-                # Cleanup temp input file
+                # Strict Stability Configuration SHA Check: missing config_sha256 must block
+                if not latest_assessment_config_sha:
+                    gate_decision = OperationalGate.BLOCKED
+                    gate_reasons.append("MISSING_CONFIG_SHA: Camera stability assessment record is missing config_sha256.")
+                elif latest_assessment_config_sha != current_stability_config.config_sha256:
+                    gate_decision = OperationalGate.BLOCKED
+                    gate_reasons.append(
+                        f"CONFIG_MISMATCH: Stability assessment used config SHA {latest_assessment_config_sha[:8]}..., "
+                        f"current system requires {current_stability_config.config_sha256[:8]}..."
+                    )
+
+                if gate_decision != OperationalGate.ALLOWED:
+                    logger.warning(f"Occupancy job {job_id} BLOCKED by stability gate: {gate_reasons}")
+                    await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
+                    return
+
+                if not parking_spaces_payload:
+                    gate_reasons.append("NO_ACTIVE_SPACES: Verified layout contains 0 active parking spaces.")
+                    await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
+                    return
+
+                # Capture reservation snapshot for exact provenance re-validation
+                reserved_ref_sha = current_ref_sha
+                reserved_layout_id = verified_layout_id
+                reserved_layout_sha = current_layout_sha
+                reserved_assessment_id = latest_assessment_id
+                reserved_assessment_decision = latest_assessment_decision
+                reserved_assessment_timestamp = latest_assessment_created_at
+                reserved_assessment_config_sha = latest_assessment_config_sha
+                reserved_stability_config_sha = current_stability_config.config_sha256
+
+                # 3. Media Preflight Inspection
                 try:
-                    if video_path.exists():
-                        video_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                self._active_tasks.pop(job_id, None)
-                self._cancellation_events.pop(job_id, None)
-                self._cancel_requested.discard(job_id)
+                    media_info = inspect_video_media_safe(
+                        video_path=video_path,
+                        timeout_sec=self.config.execution.ffprobe_timeout_seconds,
+                    )
+                except Exception as e:
+                    logger.warning(f"Video media inspection rejected for job {job_id}: {e}")
+                    await self._persist_failure(job_id, "MEDIA_VALIDATION_ERROR", str(e), video_path)
+                    return
+
+                if job_id in self._cancel_requested or cancel_event.is_set():
+                    await self._persist_cancellation(job_id, video_path)
+                    return
+
+                # Compute input video SHA
+                h_vid = hashlib.sha256()
+                with open(video_path, "rb") as vf:
+                    while chunk := vf.read(65536):
+                        if job_id in self._cancel_requested or cancel_event.is_set():
+                            await self._persist_cancellation(job_id, video_path)
+                            return
+                        h_vid.update(chunk)
+                input_video_sha = h_vid.hexdigest()
+
+                # 4. Provenance Re-Validation immediately prior to model / tracker loading
+                reval_stability_cfg = load_stability_config()
+                try:
+                    async with async_session_factory() as db:
+                        c_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+                        c_now = c_res.scalar_one_or_none()
+                        if not c_now or c_now.reference_image_sha256 != reserved_ref_sha:
+                            await self._persist_blocked_by_gate(
+                                job_id,
+                                [f"GATE_PROVENANCE_MUTATION: Camera reference SHA changed immediately prior to model construction"],
+                                video_path,
+                            )
+                            return
+
+                        from sqlalchemy.orm import selectinload
+                        l_res = await db.execute(
+                            select(ParkingLayoutRevision)
+                            .options(selectinload(ParkingLayoutRevision.parking_spaces))
+                            .where(ParkingLayoutRevision.camera_id == camera_id)
+                            .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+                        )
+                        l_now = l_res.scalar_one_or_none()
+                        if not l_now or l_now.id != reserved_layout_id or l_now.canonical_sha256 != reserved_layout_sha:
+                            await self._persist_blocked_by_gate(
+                                job_id,
+                                [f"GATE_PROVENANCE_MUTATION: Verified layout changed immediately prior to model construction"],
+                                video_path,
+                            )
+                            return
+
+                        a_res = await db.execute(
+                            select(CameraStabilityAssessment)
+                            .where(CameraStabilityAssessment.camera_id == camera_id)
+                            .where(CameraStabilityAssessment.status == "COMPLETE")
+                            .order_by(desc(CameraStabilityAssessment.created_at))
+                        )
+                        a_now = a_res.scalars().first()
+                        if not a_now or a_now.id != reserved_assessment_id:
+                            await self._persist_blocked_by_gate(
+                                job_id,
+                                [f"GATE_PROVENANCE_MUTATION: Latest stability assessment changed immediately prior to model construction"],
+                                video_path,
+                            )
+                            return
+
+                        if (
+                            a_now.aggregate_decision != reserved_assessment_decision
+                            or a_now.created_at != reserved_assessment_timestamp
+                            or a_now.config_sha256 != reserved_assessment_config_sha
+                            or not a_now.config_sha256
+                        ):
+                            await self._persist_blocked_by_gate(
+                                job_id,
+                                [f"GATE_PROVENANCE_MUTATION: Stability assessment provenance mutated immediately prior to model construction"],
+                                video_path,
+                            )
+                            return
+
+                        if (
+                            reval_stability_cfg.config_sha256 != reserved_stability_config_sha
+                            or a_now.config_sha256 != reval_stability_cfg.config_sha256
+                        ):
+                            await self._persist_blocked_by_gate(
+                                job_id,
+                                [f"GATE_PROVENANCE_MUTATION: Stability configuration mutated immediately prior to model construction"],
+                                video_path,
+                            )
+                            return
+
+                except Exception as e:
+                    logger.error(f"Error during provenance re-validation for job {job_id}: {e}")
+                    await self._persist_failure(job_id, "PROVENANCE_REVALIDATION_ERROR", str(e), video_path)
+                    return
+
+                if job_id in self._cancel_requested or cancel_event.is_set():
+                    await self._persist_cancellation(job_id, video_path)
+                    return
+
+                # Thread-safe async progress updater
+                async def _update_db_progress(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
+                    try:
+                        async with async_session_factory() as db:
+                            res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+                            j = res.scalar_one_or_none()
+                            if j and j.status not in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE", "PUBLISHING"):
+                                if stage_status:
+                                    j.status = stage_status
+                                j.progress_pct = round(pct, 1)
+                                j.stage_message = msg
+                                await db.commit()
+                    except Exception as ex:
+                        logger.debug(f"Progress update error: {ex}")
+
+                def sync_progress_callback(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
+                    if main_loop and main_loop.is_running():
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                _update_db_progress(pct, msg, stage_status),
+                                main_loop,
+                            )
+                        except Exception as ex:
+                            logger.debug(f"Failed to dispatch progress update: {ex}")
+
+                # 5. Run Streaming Inference & Pipeline in Thread
+                self._running_jobs.add(job_id)
+                bundle: Dict[str, Any] = {}
+                try:
+                    bundle = await asyncio.to_thread(
+                        self._run_streaming_pipeline,
+                        job_id=job_id,
+                        camera_id=camera_id,
+                        site_id=site_id,
+                        video_path=video_path,
+                        input_video_sha=input_video_sha,
+                        media_info=media_info,
+                        verified_layout_canonical_sha=current_layout_sha,
+                        latest_assessment_ref_sha=latest_assessment_ref_sha,
+                        latest_assessment_id=latest_assessment_id,
+                        latest_assessment_config_sha=latest_assessment_config_sha,
+                        parking_spaces_payload=parking_spaces_payload,
+                        job_started_at=job_started_at,
+                        progress_callback=sync_progress_callback,
+                        cancel_event=cancel_event,
+                    )
+                finally:
+                    self._running_jobs.discard(job_id)
+
+                if job_id in self._cancel_requested or cancel_event.is_set():
+                    if bundle.get("staging_dir") and Path(bundle["staging_dir"]).exists():
+                        shutil.rmtree(Path(bundle["staging_dir"]), ignore_errors=True)
+                    await self._persist_cancellation(job_id, video_path)
+                    return
+
+                # 6. Transactional Publication State Machine:
+                # RUNNING -> ARTIFACTS_VALIDATED -> PUBLISHING -> COMPLETE
+                reserved = await self._reserve_publishing_state(job_id)
+                if not reserved:
+                    if bundle.get("staging_dir") and Path(bundle["staging_dir"]).exists():
+                        shutil.rmtree(Path(bundle["staging_dir"]), ignore_errors=True)
+                    raise ParkingJobCancelled(f"Publication reservation aborted for job {job_id}.")
+
+                staging_dir = Path(bundle["staging_dir"])
+                final_output_dir = Path(bundle["final_output_dir"])
+
+                if final_output_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    raise FileExistsError(
+                        f"Target directory {final_output_dir} exists; promotion aborted to prevent destruction."
+                    )
+
+                staging_dir.rename(final_output_dir)
+
+                # Persist COMPLETE state from PUBLISHING
+                try:
+                    await self._persist_complete(
+                        job_id=job_id,
+                        input_video_sha=input_video_sha,
+                        current_ref_sha=current_ref_sha,
+                        current_layout_sha=current_layout_sha,
+                        verified_layout_id=verified_layout_id,
+                        latest_assessment_id=latest_assessment_id,
+                        result_payload=bundle,
+                    )
+                except Exception as ex:
+                    # Rollback / quarantine final directory so no failed/non-complete job exposes artifacts
+                    shutil.rmtree(final_output_dir, ignore_errors=True)
+                    raise ex
+
+        except (ParkingJobCancelled, asyncio.CancelledError):
+            logger.info(f"Job {job_id} cancelled.")
+            await self._persist_cancellation(job_id, video_path)
+        except Exception as e:
+            logger.error(f"Error during occupancy execution for job {job_id}: {e}", exc_info=True)
+            await self._persist_failure(job_id, "EXECUTION_ERROR", str(e), video_path)
+        finally:
+            self._running_jobs.discard(job_id)
+            try:
+                if video_path.exists():
+                    video_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._active_tasks.pop(job_id, None)
+            self._cancellation_events.pop(job_id, None)
+            self._cancel_requested.discard(job_id)
 
     def _run_streaming_pipeline(
         self,
@@ -485,14 +522,22 @@ class ParkingOccupancyJobManager:
 
         # 1. Output paths & staging setup beneath configured parking jobs root
         media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
-        jobs_root = (media_root / "parking_jobs").resolve()
-        jobs_root.mkdir(parents=True, exist_ok=True)
 
+        curr = media_root
+        while curr != curr.parent:
+            if curr.is_symlink():
+                raise ValueError(f"Symlink found in media root path: {curr}")
+            curr = curr.parent
+
+        jobs_root = media_root / "parking_jobs"
         curr = jobs_root
         while curr != curr.parent:
             if curr.is_symlink():
                 raise ValueError(f"Symlink found in jobs root path: {curr}")
             curr = curr.parent
+
+        jobs_root.mkdir(parents=True, exist_ok=True)
+        resolved_jobs_root = jobs_root.resolve()
 
         final_output_dir = jobs_root / job_id
         if ".." in final_output_dir.parts:
@@ -500,11 +545,10 @@ class ParkingOccupancyJobManager:
 
         resolved_final = final_output_dir.resolve()
         try:
-            resolved_final.relative_to(jobs_root)
+            resolved_final.relative_to(resolved_jobs_root)
         except ValueError:
-            raise ValueError(f"Final output directory {resolved_final} escapes jobs root {jobs_root}")
+            raise ValueError(f"Final output directory {resolved_final} escapes jobs root {resolved_jobs_root}")
 
-        # Fail-closed if final output directory already exists (unique job IDs must never overwrite)
         if final_output_dir.exists():
             raise FileExistsError(
                 f"Final output directory already exists for job {job_id}: {final_output_dir}. "
@@ -518,11 +562,10 @@ class ParkingOccupancyJobManager:
 
         resolved_staging = staging_dir.resolve()
         try:
-            resolved_staging.relative_to(jobs_root)
+            resolved_staging.relative_to(resolved_jobs_root)
         except ValueError:
-            raise ValueError(f"Staging directory {resolved_staging} escapes jobs root {jobs_root}")
+            raise ValueError(f"Staging directory {resolved_staging} escapes jobs root {resolved_jobs_root}")
 
-        # Exclusive creation of staging directory
         staging_dir.mkdir(parents=False, exist_ok=False)
 
         staging_mp4_path = staging_dir / "annotated.mp4"
@@ -535,13 +578,6 @@ class ParkingOccupancyJobManager:
         encoder = None
 
         try:
-            # 2. Initialize local detector & session-local ByteTrack tracker
-            detector = LocalVehicleDetector(self.config.detector)
-            detector_sha = detector.checkpoint_sha256
-
-            tracker_config_path = Path(__file__).resolve().parents[4] / "configs" / "tracking" / "bytetrack_default.yaml"
-            tracker = ParkingByteTracker(config_path=tracker_config_path if tracker_config_path.is_file() else None)
-
             cap = cv2.VideoCapture(str(video_path))
             if not cap.isOpened():
                 raise ValueError(f"Could not open video file {video_path}")
@@ -551,6 +587,19 @@ class ParkingOccupancyJobManager:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or media_info.get("width", 1920))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or media_info.get("height", 1080))
             duration = float(media_info.get("duration", total_frames / fps if fps > 0 else 0.0))
+
+            if cancel_event.is_set():
+                raise ParkingJobCancelled("Job cancelled before detector and tracker initialization.")
+
+            # 2. Initialize local detector & session-local ByteTrack tracker with validated runtime FPS
+            detector = LocalVehicleDetector(self.config.detector)
+            detector_sha = detector.checkpoint_sha256
+
+            tracker_config_path = Path(__file__).resolve().parents[4] / "configs" / "tracking" / "bytetrack_default.yaml"
+            tracker = ParkingByteTracker(
+                config_path=tracker_config_path if tracker_config_path.is_file() else None,
+                fps=fps,
+            )
 
             engine = ParkingOccupancyEngine(
                 config=self.config,
@@ -592,14 +641,14 @@ class ParkingOccupancyJobManager:
                 raw_detections = detector.detect_vehicles(frame_bgr)
 
                 # 2. Tracking (session-local ByteTrack)
-                tracked_detections = tracker.update_tracks(
+                tracker_result = tracker.update_tracks(
                     detections=raw_detections,
                     frame_idx=frame_idx,
                     frame_shape=(height, width),
                 )
 
                 # 3. Occupancy Engine
-                frame_res = engine.process_frame(frame_idx, timestamp_sec, tracked_detections)
+                frame_res = engine.process_frame(frame_idx, timestamp_sec, tracker_result)
                 last_frame_res = frame_res
 
                 # Stream real state transitions directly to JSONL on disk
@@ -612,7 +661,7 @@ class ParkingOccupancyJobManager:
                     frame_bgr=frame_bgr,
                     bay_states=frame_res.bay_states,
                     bay_polygons_px=engine.bay_polygons_px,
-                    vehicle_detections=tracked_detections,
+                    vehicle_detections=tracker_result.detections,
                     frame_idx=frame_idx,
                     timestamp_sec=timestamp_sec,
                 )
@@ -674,7 +723,6 @@ class ParkingOccupancyJobManager:
                     h_sm.update(chunk)
             summary_sha = h_sm.hexdigest()
 
-            # Inspect real runtime module and tool versions
             def _get_tool_version(cmd: List[str]) -> str:
                 try:
                     res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
@@ -729,6 +777,7 @@ class ParkingOccupancyJobManager:
                     "ffprobe": ffprobe_ver,
                     "compute_device": device_str,
                     "bytetrack_config_sha": tracker.config_sha256,
+                    "bytetrack_frame_rate": tracker.fps,
                     "timeline_sha256": timeline_sha,
                     "summary_sha256": summary_sha,
                 },
@@ -758,9 +807,16 @@ class ParkingOccupancyJobManager:
             with open(staging_manifest_path, "w", encoding="utf-8") as mf:
                 json.dump(manifest.to_dict(), mf, indent=2)
 
-            # 6. Validate artifacts before Atomic Promotion
+            # 6. Validate artifacts inside staging (recomputing hashes and verifying provenance)
             self._validate_staging_artifacts(
                 staging_dir=staging_dir,
+                expected_job_id=job_id,
+                expected_camera_id=camera_id,
+                expected_site_id=site_id,
+                expected_layout_sha=verified_layout_canonical_sha or "",
+                expected_assessment_id=latest_assessment_id,
+                expected_stability_config_sha=latest_assessment_config_sha or "",
+                expected_occupancy_config_sha=self.config.config_sha256,
                 expected_width=width,
                 expected_height=height,
                 expected_fps=fps,
@@ -770,16 +826,12 @@ class ParkingOccupancyJobManager:
                 expected_summary_sha=summary_sha,
             )
 
-            # 7. Non-destructive Atomic directory promotion
-            if final_output_dir.exists():
-                raise FileExistsError(f"Target directory {final_output_dir} exists; promotion aborted to prevent destruction.")
-
-            staging_dir.rename(final_output_dir)
-
             final_mp4_path = final_output_dir / "annotated.mp4"
             final_timeline_path = final_output_dir / "occupancy_timeline.jsonl"
 
             return {
+                "staging_dir": staging_dir,
+                "final_output_dir": final_output_dir,
                 "output_video_sha256": output_video_sha,
                 "detector_checkpoint_sha256": detector_sha,
                 "total_frames": frame_idx,
@@ -837,6 +889,13 @@ class ParkingOccupancyJobManager:
     def _validate_staging_artifacts(
         self,
         staging_dir: Path,
+        expected_job_id: str,
+        expected_camera_id: str,
+        expected_site_id: str,
+        expected_layout_sha: str,
+        expected_assessment_id: Optional[str],
+        expected_stability_config_sha: str,
+        expected_occupancy_config_sha: str,
         expected_width: int,
         expected_height: int,
         expected_fps: float,
@@ -859,6 +918,25 @@ class ParkingOccupancyJobManager:
                 raise ValueError(f"Staging artifact missing or is symlink: {p}")
             if p.stat().st_size == 0:
                 raise ValueError(f"Staging artifact is empty (0 bytes): {p}")
+
+        # Independently recompute SHA-256 for all artifacts from disk
+        def _recompute_sha(p: Path) -> str:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                while chunk := f.read(65536):
+                    h.update(chunk)
+            return h.hexdigest()
+
+        recomputed_mp4_sha = _recompute_sha(mp4_path)
+        recomputed_timeline_sha = _recompute_sha(timeline_path)
+        recomputed_summary_sha = _recompute_sha(summary_path)
+
+        if recomputed_mp4_sha != expected_output_sha:
+            raise ValueError(f"Recomputed MP4 SHA ({recomputed_mp4_sha}) does not match expected ({expected_output_sha})")
+        if recomputed_timeline_sha != expected_timeline_sha:
+            raise ValueError(f"Recomputed timeline SHA ({recomputed_timeline_sha}) does not match expected ({expected_timeline_sha})")
+        if recomputed_summary_sha != expected_summary_sha:
+            raise ValueError(f"Recomputed summary SHA ({recomputed_summary_sha}) does not match expected ({expected_summary_sha})")
 
         # 1. Validate MP4 with ffprobe
         cmd = [
@@ -898,7 +976,7 @@ class ParkingOccupancyJobManager:
             if "FPS deviation" in str(e):
                 raise
 
-        # Frame count / duration tolerance check
+        # Frame count tolerance check
         nb_frames_str = v_stream.get("nb_frames")
         if nb_frames_str and nb_frames_str.isdigit():
             actual_nb = int(nb_frames_str)
@@ -946,7 +1024,7 @@ class ParkingOccupancyJobManager:
         if summary_data.get("total_state_transitions") != timeline_line_count:
             raise ValueError(f"Summary state transitions count ({summary_data.get('total_state_transitions')}) does not match timeline line count ({timeline_line_count})")
 
-        # 4. Validate Manifest JSON and verify SHA-256 hashes
+        # 4. Validate Manifest JSON and verify SHA-256 hashes against recomputed hashes
         try:
             with open(manifest_path, "r", encoding="utf-8") as mf:
                 manifest_data = json.load(mf)
@@ -962,12 +1040,50 @@ class ParkingOccupancyJobManager:
             if not sha256_re.match(h_val):
                 raise ValueError(f"Manifest field '{h_key}' is not a valid 64-character lowercase hex SHA-256: '{h_val}'")
 
-        if manifest_data["output_video_sha256"] != expected_output_sha:
-            raise ValueError(f"Manifest output video SHA mismatch: {manifest_data['output_video_sha256']} != {expected_output_sha}")
-        if manifest_data["timeline_sha256"] != expected_timeline_sha:
-            raise ValueError(f"Manifest timeline SHA mismatch: {manifest_data['timeline_sha256']} != {expected_timeline_sha}")
-        if manifest_data["summary_sha256"] != expected_summary_sha:
-            raise ValueError(f"Manifest summary SHA mismatch: {manifest_data['summary_sha256']} != {expected_summary_sha}")
+        if manifest_data["output_video_sha256"] != recomputed_mp4_sha:
+            raise ValueError(f"Manifest output video SHA mismatch: {manifest_data['output_video_sha256']} != {recomputed_mp4_sha}")
+        if manifest_data["timeline_sha256"] != recomputed_timeline_sha:
+            raise ValueError(f"Manifest timeline SHA mismatch: {manifest_data['timeline_sha256']} != {recomputed_timeline_sha}")
+        if manifest_data["summary_sha256"] != recomputed_summary_sha:
+            raise ValueError(f"Manifest summary SHA mismatch: {manifest_data['summary_sha256']} != {recomputed_summary_sha}")
+
+        # Provenance verification
+        if manifest_data.get("job_id") != expected_job_id:
+            raise ValueError(f"Manifest provenance mismatch: job_id {manifest_data.get('job_id')} != {expected_job_id}")
+        if manifest_data.get("camera_id") != expected_camera_id:
+            raise ValueError(f"Manifest provenance mismatch: camera_id {manifest_data.get('camera_id')} != {expected_camera_id}")
+        if manifest_data.get("site_id") != expected_site_id:
+            raise ValueError(f"Manifest provenance mismatch: site_id {manifest_data.get('site_id')} != {expected_site_id}")
+        if manifest_data.get("layout_canonical_sha256") != expected_layout_sha:
+            raise ValueError(f"Manifest provenance mismatch: layout SHA {manifest_data.get('layout_canonical_sha256')} != {expected_layout_sha}")
+        if manifest_data.get("stability_assessment_id") != expected_assessment_id:
+            raise ValueError(f"Manifest provenance mismatch: assessment ID {manifest_data.get('stability_assessment_id')} != {expected_assessment_id}")
+        if manifest_data.get("stability_config_sha256") != expected_stability_config_sha:
+            raise ValueError(f"Manifest provenance mismatch: stability config SHA {manifest_data.get('stability_config_sha256')} != {expected_stability_config_sha}")
+        if manifest_data.get("occupancy_config_sha256") != expected_occupancy_config_sha:
+            raise ValueError(f"Manifest provenance mismatch: occupancy config SHA {manifest_data.get('occupancy_config_sha256')} != {expected_occupancy_config_sha}")
+
+    async def _reserve_publishing_state(self, job_id: str) -> bool:
+        """Atomically reserve the PUBLISHING state in the database using a guarded CAS update."""
+        try:
+            async with async_session_factory() as db:
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .where(ParkingOccupancyJob.status != "PUBLISHING")
+                    .values(
+                        status="PUBLISHING",
+                        progress_pct=95.0,
+                        stage_message="Promoting validated parking artifacts transactionally",
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+                return res.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error reserving PUBLISHING state for job {job_id}: {e}")
+            return False
 
     async def _persist_complete(
         self,
@@ -984,7 +1100,7 @@ class ParkingOccupancyJobManager:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
-                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .where(ParkingOccupancyJob.status == "PUBLISHING")
                     .values(
                         status="COMPLETE",
                         progress_pct=100.0,
@@ -1021,9 +1137,10 @@ class ParkingOccupancyJobManager:
                 res = await db.execute(stmt)
                 await db.commit()
                 if res.rowcount == 0:
-                    logger.warning(f"Job {job_id} already reached a terminal state; skipping COMPLETE transition.")
+                    raise RuntimeError(f"Job {job_id} was not in PUBLISHING state during final COMPLETE transition.")
         except Exception as e:
             logger.error(f"Error persisting COMPLETE state for job {job_id}: {e}")
+            raise
 
     async def _persist_blocked_by_gate(self, job_id: str, reasons: List[str], video_path: Path) -> None:
         try:
@@ -1056,7 +1173,7 @@ class ParkingOccupancyJobManager:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
-                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES + ("PUBLISHING", "COMPLETE")))
                     .values(
                         status="CANCELLED",
                         stage_message="Job cancelled by user request.",
@@ -1068,7 +1185,7 @@ class ParkingOccupancyJobManager:
                 res = await db.execute(stmt)
                 await db.commit()
                 if res.rowcount == 0:
-                    logger.warning(f"Job {job_id} already reached a terminal state; skipping CANCELLED transition.")
+                    logger.warning(f"Job {job_id} already reached a terminal/publishing state; skipping CANCELLED transition.")
         except Exception as e:
             logger.error(f"Error persisting cancellation for job {job_id}: {e}")
 
@@ -1078,7 +1195,7 @@ class ParkingOccupancyJobManager:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
-                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES + ("COMPLETE",)))
                     .values(
                         status="FAILED",
                         failure_code=code,

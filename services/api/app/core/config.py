@@ -40,6 +40,7 @@ class Settings(BaseModel):
     # Storage paths (relative to repo root)
     ROADSENSE_SESSION_STORAGE: str = os.getenv("ROADSENSE_SESSION_STORAGE", "outputs/sessions")
     FROZEN_BASELINE_CONFIG: str = os.getenv("FROZEN_BASELINE_CONFIG", "configs/inference/frozen_baseline.yaml")
+    MEDIA_ROOT: str = os.getenv("MEDIA_ROOT", str((REPO_ROOT / "outputs" / "media").resolve()))
 
     @property
     def session_dir(self) -> Path:

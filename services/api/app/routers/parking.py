@@ -1825,6 +1825,7 @@ def _resolve_safe_parking_artifact(
     job_id: str,
     artifact_filename: str,
     expected_sha256: Optional[str] = None,
+    job_status: Optional[str] = "COMPLETE",
 ) -> Optional[Path]:
     """
     Safely resolve a parking job artifact path under the configured media root.
@@ -1844,50 +1845,112 @@ def _resolve_safe_parking_artifact(
     if artifact_filename not in ALLOWED_ARTIFACTS:
         return None
 
+    # Strict authorization: require job status to be exactly COMPLETE
+    if job_status != "COMPLETE":
+        return None
+
+    # Strict authorization: do not serve artifact when expected_sha256 is None or invalid
+    if not expected_sha256 or len(expected_sha256) != 64 or not re.match(r"^[0-9a-f]{64}$", expected_sha256.lower()):
+        return None
+
     media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
-    jobs_root = (media_root / "parking_jobs").resolve()
+
+    # Check raw lexical path components before resolve
+    curr = media_root
+    while curr != curr.parent:
+        if curr.is_symlink():
+            return None
+        curr = curr.parent
+
+    jobs_root = media_root / "parking_jobs"
+    curr = jobs_root
+    while curr != curr.parent:
+        if curr.is_symlink():
+            return None
+        curr = curr.parent
 
     candidate = jobs_root / job_id / artifact_filename
     if ".." in candidate.parts:
         return None
 
-    # Check symlinks in all path components up to jobs_root
     curr = candidate
     while curr != jobs_root and curr != curr.parent:
         if curr.is_symlink():
             return None
         curr = curr.parent
 
-    if jobs_root.is_symlink():
-        return None
-
+    resolved_jobs_root = jobs_root.resolve()
     resolved = candidate.resolve()
     try:
-        resolved.relative_to(jobs_root)
+        resolved.relative_to(resolved_jobs_root)
     except ValueError:
         return None
 
     if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
         return None
 
-    if expected_sha256:
-        h = hashlib.sha256()
-        with open(resolved, "rb") as f:
-            while chunk := f.read(65536):
-                h.update(chunk)
-        if h.hexdigest().lower() != expected_sha256.lower():
-            logger.warning(f"Artifact SHA-256 verification failed for {resolved}: expected {expected_sha256}, got {h.hexdigest()}")
-            return None
+    # Recompute file SHA on disk and verify match
+    h = hashlib.sha256()
+    with open(resolved, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    if h.hexdigest().lower() != expected_sha256.lower():
+        logger.warning(f"Artifact SHA-256 verification failed for {resolved}: expected {expected_sha256}, got {h.hexdigest()}")
+        return None
 
     return resolved
 
 
+def create_staged_upload_file() -> Tuple[Path, int]:
+    """
+    Creates an exclusively locked staged upload file under configured upload_staging root.
+    Rejects symlinks in raw path chain, enforces confinement, and uses a neutral staging suffix.
+    """
+    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+
+    curr = media_root
+    while curr != curr.parent:
+        if curr.is_symlink():
+            raise ValueError(f"Symlink found in media root path component: {curr}")
+        curr = curr.parent
+
+    upload_staging_dir = media_root / "upload_staging"
+    curr = upload_staging_dir
+    while curr != curr.parent:
+        if curr.is_symlink():
+            raise ValueError(f"Symlink found in upload staging path component: {curr}")
+        curr = curr.parent
+
+    upload_staging_dir.mkdir(parents=True, exist_ok=True)
+    resolved_staging = upload_staging_dir.resolve()
+
+    staging_file_name = f"upload_{uuid.uuid4().hex}.upload.tmp"
+    staging_file_path = upload_staging_dir / staging_file_name
+
+    if ".." in staging_file_path.parts:
+        raise ValueError("Path traversal in staging file path")
+
+    resolved_path = staging_file_path.resolve()
+    try:
+        resolved_path.relative_to(resolved_staging)
+    except ValueError:
+        raise ValueError("Staging file escapes upload staging root")
+
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    fd = os.open(str(staging_file_path), flags, 0o600)
+    return staging_file_path, fd
+
+
 def _build_occupancy_job_response(job: ParkingOccupancyJob) -> ParkingOccupancyJobResponse:
-    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256)
-    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl")
+    timeline_sha = (job.manifest_json or {}).get("timeline_sha256") or ((job.manifest_json or {}).get("software_versions") or {}).get("timeline_sha256")
+    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
+    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status) if timeline_sha else None
     has_video = safe_video is not None
     has_timeline = safe_timeline is not None
-    has_manifest = bool(job.manifest_json is not None)
+    has_manifest = bool(job.manifest_json is not None and job.status == "COMPLETE")
     return ParkingOccupancyJobResponse(
         id=job.id,
         camera_id=job.camera_id,
@@ -1951,13 +2014,14 @@ async def submit_parking_occupancy_job(
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
 
-    staging_dir = Path(tempfile.gettempdir()) / "roadsense_staging"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    temp_video_path = staging_dir / f"occupancy_input_{uuid.uuid4().hex}.mp4"
+    try:
+        temp_video_path, fd = create_staged_upload_file()
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create staged upload file: {e}")
 
     bytes_read = 0
     try:
-        with open(temp_video_path, "wb") as f_out:
+        with os.fdopen(fd, "wb") as f_out:
             while chunk := await file.read(65536):
                 bytes_read += len(chunk)
                 if bytes_read > max_upload_bytes:
@@ -1966,6 +2030,8 @@ async def submit_parking_occupancy_job(
                         detail=f"Uploaded file exceeds maximum allowed size of {max_upload_bytes} bytes ({max_upload_bytes / (1024*1024):.1f}MB).",
                     )
                 f_out.write(chunk)
+            f_out.flush()
+            os.fsync(f_out.fileno())
     except HTTPException:
         temp_video_path.unlink(missing_ok=True)
         raise
@@ -1987,9 +2053,13 @@ async def submit_parking_occupancy_job(
         stage_message="Job queued for gate validation and evaluation",
         created_at=utc_now(),
     )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
+    try:
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+    except Exception as e:
+        temp_video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist job record: {e}")
 
     # Launch async job manager execution
     parking_occupancy_job_manager.submit_occupancy_job(
@@ -2045,12 +2115,12 @@ async def cancel_parking_occupancy_job(
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    if job.status in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
+    if job.status in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE", "PUBLISHING"):
         return ParkingOccupancyJobCancelResponse(
             job_id=job_id,
             status=job.status,
             cancelled=False,
-            message=f"Job is already in terminal state '{job.status}'.",
+            message=f"Job is already in terminal or non-cancellable state '{job.status}'.",
         )
 
     await parking_occupancy_job_manager.cancel_occupancy_job(job_id)
@@ -2075,13 +2145,23 @@ async def get_parking_job_annotated_video(
     job_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream the generated annotated MP4 video."""
+    """Stream the generated annotated MP4 video with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256)
+    if job.status != "COMPLETE":
+        raise HTTPException(status_code=404, detail=f"Annotated video is only available for COMPLETE jobs (current status: '{job.status}').")
+
+    if not job.output_video_sha256 or len(job.output_video_sha256) != 64:
+        raise HTTPException(status_code=404, detail="Annotated video metadata SHA is missing or invalid.")
+
+    # Validate provenance in manifest if present
+    if job.manifest_json and job.manifest_json.get("output_video_sha256") != job.output_video_sha256:
+        raise HTTPException(status_code=404, detail="Manifest provenance mismatch for annotated video.")
+
+    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Annotated video file not available or failed integrity verification.")
 
@@ -2097,11 +2177,14 @@ async def get_parking_job_manifest(
     job_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve the full processing manifest JSON for a parking occupancy job."""
+    """Retrieve the full processing manifest JSON for a COMPLETE parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if job.status != "COMPLETE":
+        raise HTTPException(status_code=404, detail=f"Manifest is only available for COMPLETE jobs (current status: '{job.status}').")
 
     if not job.manifest_json:
         raise HTTPException(status_code=404, detail="Processing manifest not available for this job.")
@@ -2114,13 +2197,21 @@ async def get_parking_job_timeline(
     job_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Download the state-transition timeline JSONL ledger."""
+    """Download the state-transition timeline JSONL ledger with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl")
+    if job.status != "COMPLETE":
+        raise HTTPException(status_code=404, detail=f"Timeline is only available for COMPLETE jobs (current status: '{job.status}').")
+
+    manifest = job.manifest_json or {}
+    timeline_sha = manifest.get("timeline_sha256") or (manifest.get("software_versions") or {}).get("timeline_sha256")
+    if not timeline_sha or len(timeline_sha) != 64:
+        raise HTTPException(status_code=404, detail="Timeline SHA not found in manifest or is invalid.")
+
+    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Timeline ledger file not available or failed integrity verification.")
 

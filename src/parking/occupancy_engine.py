@@ -212,6 +212,7 @@ class TemporalBayTracker:
         frame_idx: int,
         timestamp_sec: float,
         best_evidence: Optional[BayOccupancyEvidence],
+        is_tracker_healthy: bool = True,
     ) -> Tuple[BayStateSummary, Optional[OccupancyTimelineEntry]]:
         """
         Ingest the best geometric evidence for the current frame and update state machine.
@@ -219,6 +220,51 @@ class TemporalBayTracker:
         """
         timeline_entry: Optional[OccupancyTimelineEntry] = None
         prev_state = self.current_state
+
+        if not is_tracker_healthy:
+            # Unhealthy tracker: produce UNKNOWN evidence and never count toward VACANT or OCCUPIED
+            self.consecutive_occupied_evidence = 0
+            self.consecutive_vacant_evidence = 0
+            self.dropout_frames_count = 0
+            if best_evidence is not None:
+                best_evidence.bay_id = self.bay_id
+                best_evidence.operator_label = self.operator_label
+                best_evidence.frame_index = frame_idx
+                best_evidence.timestamp_seconds = timestamp_sec
+                best_evidence.is_instant_evidence_occupied = False
+                best_evidence.rejection_reasons.append("TRACKER_FAILURE: Tracker update failed or is unhealthy for frame.")
+                self.history.append(best_evidence)
+
+            if self.current_state != OccupancyState.UNKNOWN:
+                self.current_state = OccupancyState.UNKNOWN
+                self.last_transition_frame = frame_idx
+                self.last_transition_timestamp = timestamp_sec
+                self.confidence = 0.0
+                timeline_entry = OccupancyTimelineEntry(
+                    frame_index=frame_idx,
+                    timestamp_seconds=timestamp_sec,
+                    bay_id=self.bay_id,
+                    operator_label=self.operator_label,
+                    previous_state=prev_state,
+                    new_state=OccupancyState.UNKNOWN,
+                    trigger_reason="Tracker failure or invalid tracker update on frame",
+                    confidence=0.0,
+                    contributing_track_ids=[],
+                )
+
+            summary = BayStateSummary(
+                bay_id=self.bay_id,
+                operator_label=self.operator_label,
+                space_type=self.space_type,
+                current_state=self.current_state,
+                consecutive_frames_in_state=0,
+                confidence=self.confidence,
+                last_transition_frame=self.last_transition_frame,
+                last_transition_timestamp=self.last_transition_timestamp,
+                polygon_normalized=self.polygon_normalized,
+                contributing_track_ids=list(self.contributing_track_ids),
+            )
+            return summary, timeline_entry
 
         has_occupied_evidence = (best_evidence is not None and best_evidence.is_instant_evidence_occupied)
 
@@ -371,11 +417,20 @@ class ParkingOccupancyEngine:
         self,
         frame_idx: int,
         timestamp_sec: float,
-        detections: List[VehicleDetection],
+        detections: Any,
     ) -> FrameOccupancyResult:
         """
-        Evaluate all parking bays on a single frame with vehicle detections.
+        Evaluate all parking bays on a single frame with vehicle detections or TrackerUpdateResult.
         """
+        from src.parking.vehicle_tracker import TrackerUpdateResult
+
+        if isinstance(detections, TrackerUpdateResult):
+            is_tracker_healthy = detections.is_healthy
+            det_list = detections.detections
+        else:
+            is_tracker_healthy = True
+            det_list = detections or []
+
         bay_summaries: Dict[str, BayStateSummary] = {}
         frame_transitions: List[OccupancyTimelineEntry] = []
 
@@ -386,7 +441,7 @@ class ParkingOccupancyEngine:
             best_evidence: Optional[BayOccupancyEvidence] = None
             max_score = -1.0
 
-            for det in detections:
+            for det in det_list:
                 ev = calculate_bay_vehicle_overlap(bay_poly, det, self.config.scoring)
                 # Score combines coverage, vehicle overlap, and confidence
                 score = (ev.bay_coverage_ratio * 0.5) + (ev.vehicle_overlap_ratio * 0.3) + (ev.max_confidence * 0.2)
@@ -397,7 +452,12 @@ class ParkingOccupancyEngine:
                     max_score = score
                     best_evidence = ev
 
-            summary, timeline_entry = tracker.update_frame(frame_idx, timestamp_sec, best_evidence)
+            summary, timeline_entry = tracker.update_frame(
+                frame_idx=frame_idx,
+                timestamp_sec=timestamp_sec,
+                best_evidence=best_evidence,
+                is_tracker_healthy=is_tracker_healthy,
+            )
             bay_summaries[bay_id] = summary
             if timeline_entry:
                 self.timeline.append(timeline_entry)
@@ -412,7 +472,7 @@ class ParkingOccupancyEngine:
             frame_index=frame_idx,
             timestamp_seconds=timestamp_sec,
             bay_states=bay_summaries,
-            vehicle_detections=detections,
+            vehicle_detections=det_list,
             total_bays=len(bay_summaries),
             occupied_count=occupied,
             vacant_count=vacant,

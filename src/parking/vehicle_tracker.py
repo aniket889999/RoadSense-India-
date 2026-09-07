@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
@@ -56,29 +57,40 @@ def _validate_int(val: Any, name: str, min_v: int = 1, max_v: int = 1000) -> int
     return int(val)
 
 
+@dataclass(frozen=True)
+class TrackerUpdateResult:
+    """Result of vehicle tracking step on a single frame."""
+    detections: List[VehicleDetection]
+    is_healthy: bool = True
+    failure_reason: Optional[str] = None
+
+
 class ParkingByteTracker:
     """
     Session-local ByteTrack wrapper for multi-vehicle tracking across parking video frames.
     - Strictly session-local: fresh instance created per job, tracks never leak across sessions.
     - Preserves raw vehicle detections while mapping stable integer track IDs.
-    - Tolerates brief detector misses without dropping track identities.
+    - Uses runtime validated video FPS for BYTETracker dynamics.
+    - Enforces consecutive min_hits tracking and bounded track memory.
     """
 
     def __init__(
         self,
         config_path: Optional[Path | str] = None,
-        track_high_thresh: float = 0.25,
-        track_low_thresh: float = 0.10,
-        new_track_thresh: float = 0.30,
-        track_buffer: int = 30,
-        match_thresh: float = 0.80,
         fps: int = 30,
-        min_hits: int = 2,
         root_dir: Optional[Path] = None,
     ) -> None:
         self.root_dir = (root_dir or Path(__file__).resolve().parent.parent.parent).resolve()
         tracking_dir = self.root_dir / "configs" / "tracking"
         self.config_sha256 = ""
+        self.fps = max(1, int(round(fps)))
+
+        track_high_thresh = 0.25
+        track_low_thresh = 0.10
+        new_track_thresh = 0.30
+        track_buffer = 30
+        match_thresh = 0.80
+        min_hits = 2
 
         if config_path is not None:
             config_path_str = str(config_path).strip()
@@ -115,26 +127,51 @@ class ParkingByteTracker:
             if not isinstance(raw, dict):
                 raise ValueError(f"ByteTrack YAML content must be a dictionary, got {type(raw).__name__}")
 
-            ALLOWED_KEYS = {
+            REQUIRED_KEYS = {
                 "schema_version", "tracker_type", "track_high_thresh",
                 "track_low_thresh", "new_track_thresh", "track_buffer",
-                "match_thresh", "fps", "min_hits"
+                "match_thresh", "min_hits"
             }
-            for k in raw.keys():
-                if k not in ALLOWED_KEYS:
-                    raise ValueError(f"Unknown field in ByteTrack YAML config: '{k}'")
+            if set(raw.keys()) != REQUIRED_KEYS:
+                missing = REQUIRED_KEYS - set(raw.keys())
+                extra = set(raw.keys()) - REQUIRED_KEYS
+                if missing:
+                    raise ValueError(f"ByteTrack YAML missing required fields: {missing}")
+                if extra:
+                    raise ValueError(f"Unknown field in ByteTrack YAML config: {extra}")
 
-            track_high_thresh = _validate_float(raw.get("track_high_thresh", track_high_thresh), "track_high_thresh", 0.01, 1.0)
-            track_low_thresh = _validate_float(raw.get("track_low_thresh", track_low_thresh), "track_low_thresh", 0.01, 1.0)
-            new_track_thresh = _validate_float(raw.get("new_track_thresh", new_track_thresh), "new_track_thresh", 0.01, 1.0)
-            track_buffer = _validate_int(raw.get("track_buffer", track_buffer), "track_buffer", 1, 1000)
-            match_thresh = _validate_float(raw.get("match_thresh", match_thresh), "match_thresh", 0.01, 1.0)
-            fps = _validate_int(raw.get("fps", fps), "fps", 1, 240)
-            if "min_hits" in raw:
-                min_hits = _validate_int(raw["min_hits"], "min_hits", 1, 100)
+            # Validate schema_version
+            s_ver = raw["schema_version"]
+            if isinstance(s_ver, bool) or not isinstance(s_ver, int) or s_ver != 1:
+                raise ValueError(f"Unsupported ByteTrack schema_version: {s_ver} (must be integer 1)")
+
+            # Validate tracker_type
+            t_type = raw["tracker_type"]
+            if not isinstance(t_type, str) or t_type != "bytetrack":
+                raise ValueError(f"Unsupported tracker_type: '{t_type}' (must be 'bytetrack')")
+
+            track_high_thresh = _validate_float(raw["track_high_thresh"], "track_high_thresh", 0.01, 1.0)
+            track_low_thresh = _validate_float(raw["track_low_thresh"], "track_low_thresh", 0.01, 1.0)
+            new_track_thresh = _validate_float(raw["new_track_thresh"], "new_track_thresh", 0.01, 1.0)
+            track_buffer = _validate_int(raw["track_buffer"], "track_buffer", 1, 1000)
+            match_thresh = _validate_float(raw["match_thresh"], "match_thresh", 0.01, 1.0)
+            min_hits = _validate_int(raw["min_hits"], "min_hits", 1, 100)
+
+            # Threshold ordering validation
+            if not (track_low_thresh < track_high_thresh):
+                raise ValueError(
+                    f"Incoherent threshold ordering: track_low_thresh ({track_low_thresh}) must be < track_high_thresh ({track_high_thresh})"
+                )
+            if not (track_low_thresh <= new_track_thresh <= 1.0):
+                raise ValueError(
+                    f"Incoherent threshold ordering: new_track_thresh ({new_track_thresh}) must be between track_low_thresh ({track_low_thresh}) and 1.0"
+                )
 
         self.min_hits = min_hits
-        self._track_hit_counts: Dict[int, int] = {}
+        self.track_buffer = track_buffer
+        self._track_consecutive_hits: Dict[int, int] = {}
+        self._track_last_seen_frame: Dict[int, int] = {}
+
         import types
         self._args = types.SimpleNamespace(
             tracker_type="bytetrack",
@@ -143,42 +180,57 @@ class ParkingByteTracker:
             new_track_thresh=new_track_thresh,
             track_buffer=track_buffer,
             match_thresh=match_thresh,
-            fps=fps,
             fuse_score=True,
             gmc_method="none",
             proximity_thresh=0.5,
             appearance_thresh=0.25,
             with_reid=False,
+            fps=self.fps,
+            frame_rate=self.fps,
         )
-        self._tracker = BYTETracker(self._args)
+        try:
+            self._tracker = BYTETracker(self._args, frame_rate=self.fps)
+        except TypeError:
+            self._tracker = BYTETracker(self._args)
         self._last_frame_idx: int = -1
 
     def reset(self) -> None:
         """Reset tracker state completely between jobs."""
-        self._tracker = BYTETracker(self._args)
+        try:
+            self._tracker = BYTETracker(self._args, frame_rate=self.fps)
+        except TypeError:
+            self._tracker = BYTETracker(self._args)
         self._last_frame_idx = -1
-        self._track_hit_counts.clear()
+        self._track_consecutive_hits.clear()
+        self._track_last_seen_frame.clear()
 
     def update_tracks(
         self,
         detections: List[VehicleDetection],
         frame_idx: int,
         frame_shape: Tuple[int, int] = (1080, 1920),
-    ) -> List[VehicleDetection]:
+    ) -> TrackerUpdateResult:
         """
         Update ByteTrack with detections from the current frame and assign stable track IDs.
-        Returns the detections updated with track_id fields.
+        Returns a TrackerUpdateResult containing updated detections and tracker health.
         """
         self._last_frame_idx = frame_idx
+
+        # Prune expired track IDs to bound memory
+        expired = [tid for tid, last_f in self._track_last_seen_frame.items() if (frame_idx - last_f) > (self.track_buffer * 2)]
+        for tid in expired:
+            self._track_consecutive_hits.pop(tid, None)
+            self._track_last_seen_frame.pop(tid, None)
 
         if not detections:
             empty_tensor = torch.empty((0, 6), dtype=torch.float32)
             boxes = Boxes(empty_tensor, orig_shape=frame_shape)
             try:
                 self._tracker.update(boxes)
+                return TrackerUpdateResult(detections=[], is_healthy=True)
             except Exception as e:
-                logger.debug(f"Tracker empty update exception: {e}")
-            return []
+                logger.warning(f"Tracker empty update exception on frame {frame_idx}: {e}")
+                return TrackerUpdateResult(detections=[], is_healthy=False, failure_reason=str(e))
 
         rows = []
         for det in detections:
@@ -187,7 +239,7 @@ class ParkingByteTracker:
                 rows.append([float(x1), float(y1), float(x2), float(y2), float(det.confidence), float(det.class_id)])
 
         if not rows:
-            return list(detections)
+            return TrackerUpdateResult(detections=list(detections), is_healthy=True)
 
         dets_tensor = torch.tensor(rows, dtype=torch.float32)
         boxes = Boxes(dets_tensor, orig_shape=frame_shape)
@@ -196,13 +248,16 @@ class ParkingByteTracker:
             online_targets = self._tracker.update(boxes)
         except Exception as e:
             logger.warning(f"ByteTrack update failed on frame {frame_idx}: {e}")
-            return list(detections)
+            return TrackerUpdateResult(
+                detections=list(detections),
+                is_healthy=False,
+                failure_reason=f"ByteTrack update exception: {e}",
+            )
 
         # Extract online targets (tlbr and track_id)
         target_tracks: List[Tuple[int, Tuple[float, float, float, float]]] = []
         for target in online_targets:
             try:
-                # Target can be STrack object with .tlbr and .track_id or ndarray
                 if hasattr(target, "tlbr") and hasattr(target, "track_id"):
                     tlbr = target.tlbr
                     tid = int(target.track_id)
@@ -233,8 +288,18 @@ class ParkingByteTracker:
 
             if matched_tid is not None:
                 matched_track_ids.add(matched_tid)
-                self._track_hit_counts[matched_tid] = self._track_hit_counts.get(matched_tid, 0) + 1
-                assigned_tid = matched_tid if self._track_hit_counts[matched_tid] >= self.min_hits else None
+
+                # Check consecutive hits
+                last_seen = self._track_last_seen_frame.get(matched_tid, -2)
+                if last_seen == frame_idx - 1:
+                    self._track_consecutive_hits[matched_tid] = self._track_consecutive_hits.get(matched_tid, 0) + 1
+                else:
+                    self._track_consecutive_hits[matched_tid] = 1
+
+                self._track_last_seen_frame[matched_tid] = frame_idx
+                consecutive_count = self._track_consecutive_hits[matched_tid]
+
+                assigned_tid = matched_tid if consecutive_count >= self.min_hits else None
                 updated_det = VehicleDetection(
                     class_id=det.class_id,
                     class_name=det.class_name,
@@ -254,4 +319,4 @@ class ParkingByteTracker:
                 )
             updated_detections.append(updated_det)
 
-        return updated_detections
+        return TrackerUpdateResult(detections=updated_detections, is_healthy=True)

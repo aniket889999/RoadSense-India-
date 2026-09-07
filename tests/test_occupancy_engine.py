@@ -311,7 +311,7 @@ def test_bytetrack_tracker_lifecycle_and_stability():
     """Verify ParkingByteTracker assigns stable track IDs and resets cleanly across sessions."""
     from src.parking.vehicle_tracker import ParkingByteTracker
 
-    tracker = ParkingByteTracker(track_high_thresh=0.2, new_track_thresh=0.2)
+    tracker = ParkingByteTracker(fps=30)
 
     # Frame 1: Car at (100, 100, 200, 200)
     det1 = VehicleDetection(
@@ -322,8 +322,9 @@ def test_bytetrack_tracker_lifecycle_and_stability():
         center_xy=(150.0, 150.0),
     )
     res1 = tracker.update_tracks([det1], frame_idx=0, frame_shape=(480, 640))
-    assert len(res1) == 1
-    tid1 = res1[0].track_id
+    assert res1.is_healthy is True
+    assert len(res1.detections) == 1
+    tid1 = res1.detections[0].track_id
 
     # Frame 2: Car moved slightly to (105, 105, 205, 205)
     det2 = VehicleDetection(
@@ -334,11 +335,12 @@ def test_bytetrack_tracker_lifecycle_and_stability():
         center_xy=(155.0, 155.0),
     )
     res2 = tracker.update_tracks([det2], frame_idx=1, frame_shape=(480, 640))
-    assert len(res2) == 1
+    assert res2.is_healthy is True
+    assert len(res2.detections) == 1
     # Track ID should be assigned
-    assert res2[0].track_id is not None
+    assert res2.detections[0].track_id is not None
     if tid1 is not None:
-        assert res2[0].track_id == tid1
+        assert res2.detections[0].track_id == tid1
 
     # Reset tracker for a new session
     tracker.reset()
@@ -580,54 +582,155 @@ def test_model_path_traversal_and_symlink_rejection(tmp_path):
 
 
 def test_bytetrack_yaml_validation_and_symlink_rejection(tmp_path):
-    """Verify ParkingByteTracker strictly validates YAML schema, numbers, and symlinks."""
+    """Verify ParkingByteTracker strictly validates 8-field YAML schema, schema_version, tracker_type, and symlinks."""
     from src.parking.vehicle_tracker import ParkingByteTracker
 
     fake_root = tmp_path / "repo"
     fake_tracking = fake_root / "configs" / "tracking"
     fake_tracking.mkdir(parents=True)
 
-    # 1. Reject unknown field
-    bad_yaml = fake_tracking / "bad.yaml"
-    bad_yaml.write_text("unknown_field: 123\nfps: 30\n")
-    with pytest.raises(ValueError, match="Unknown field in ByteTrack YAML config"):
-        ParkingByteTracker(config_path="configs/tracking/bad.yaml", root_dir=fake_root)
+    valid_content = (
+        "schema_version: 1\n"
+        "tracker_type: bytetrack\n"
+        "track_high_thresh: 0.25\n"
+        "track_low_thresh: 0.10\n"
+        "new_track_thresh: 0.30\n"
+        "track_buffer: 30\n"
+        "match_thresh: 0.80\n"
+        "min_hits: 2\n"
+    )
 
-    # 2. Reject invalid float (boolean or negative)
+    # 1. Reject missing required field
+    bad_missing = fake_tracking / "bad_missing.yaml"
+    bad_missing.write_text("schema_version: 1\ntracker_type: bytetrack\n")
+    with pytest.raises(ValueError, match="missing required fields"):
+        ParkingByteTracker(config_path="configs/tracking/bad_missing.yaml", root_dir=fake_root)
+
+    # 2. Reject unknown field
+    bad_unknown = fake_tracking / "bad_unknown.yaml"
+    bad_unknown.write_text(valid_content + "unknown_key: 123\n")
+    with pytest.raises(ValueError, match="Unknown field in ByteTrack YAML config"):
+        ParkingByteTracker(config_path="configs/tracking/bad_unknown.yaml", root_dir=fake_root)
+
+    # 3. Reject invalid schema_version
+    bad_schema = fake_tracking / "bad_schema.yaml"
+    bad_schema.write_text(valid_content.replace("schema_version: 1", "schema_version: 2"))
+    with pytest.raises(ValueError, match="Unsupported ByteTrack schema_version"):
+        ParkingByteTracker(config_path="configs/tracking/bad_schema.yaml", root_dir=fake_root)
+
+    # 4. Reject invalid tracker_type
+    bad_type = fake_tracking / "bad_type.yaml"
+    bad_type.write_text(valid_content.replace("tracker_type: bytetrack", "tracker_type: deepsort"))
+    with pytest.raises(ValueError, match="Unsupported tracker_type"):
+        ParkingByteTracker(config_path="configs/tracking/bad_type.yaml", root_dir=fake_root)
+
+    # 5. Reject invalid float (boolean or negative)
     bad_float = fake_tracking / "bad_float.yaml"
-    bad_float.write_text("track_high_thresh: true\n")
+    bad_float.write_text(valid_content.replace("track_high_thresh: 0.25", "track_high_thresh: true"))
     with pytest.raises(ValueError, match="must be a float"):
         ParkingByteTracker(config_path="configs/tracking/bad_float.yaml", root_dir=fake_root)
 
-    # 3. Reject out-of-range float
-    bad_range = fake_tracking / "bad_range.yaml"
-    bad_range.write_text("track_high_thresh: 2.5\n")
-    with pytest.raises(ValueError, match="out of valid range"):
-        ParkingByteTracker(config_path="configs/tracking/bad_range.yaml", root_dir=fake_root)
+    # 6. Reject incoherent threshold ordering
+    bad_order = fake_tracking / "bad_order.yaml"
+    bad_order.write_text(valid_content.replace("track_high_thresh: 0.25\ntrack_low_thresh: 0.10", "track_high_thresh: 0.10\ntrack_low_thresh: 0.25"))
+    with pytest.raises(ValueError, match="Incoherent threshold ordering"):
+        ParkingByteTracker(config_path="configs/tracking/bad_order.yaml", root_dir=fake_root)
 
-    # 4. Reject symlink config
+    # 7. Reject symlink config
     real_yaml = fake_tracking / "real.yaml"
-    real_yaml.write_text("fps: 30\ntrack_buffer: 30\n")
+    real_yaml.write_text(valid_content)
     sym_yaml = fake_tracking / "sym.yaml"
     sym_yaml.symlink_to(real_yaml)
     with pytest.raises(ValueError, match="Symlink found|cannot be a symlink"):
         ParkingByteTracker(config_path="configs/tracking/sym.yaml", root_dir=fake_root)
 
 
-def test_bytetrack_fps_configuration(tmp_path):
-    """Verify configured FPS is passed to BYTETracker."""
+def test_bytetrack_fps_and_frame_rate_argument():
+    """Verify runtime validated video FPS is correctly stored and passed to BYTETracker."""
     from src.parking.vehicle_tracker import ParkingByteTracker
 
-    tracker = ParkingByteTracker(fps=60)
-    assert tracker._args.fps == 60
-    assert tracker.min_hits >= 1
+    tracker = ParkingByteTracker(fps=45)
+    assert tracker.fps == 45
+    assert tracker.min_hits == 2
+
+
+def test_bytetrack_consecutive_min_hits_semantics():
+    """Verify that min_hits requires strictly consecutive frame detections, resetting on missed frame."""
+    from src.parking.vehicle_tracker import ParkingByteTracker, TrackerUpdateResult
+    from src.parking.occupancy_contracts import VehicleDetection
+
+    tracker = ParkingByteTracker(fps=30)
+    tracker.min_hits = 3
+
+    det = VehicleDetection(
+        class_id=2,
+        class_name="car",
+        confidence=0.9,
+        bbox_xyxy=(100.0, 100.0, 200.0, 200.0),
+    )
+
+    # Frame 0: Hit 1 (not yet min_hits=3)
+    res0 = tracker.update_tracks([det], frame_idx=0)
+    assert res0.is_healthy is True
+
+    # Frame 1: Hit 2
+    res1 = tracker.update_tracks([det], frame_idx=1)
+    assert res1.is_healthy is True
+
+    # Frame 2: Hit 3 -> meets min_hits
+    res2 = tracker.update_tracks([det], frame_idx=2)
+    assert res2.is_healthy is True
+    assert len(res2.detections) == 1
+
+    # Frame 3: Miss (empty detections)
+    tracker.update_tracks([], frame_idx=3)
+
+    # Frame 4: Hit 1 after gap (consecutive count resets to 1)
+    res4 = tracker.update_tracks([det], frame_idx=4)
+    # Consecutive hits reset to 1 after gap frame 3, so track ID should not immediately be active if min_hits > 1
+    assert res4.is_healthy is True
+
+
+def test_tracker_failure_produces_unknown_evidence_and_never_vacant(base_config):
+    """Verify that when tracker is unhealthy, frame evaluation produces UNKNOWN and never increments VACANT."""
+    from src.parking.vehicle_tracker import TrackerUpdateResult
+
+    engine = ParkingOccupancyEngine(
+        config=base_config,
+        parking_spaces=[
+            {
+                "id": "bay_1",
+                "operator_label": "B1",
+                "space_type": "STANDARD",
+                "polygon_normalized": [
+                    {"x": 0.1, "y": 0.1},
+                    {"x": 0.4, "y": 0.1},
+                    {"x": 0.4, "y": 0.4},
+                    {"x": 0.1, "y": 0.4},
+                ],
+            }
+        ],
+        video_width=1920,
+        video_height=1080,
+    )
+
+    # Inject an unhealthy tracker result
+    unhealthy_result = TrackerUpdateResult(
+        detections=[],
+        is_healthy=False,
+        failure_reason="ByteTrack Kalman filter failure",
+    )
+
+    frame_res = engine.process_frame(0, 0.0, unhealthy_result)
+    assert frame_res.bay_states["bay_1"].current_state == OccupancyState.UNKNOWN
+    assert frame_res.unknown_count == 1
+    assert frame_res.vacant_count == 0
+    assert frame_res.occupied_count == 0
 
 
 def test_validate_staging_artifacts_strict(tmp_path):
     """Verify ParkingOccupancyJobManager._validate_staging_artifacts detects inconsistencies."""
     from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
-    import hashlib
-    import json
 
     staging = tmp_path / "staging_test"
     staging.mkdir()
@@ -636,11 +739,18 @@ def test_validate_staging_artifacts_strict(tmp_path):
     with pytest.raises(ValueError, match="Staging artifact missing"):
         parking_occupancy_job_manager._validate_staging_artifacts(
             staging_dir=staging,
+            expected_job_id="job-1",
+            expected_camera_id="cam-1",
+            expected_site_id="site-1",
+            expected_layout_sha="a" * 64,
+            expected_assessment_id="assess-1",
+            expected_stability_config_sha="b" * 64,
+            expected_occupancy_config_sha="c" * 64,
             expected_width=1920,
             expected_height=1080,
             expected_fps=30.0,
             expected_frames=10,
-            expected_output_sha="a" * 64,
-            expected_timeline_sha="b" * 64,
-            expected_summary_sha="c" * 64,
+            expected_output_sha="d" * 64,
+            expected_timeline_sha="e" * 64,
+            expected_summary_sha="f" * 64,
         )

@@ -14,6 +14,7 @@ import {
   CameraStabilityAuditEvent,
   ParkingOccupancyJob,
   ParkingOccupancyJobCancelResponse,
+  ParkingValidationEvidenceReport,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -396,4 +397,30 @@ export function getOccupancyManifestUrl(jobId: string): string {
 
 export function getOccupancyTimelineUrl(jobId: string): string {
   return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/timeline`;
+}
+
+export function getOccupancySummaryUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/parking/jobs/${jobId}/summary`;
+}
+
+export async function deleteOccupancyJob(jobId: string): Promise<{ deleted: boolean; job_id: string; message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/parking/jobs/${jobId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to delete occupancy job');
+  }
+  return res.json();
+}
+
+export async function runSyntheticValidation(): Promise<ParkingValidationEvidenceReport> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/parking/validation/run-synthetic`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to execute synthetic validation');
+  }
+  return res.json();
 }

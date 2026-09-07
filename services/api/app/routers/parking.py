@@ -2203,3 +2203,99 @@ async def get_parking_job_timeline(
         media_type="application/x-ndjson",
         filename=f"occupancy_timeline_{job_id[:8]}.jsonl",
     )
+
+
+@router.get("/parking/jobs/{job_id}/summary")
+async def get_parking_job_summary(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the final occupancy summary JSON for a COMPLETE parking occupancy job."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if job.status != "COMPLETE":
+        raise HTTPException(status_code=404, detail=f"Summary is only available for COMPLETE jobs (current status: '{job.status}').")
+
+    manifest = job.manifest_json or {}
+    summary_sha = manifest.get("summary_sha256") or (manifest.get("software_versions") or {}).get("summary_sha256")
+    if not summary_sha or len(summary_sha) != 64:
+        raise HTTPException(status_code=404, detail="Summary SHA not found in manifest or is invalid.")
+
+    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_summary.json", summary_sha, job.status)
+    if not safe_path:
+        raise HTTPException(status_code=404, detail="Summary JSON file not available or failed integrity verification.")
+
+    return FileResponse(
+        path=safe_path,
+        media_type="application/json",
+        filename=f"occupancy_summary_{job_id[:8]}.json",
+    )
+
+
+@router.delete("/parking/jobs/{job_id}")
+async def delete_parking_occupancy_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Safely delete a parking occupancy job record and all associated local artifacts.
+    Enforces path confinement within MEDIA_ROOT/parking_jobs and prevents traversal / symlink escapes.
+    """
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    # Forbid deletion of actively executing or publishing jobs
+    active_statuses = {"VALIDATING", "DETECTING", "TRACKING", "CLASSIFYING_OCCUPANCY", "RENDERING", "ENCODING", "PUBLISHING"}
+    if job.status in active_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete job in active state '{job.status}'. Cancel the job first before deleting artifacts.",
+        )
+
+    # Confinded filesystem cleanup
+    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    jobs_root = media_root / "parking_jobs"
+    job_dir = jobs_root / job_id
+
+    if ".." not in job_dir.parts:
+        try:
+            resolved_jobs_root = jobs_root.resolve()
+            resolved_job_dir = job_dir.resolve()
+            if resolved_job_dir.is_relative_to(resolved_jobs_root) and resolved_job_dir.exists():
+                if not resolved_job_dir.is_symlink():
+                    import shutil
+                    shutil.rmtree(resolved_job_dir, ignore_errors=True)
+                    logger.info(f"Safely purged local artifacts for job {job_id} at {resolved_job_dir}")
+        except Exception as e:
+            logger.warning(f"Error purging artifact directory for job {job_id}: {e}")
+
+    # Remove database record
+    await db.delete(job)
+    await db.commit()
+
+    return {"deleted": True, "job_id": job_id, "message": f"Job {job_id} and associated artifacts safely removed."}
+
+
+@router.post("/parking/validation/run-synthetic")
+async def run_parking_synthetic_validation():
+    """
+    Execute the automated end-to-end synthetic validation runner on a stationary fixture.
+    Generates a deterministic zero-motion scene, validates the pipeline, and returns
+    a machine-readable validation evidence report.
+    """
+    from src.parking.validation_runner import run_stable_parking_e2e_validation
+    work_dir = Path(tempfile.mkdtemp(prefix="roadsense_synthetic_val_"))
+    try:
+        report = await run_stable_parking_e2e_validation(
+            work_dir=work_dir,
+            use_synthetic_detector_double=True,
+        )
+        return report.to_dict()
+    finally:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)

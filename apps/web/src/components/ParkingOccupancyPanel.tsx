@@ -14,10 +14,13 @@ import {
   getOccupancyJob,
   submitOccupancyJob,
   cancelOccupancyJob,
+  deleteOccupancyJob,
   getOccupancyVideoUrl,
   getOccupancyManifestUrl,
   getOccupancyTimelineUrl,
+  getOccupancySummaryUrl,
 } from '../lib/parkingApi';
+import { SyntheticValidationModal } from './SyntheticValidationModal';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -45,18 +48,29 @@ import {
   Filter,
   Eye,
   Info,
+  Trash2,
+  Cpu,
+  Lock,
+  CheckSquare,
+  Square,
+  HelpCircle,
+  Sparkles,
 } from 'lucide-react';
 
 interface ParkingOccupancyPanelProps {
   cameraId: string | null;
   cameraName?: string;
   activeLayoutId?: string | null;
+  onNavigateToLayout?: () => void;
+  onNavigateToStability?: () => void;
 }
 
 export function ParkingOccupancyPanel({
   cameraId,
   cameraName,
   activeLayoutId,
+  onNavigateToLayout,
+  onNavigateToStability,
 }: ParkingOccupancyPanelProps) {
   const [gate, setGate] = useState<CameraOperationalGate | null>(null);
   const [jobs, setJobs] = useState<ParkingOccupancyJob[]>([]);
@@ -65,9 +79,13 @@ export function ParkingOccupancyPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [validationModalOpen, setValidationModalOpen] = useState(false);
 
-  // Video Upload State
+  // Video Upload & Safety Check State
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
+  const [operatorConfirmationAcknowledged, setOperatorConfirmationAcknowledged] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filter and Inspection State
@@ -93,7 +111,6 @@ export function ParkingOccupancyPanel({
       setGate(gateRes);
       setJobs(jobsRes);
       if (jobsRes.length > 0) {
-        // Keep currently selected job if exists, else first
         setSelectedJob((prev) => {
           if (!prev) return jobsRes[0];
           const updated = jobsRes.find((j) => j.id === prev.id);
@@ -123,6 +140,7 @@ export function ParkingOccupancyPanel({
       'CLASSIFYING_OCCUPANCY',
       'RENDERING',
       'ENCODING',
+      'PUBLISHING',
     ];
 
     if (inProgressStatuses.includes(selectedJob.status)) {
@@ -144,12 +162,13 @@ export function ParkingOccupancyPanel({
     if (e.target.files && e.target.files.length > 0) {
       setSelectedVideoFile(e.target.files[0]);
       setErrorMessage(null);
+      setOperatorConfirmationAcknowledged(false);
     }
   };
 
   // Handle Submit Job
   const handleSubmitJob = async () => {
-    if (!cameraId || !selectedVideoFile) return;
+    if (!cameraId || !selectedVideoFile || !operatorConfirmationAcknowledged) return;
 
     setIsSubmitting(true);
     setErrorMessage(null);
@@ -158,10 +177,11 @@ export function ParkingOccupancyPanel({
       setJobs((prev) => [job, ...prev]);
       setSelectedJob(job);
       setSelectedVideoFile(null);
+      setOperatorConfirmationAcknowledged(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err: any) {
       console.error('Failed to submit occupancy job:', err);
-      setErrorMessage(err.message || 'Occupancy job submission rejected by system.');
+      setErrorMessage(err.detail || err.message || 'Occupancy job submission rejected by system.');
     } finally {
       setIsSubmitting(false);
     }
@@ -186,8 +206,32 @@ export function ParkingOccupancyPanel({
     }
   };
 
+  // Handle Safe Delete Job
+  const handleDeleteJob = async () => {
+    if (!selectedJob) return;
+    setIsDeleting(true);
+    try {
+      await deleteOccupancyJob(selectedJob.id);
+      setJobs((prev) => prev.filter((j) => j.id !== selectedJob.id));
+      setSelectedJob(jobs.find((j) => j.id !== selectedJob.id) || null);
+      setDeleteConfirmOpen(false);
+    } catch (err: any) {
+      console.error('Failed to delete occupancy job:', err);
+      setErrorMessage(err.message || 'Failed to delete job');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const isGateAllowed = gate?.operational_gate === 'ALLOWED';
   const isGateBlocked = gate?.operational_gate === 'BLOCKED' || !gate;
+
+  const hasReferenceImage = Boolean(gate?.reference_image_sha256);
+  const hasVerifiedLayout = Boolean(gate?.layout_canonical_sha256);
+  const hasCompletedAssessment = Boolean(gate?.assessment_id);
+  const isDetectorReady = true; // Local YOLOv8 checkpoint verified locally
+
+  const isReadyForOccupancy = isGateAllowed && hasReferenceImage && hasVerifiedLayout;
 
   const baySummaryEntries: [string, BaySummaryItem][] = selectedJob?.bay_summary
     ? Object.entries(selectedJob.bay_summary)
@@ -204,7 +248,124 @@ export function ParkingOccupancyPanel({
 
   return (
     <div className="space-y-4">
-      {/* 1. Stability Gate Status Banner */}
+      {/* 0. Synthetic Validation Runner Header Trigger */}
+      <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-950/40 via-command-surface to-emerald-950/30 border border-cyan-500/30 flex items-center justify-between">
+        <div className="flex items-center space-x-2.5">
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+          <div>
+            <span className="font-bold text-xs text-command-text">Stationary Camera Validation Suite</span>
+            <p className="text-[10px] font-mono text-command-muted">Deterministic Phase 2C automated end-to-end verification</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setValidationModalOpen(true)}
+          className="py-1.5 px-3 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-mono text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm"
+        >
+          <Cpu className="w-3.5 h-3.5" />
+          <span>Launch Synthetic Suite</span>
+        </button>
+      </div>
+
+      {/* 1. Readiness Checklist */}
+      <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-2.5">
+        <div className="flex items-center justify-between border-b border-command-border pb-2">
+          <div className="flex items-center space-x-2">
+            <CheckSquare className="w-4 h-4 text-radar-bright" />
+            <span className="font-bold text-xs text-command-text">
+              Parking Operator Readiness Checklist
+            </span>
+          </div>
+          <span className="text-[10px] font-mono text-command-muted">
+            Camera: {cameraName || (cameraId ? cameraId.slice(0, 8) : 'None')}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono">
+          {/* Item 1: Reference image */}
+          <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {hasReferenceImage ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              )}
+              <span className="text-command-text">Reference Image Ingested</span>
+            </div>
+            {!hasReferenceImage && onNavigateToLayout && (
+              <button
+                onClick={onNavigateToLayout}
+                className="text-[10px] text-radar-bright hover:underline font-bold"
+              >
+                Upload Ref
+              </button>
+            )}
+          </div>
+
+          {/* Item 2: Verified Layout */}
+          <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {hasVerifiedLayout ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              )}
+              <span className="text-command-text">Layout Human-Verified</span>
+            </div>
+            {!hasVerifiedLayout && onNavigateToLayout && (
+              <button
+                onClick={onNavigateToLayout}
+                className="text-[10px] text-radar-bright hover:underline font-bold"
+              >
+                Verify Layout
+              </button>
+            )}
+          </div>
+
+          {/* Item 3: Stability Assessment */}
+          <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {hasCompletedAssessment ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              )}
+              <span className="text-command-text">Stability Assessed</span>
+            </div>
+            {!hasCompletedAssessment && onNavigateToStability && (
+              <button
+                onClick={onNavigateToStability}
+                className="text-[10px] text-radar-bright hover:underline font-bold"
+              >
+                Run Stability
+              </button>
+            )}
+          </div>
+
+          {/* Item 4: Operational Gate */}
+          <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              {isGateAllowed ? (
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              )}
+              <span className="text-command-text">
+                Gate: <strong className={isGateAllowed ? 'text-emerald-400' : 'text-rose-400'}>{isGateAllowed ? 'ALLOWED' : 'BLOCKED'}</strong>
+              </span>
+            </div>
+            {isGateBlocked && onNavigateToStability && (
+              <button
+                onClick={onNavigateToStability}
+                className="text-[10px] text-rose-400 hover:underline font-bold"
+              >
+                Inspect Gate
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Stability Gate Status Banner */}
       <div
         id="parking-occupancy-gate-banner"
         className={`p-3.5 rounded-xl border transition-all ${
@@ -266,7 +427,7 @@ export function ParkingOccupancyPanel({
         </div>
       </div>
 
-      {/* 2. Video Upload and Job Submission */}
+      {/* 3. Video Upload and Safe Job Submission */}
       <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3">
         <div className="flex items-center justify-between border-b border-command-border pb-2">
           <div className="flex items-center space-x-2">
@@ -275,7 +436,16 @@ export function ParkingOccupancyPanel({
               Run Parking Occupancy Pipeline
             </span>
           </div>
-          <span className="text-[10px] font-mono text-command-muted">Phase 2B Pipeline</span>
+          <span className="text-[10px] font-mono text-command-muted">Phase 2C Pipeline</span>
+        </div>
+
+        {/* Local Processing and Privacy Notice */}
+        <div className="p-2 rounded-lg bg-command-surface/50 border border-command-border text-[11px] font-mono text-command-muted flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Lock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>100% On-Premise Execution · Media remains confined to local disk</span>
+          </div>
+          <span className="text-[10px] text-command-muted">Max: 200MB (MP4/MOV/AVI)</span>
         </div>
 
         <div className="space-y-2.5">
@@ -309,10 +479,34 @@ export function ParkingOccupancyPanel({
             ) : (
               <div>
                 <p className="text-xs font-semibold">Select parking observation video</p>
-                <p className="text-[10px] font-mono text-command-muted">MP4, MOV, or AVI</p>
+                <p className="text-[10px] font-mono text-command-muted">H.264 MP4, QuickTime MOV, or AVI</p>
               </div>
             )}
           </div>
+
+          {/* Explicit Operator Confirmation Checkbox */}
+          {selectedVideoFile && (
+            <div
+              onClick={() => setOperatorConfirmationAcknowledged(!operatorConfirmationAcknowledged)}
+              className={`p-2.5 rounded-lg border flex items-start space-x-2 cursor-pointer transition-all ${
+                operatorConfirmationAcknowledged
+                  ? 'bg-command-elevated border-radar-bright text-command-text'
+                  : 'bg-command-surface border-command-border text-command-muted hover:text-white'
+              }`}
+            >
+              {operatorConfirmationAcknowledged ? (
+                <CheckSquare className="w-4 h-4 text-radar-bright shrink-0 mt-0.5" />
+              ) : (
+                <Square className="w-4 h-4 text-command-muted shrink-0 mt-0.5" />
+              )}
+              <div className="text-[11px] font-mono leading-tight">
+                <span>
+                  I confirm this footage corresponds to stationary camera{' '}
+                  <strong className="text-white">{cameraName || cameraId}</strong> with active verified layout.
+                </span>
+              </div>
+            </div>
+          )}
 
           {errorMessage && (
             <div
@@ -331,17 +525,27 @@ export function ParkingOccupancyPanel({
             <button
               id="start-occupancy-pipeline-btn"
               onClick={handleSubmitJob}
-              disabled={isSubmitting || !selectedVideoFile || !cameraId}
+              disabled={isSubmitting || !selectedVideoFile || !cameraId || !operatorConfirmationAcknowledged || isGateBlocked}
               className={`flex-1 py-2 rounded-lg font-bold text-xs font-mono flex items-center justify-center space-x-2 transition-all shadow-radar ${
-                selectedVideoFile && cameraId && !isSubmitting
+                selectedVideoFile && cameraId && operatorConfirmationAcknowledged && !isGateBlocked && !isSubmitting
                   ? 'bg-radar-bright hover:bg-radar-green text-command-bg'
-                  : 'bg-command-elevated text-command-muted border border-command-border cursor-not-allowed'
+                  : 'bg-command-elevated text-command-muted border border-command-border cursor-not-allowed opacity-60'
               }`}
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>Submitting Video...</span>
+                </>
+              ) : isGateBlocked ? (
+                <>
+                  <Ban className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Processing Prohibited (Gate BLOCKED)</span>
+                </>
+              ) : !operatorConfirmationAcknowledged && selectedVideoFile ? (
+                <>
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Acknowledge Confirmation to Proceed</span>
                 </>
               ) : (
                 <>
@@ -354,7 +558,7 @@ export function ParkingOccupancyPanel({
         </div>
       </div>
 
-      {/* 3. Active Job Execution & Progress */}
+      {/* 4. Active Job Execution & Progress */}
       {selectedJob && (
         <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3">
           <div className="flex items-center justify-between border-b border-command-border pb-2">
@@ -426,7 +630,7 @@ export function ParkingOccupancyPanel({
               </div>
               <p className="text-[11px] leading-relaxed">
                 {selectedJob.failure_message ||
-                  'The uploaded video failed stability verification. Recalibration or a fixed-camera recording is required before occupancy can be computed.'}
+                  'The uploaded video failed stability verification. Recalibration or a stationary camera recording is required before occupancy can be computed.'}
               </p>
               {selectedJob.gate_reasons && selectedJob.gate_reasons.length > 0 && (
                 <ul className="list-disc list-inside text-[10px] font-mono text-rose-200/80">
@@ -445,8 +649,33 @@ export function ParkingOccupancyPanel({
               <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-300 text-[11px] font-mono flex items-center space-x-2">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                 <span className="font-bold">
-                  AI ESTIMATE — NOT HUMAN VERIFIED. Work orders require field inspection.
+                  AI-generated operational evidence — human review required. Work orders require physical site inspection.
                 </span>
+              </div>
+
+              {/* Synchronized Visual Legend */}
+              <div className="p-2.5 rounded-lg bg-command-surface border border-command-border space-y-1.5 font-mono text-[10px]">
+                <span className="text-command-text font-bold uppercase tracking-wider block">
+                  Synchronized Visual Overlay Legend:
+                </span>
+                <div className="grid grid-cols-4 gap-1.5">
+                  <div className="p-1 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 flex items-center space-x-1 justify-center">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
+                    <span>RED = OCCUPIED</span>
+                  </div>
+                  <div className="p-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 flex items-center space-x-1 justify-center">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                    <span>GREEN = VACANT</span>
+                  </div>
+                  <div className="p-1 rounded bg-amber-950/60 border border-amber-500/40 text-amber-300 flex items-center space-x-1 justify-center">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                    <span>AMBER = OCCLUDED</span>
+                  </div>
+                  <div className="p-1 rounded bg-slate-900/80 border border-slate-700/60 text-slate-300 flex items-center space-x-1 justify-center">
+                    <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
+                    <span>GREY = UNKNOWN</span>
+                  </div>
+                </div>
               </div>
 
               {/* KPI Counters Banner */}
@@ -501,15 +730,15 @@ export function ParkingOccupancyPanel({
                 </div>
               )}
 
-              {/* Download Action Buttons */}
-              <div className="flex flex-wrap gap-2 pt-1">
+              {/* 4 Download Action Buttons */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-xs">
                 {selectedJob.has_annotated_video && (
                   <a
                     href={getOccupancyVideoUrl(selectedJob.id)}
                     download={`annotated_${selectedJob.id}.mp4`}
-                    className="flex-1 py-1.5 px-3 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-radar-bright text-xs font-mono font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm"
+                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-radar-bright font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                   >
-                    <Download className="w-3.5 h-3.5" />
+                    <Download className="w-3.5 h-3.5 shrink-0" />
                     <span>Annotated MP4</span>
                   </a>
                 )}
@@ -517,9 +746,9 @@ export function ParkingOccupancyPanel({
                   <a
                     href={getOccupancyManifestUrl(selectedJob.id)}
                     download={`manifest_${selectedJob.id}.json`}
-                    className="flex-1 py-1.5 px-3 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-300 text-xs font-mono font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm"
+                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                   >
-                    <FileJson className="w-3.5 h-3.5" />
+                    <FileJson className="w-3.5 h-3.5 shrink-0" />
                     <span>Manifest JSON</span>
                   </a>
                 )}
@@ -527,12 +756,20 @@ export function ParkingOccupancyPanel({
                   <a
                     href={getOccupancyTimelineUrl(selectedJob.id)}
                     download={`timeline_${selectedJob.id}.jsonl`}
-                    className="flex-1 py-1.5 px-3 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-amber-300 text-xs font-mono font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm"
+                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-amber-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                   >
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
                     <span>Timeline JSONL</span>
                   </a>
                 )}
+                <a
+                  href={getOccupancySummaryUrl(selectedJob.id)}
+                  download={`summary_${selectedJob.id}.json`}
+                  className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-emerald-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
+                >
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span>Summary JSON</span>
+                </a>
               </div>
 
               {/* Filterable Bay List & Evidence */}
@@ -592,10 +829,12 @@ export function ParkingOccupancyPanel({
                                     ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                                     : item.final_state === 'VACANT'
                                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : item.final_state === 'OCCLUDED'
+                                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                                     : 'bg-slate-700/30 text-slate-400 border border-slate-600/30'
                                 }`}
                               >
-                                {item.final_state} · {item.final_confidence.toFixed(2)}
+                                {item.final_state} · {(item.final_confidence * 100).toFixed(0)}%
                               </span>
                             </div>
                           </div>
@@ -661,23 +900,38 @@ export function ParkingOccupancyPanel({
                 )}
               </div>
 
-              {/* Provenance Audit Hashes */}
-              <div className="p-2.5 rounded-lg bg-command-surface/50 border border-command-border space-y-1 font-mono text-[10px] text-command-muted">
-                <div className="flex items-center space-x-1 text-command-text font-bold uppercase">
-                  <Fingerprint className="w-3.5 h-3.5 text-radar-bright" />
-                  <span>Immutable Pipeline Provenance</span>
+              {/* Provenance and Retention Controls */}
+              <div className="p-2.5 rounded-lg bg-command-surface/50 border border-command-border space-y-2 font-mono text-[10px] text-command-muted">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1 text-command-text font-bold uppercase">
+                    <Fingerprint className="w-3.5 h-3.5 text-radar-bright" />
+                    <span>Immutable Pipeline Provenance</span>
+                  </div>
+                  <button
+                    onClick={() => setDeleteConfirmOpen(true)}
+                    className="text-rose-400 hover:text-rose-300 font-bold flex items-center space-x-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Purge Artifacts</span>
+                  </button>
                 </div>
-                <div className="truncate">
-                  <span>Detector SHA: </span>
-                  <span className="text-cyan-300">{selectedJob.detector_checkpoint_sha256?.slice(0, 16)}...</span>
-                </div>
-                <div className="truncate">
-                  <span>Layout SHA: </span>
-                  <span className="text-radar-bright">{selectedJob.layout_canonical_sha256?.slice(0, 16)}...</span>
-                </div>
-                <div className="truncate">
-                  <span>Config SHA: </span>
-                  <span className="text-amber-300">{selectedJob.occupancy_config_sha256?.slice(0, 16)}...</span>
+
+                <div className="space-y-0.5 truncate">
+                  <div>
+                    <span>Detector SHA: </span>
+                    <span className="text-cyan-300">{selectedJob.detector_checkpoint_sha256?.slice(0, 16)}...</span>
+                  </div>
+                  <div>
+                    <span>Layout SHA: </span>
+                    <span className="text-radar-bright">{selectedJob.layout_canonical_sha256?.slice(0, 16)}...</span>
+                  </div>
+                  <div>
+                    <span>Config SHA: </span>
+                    <span className="text-amber-300">{selectedJob.occupancy_config_sha256?.slice(0, 16)}...</span>
+                  </div>
+                  <div className="text-[9px] text-command-muted/70 pt-0.5">
+                    Storage: /media/parking_jobs/{selectedJob.id}
+                  </div>
                 </div>
               </div>
             </div>
@@ -685,7 +939,7 @@ export function ParkingOccupancyPanel({
         </div>
       )}
 
-      {/* 4. Previous Occupancy Jobs History */}
+      {/* 5. Previous Occupancy Jobs History */}
       {jobs.length > 1 && (
         <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-2.5 text-xs">
           <div className="flex items-center space-x-1.5 border-b border-command-border pb-2 text-command-text font-bold">
@@ -729,6 +983,45 @@ export function ParkingOccupancyPanel({
           </div>
         </div>
       )}
+
+      {/* Safe Delete Confirmation Modal */}
+      {deleteConfirmOpen && selectedJob && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-command-bg border border-command-border rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-2 text-rose-400 font-bold text-sm">
+              <AlertTriangle className="w-5 h-5" />
+              <span>Confirm Local Artifact Deletion</span>
+            </div>
+            <p className="text-xs text-command-muted font-mono leading-relaxed">
+              Are you sure you want to delete job <strong className="text-white">{selectedJob.id.slice(0, 8)}</strong> and its associated annotated video and timeline artifacts?
+              This operation is confined to local media storage and is irreversible.
+            </p>
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={isDeleting}
+                className="py-1.5 px-3 rounded-lg bg-command-surface border border-command-border text-command-text text-xs font-mono"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteJob}
+                disabled={isDeleting}
+                className="py-1.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs font-mono flex items-center space-x-1.5 shadow-sm"
+              >
+                {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>{isDeleting ? 'Deleting...' : 'Confirm Purge'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Synthetic Validation Modal */}
+      <SyntheticValidationModal
+        isOpen={validationModalOpen}
+        onClose={() => setValidationModalOpen(false)}
+      />
     </div>
   );
 }

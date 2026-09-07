@@ -796,6 +796,8 @@ export function ParkingLayoutView() {
               cameraId={selectedCameraId}
               cameraName={activeCamera?.name}
               activeLayoutId={activeLayout?.id}
+              onNavigateToStability={() => setActiveRightTab('stability')}
+              onNavigateToLayout={() => setActiveRightTab('editor')}
             />
           ) : activeRightTab === 'stability' ? (
             <CameraStabilityPanel

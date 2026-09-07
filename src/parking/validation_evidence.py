@@ -109,6 +109,7 @@ class ParkingValidationEvidenceReport:
             "total_state_transitions": self.total_state_transitions,
             "software_versions": self.software_versions,
             "git_commit_sha": self.git_commit_sha,
+            "git_sha": self.git_commit_sha,
             "created_at_utc": self.created_at_utc,
             "checks": [c.to_dict() for c in self.checks],
             "passed": self.passed,

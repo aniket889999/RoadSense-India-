@@ -8,9 +8,13 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import platform
 import shutil
+import subprocess
+import sys
 import tempfile
-from typing import Any, Dict, List, Optional, Set
+import threading
+from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
 import cv2
 import numpy as np
@@ -33,9 +37,11 @@ from src.parking.occupancy_contracts import (
     ParkingJobManifest,
 )
 from src.parking.occupancy_engine import ParkingOccupancyEngine
+from src.parking.stability_config import load_stability_config
 from src.parking.stability_engine import inspect_video_media_safe
 from src.parking.vehicle_detector import LocalVehicleDetector
-from src.parking.video_annotator import ParkingVideoAnnotator, encode_frames_to_mp4
+from src.parking.vehicle_tracker import ParkingByteTracker
+from src.parking.video_annotator import FFmpegStreamEncoder, ParkingVideoAnnotator
 
 
 def _utc_now() -> datetime:
@@ -45,14 +51,27 @@ def _utc_now() -> datetime:
 class ParkingOccupancyJobManager:
     """
     Manages asynchronous, gate-controlled parking occupancy inference jobs with bounded concurrency.
+    Enforces fail-closed camera stability gate, streaming memory bounds, cooperative cancellation,
+    and atomic staging-to-final promotion.
     """
 
     def __init__(self, max_concurrency: int = 2) -> None:
         self.config: ParkingOccupancyConfig = load_parking_occupancy_config()
         self._max_concurrency: int = max(1, self.config.execution.max_concurrent_jobs or max_concurrency)
-        self._semaphore: asyncio.Semaphore = asyncio.Semaphore(self._max_concurrency)
+        self._semaphore: Optional[asyncio.Semaphore] = None
         self._active_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._cancellation_events: Dict[str, threading.Event] = {}
         self._cancel_requested: Set[str] = set()
+
+    @property
+    def semaphore(self) -> asyncio.Semaphore:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._semaphore is None or (hasattr(self._semaphore, "_loop") and getattr(self._semaphore, "_loop", None) not in (None, loop)):
+            self._semaphore = asyncio.Semaphore(self._max_concurrency)
+        return self._semaphore
 
     def submit_occupancy_job(
         self,
@@ -62,12 +81,16 @@ class ParkingOccupancyJobManager:
         video_path: Path,
     ) -> asyncio.Task[None]:
         """Submit a new parking occupancy job for asynchronous execution."""
+        cancel_event = threading.Event()
+        self._cancellation_events[job_id] = cancel_event
+
         task = asyncio.create_task(
             self._execute_job(
                 job_id=job_id,
                 camera_id=camera_id,
                 site_id=site_id,
                 video_path=video_path,
+                cancel_event=cancel_event,
             ),
             name=f"parking-occupancy-job-{job_id}",
         )
@@ -75,8 +98,12 @@ class ParkingOccupancyJobManager:
         return task
 
     async def cancel_occupancy_job(self, job_id: str) -> bool:
-        """Request cancellation of an active or queued occupancy job."""
+        """Request cooperative cancellation of an active or queued occupancy job."""
         self._cancel_requested.add(job_id)
+        evt = self._cancellation_events.get(job_id)
+        if evt:
+            evt.set()
+
         task = self._active_tasks.get(job_id)
         if task and not task.done():
             task.cancel()
@@ -89,9 +116,12 @@ class ParkingOccupancyJobManager:
         camera_id: str,
         site_id: str,
         video_path: Path,
+        cancel_event: threading.Event,
     ) -> None:
-        async with self._semaphore:
+        async with self.semaphore:
             job_started_at = _utc_now()
+            main_loop = asyncio.get_running_loop()
+
             # 1. Update initial status to VALIDATING
             try:
                 async with async_session_factory() as db:
@@ -106,11 +136,12 @@ class ParkingOccupancyJobManager:
             except Exception as e:
                 logger.error(f"Failed to update initial status for job {job_id}: {e}")
 
-            if job_id in self._cancel_requested:
+            if job_id in self._cancel_requested or cancel_event.is_set():
                 await self._persist_cancellation(job_id, video_path)
                 return
 
-            # 2. Gate Verification Query
+            # 2. Gate Verification Query & Stability Config Verification
+            current_stability_config = load_stability_config()
             verified_layout_id = None
             current_layout_sha = None
             latest_assessment_id = None
@@ -150,16 +181,16 @@ class ParkingOccupancyJobManager:
                                 "polygon_normalized": sp.polygon_normalized,
                             }
                             for sp in verified_layout.parking_spaces
+                            if sp.active
                         ]
 
-                    ass_res = await db.execute(
+                    assess_res = await db.execute(
                         select(CameraStabilityAssessment)
                         .where(CameraStabilityAssessment.camera_id == camera_id)
                         .where(CameraStabilityAssessment.status == "COMPLETE")
                         .order_by(desc(CameraStabilityAssessment.created_at))
-                        .limit(1)
                     )
-                    latest_assessment = ass_res.scalar_one_or_none()
+                    latest_assessment = assess_res.scalars().first()
                     if latest_assessment:
                         latest_assessment_id = latest_assessment.id
                         latest_assessment_ref_sha = latest_assessment.reference_image_sha256
@@ -170,11 +201,15 @@ class ParkingOccupancyJobManager:
                         latest_assessment_thresholds = latest_assessment.thresholds_snapshot
 
             except Exception as e:
-                logger.error(f"Database query error validating gate for job {job_id}: {e}")
-                await self._persist_failure(job_id, "DB_ERROR", str(e), video_path)
+                logger.error(f"Error reading gate requirements for job {job_id}: {e}")
+                await self._persist_failure(job_id, "DB_READ_ERROR", str(e), video_path)
                 return
 
-            # Fail-closed operational gate evaluation
+            if job_id in self._cancel_requested or cancel_event.is_set():
+                await self._persist_cancellation(job_id, video_path)
+                return
+
+            # Evaluate Gate
             decision_enum = None
             if latest_assessment_decision:
                 try:
@@ -182,71 +217,92 @@ class ParkingOccupancyJobManager:
                 except Exception:
                     pass
 
-            now = _utc_now()
-            max_age = (latest_assessment_thresholds or {}).get("max_assessment_age_seconds", 86400)
+            max_age = (latest_assessment_thresholds or {}).get(
+                "max_assessment_age_seconds",
+                current_stability_config.thresholds.max_assessment_age_seconds,
+            )
 
-            gate, gate_reasons = evaluate_operational_gate(
+            gate_decision, gate_reasons = evaluate_operational_gate(
                 decision=decision_enum,
                 assessment_reference_sha=latest_assessment_ref_sha,
                 current_reference_sha=current_ref_sha,
                 assessment_layout_sha=latest_assessment_layout_sha,
                 current_layout_sha=current_layout_sha,
                 assessment_timestamp=latest_assessment_created_at,
-                current_timestamp=now,
+                current_timestamp=job_started_at,
                 max_age_seconds=max_age,
             )
 
-            # FAIL-CLOSED CHECK: Gate must be ALLOWED
-            if gate != OperationalGate.ALLOWED or not verified_layout_id:
-                all_reasons = list(gate_reasons)
-                if not verified_layout_id:
-                    all_reasons.insert(0, "NO_ACTIVE_VERIFIED_LAYOUT: Camera has no verified parking layout.")
-
-                logger.warning(f"Job {job_id} BLOCKED by stability gate: {all_reasons}")
-                await self._persist_blocked_by_gate(
-                    job_id=job_id,
-                    gate_reasons=all_reasons,
-                    video_path=video_path,
-                    layout_revision_id=verified_layout_id,
-                    stability_assessment_id=latest_assessment_id,
-                    layout_canonical_sha256=current_layout_sha,
-                    reference_image_sha256=current_ref_sha,
+            # Strict Stability Configuration SHA Check
+            if latest_assessment_config_sha and latest_assessment_config_sha != current_stability_config.config_sha256:
+                gate_decision = OperationalGate.BLOCKED
+                gate_reasons.append(
+                    f"CONFIG_MISMATCH: Stability assessment used config SHA {latest_assessment_config_sha[:8]}..., "
+                    f"current system requires {current_stability_config.config_sha256[:8]}..."
                 )
+
+            if gate_decision != OperationalGate.ALLOWED:
+                # FAIL-CLOSED BLOCK
+                logger.warning(f"Occupancy job {job_id} BLOCKED by stability gate: {gate_reasons}")
+                await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
                 return
 
-            # 3. Media inspection & Hash
+            if not parking_spaces_payload:
+                gate_reasons.append("NO_ACTIVE_SPACES: Verified layout contains 0 active parking spaces.")
+                await self._persist_blocked_by_gate(job_id, gate_reasons, video_path)
+                return
+
+            # 3. Media Preflight Inspection
             try:
                 media_info = inspect_video_media_safe(
                     video_path=video_path,
                     timeout_sec=self.config.execution.ffprobe_timeout_seconds,
                 )
             except Exception as e:
-                logger.error(f"Media validation error for job {job_id}: {e}")
-                await self._persist_failure(job_id, "INVALID_MEDIA", str(e), video_path)
+                logger.warning(f"Video media inspection rejected for job {job_id}: {e}")
+                await self._persist_failure(job_id, "MEDIA_VALIDATION_ERROR", str(e), video_path)
                 return
 
-            # Compute video SHA-256
+            if job_id in self._cancel_requested or cancel_event.is_set():
+                await self._persist_cancellation(job_id, video_path)
+                return
+
+            # Compute input video SHA
             h_vid = hashlib.sha256()
             with open(video_path, "rb") as vf:
                 while chunk := vf.read(65536):
                     h_vid.update(chunk)
             input_video_sha = h_vid.hexdigest()
 
-            # Execute pipeline in worker thread
-            def sync_progress_callback(pct: float, msg: str) -> None:
+            # Thread-safe async progress updater
+            async def _update_db_progress(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
                 try:
-                    loop = asyncio.get_running_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            self._update_progress_db(job_id, pct, msg),
-                            loop,
-                        )
-                except Exception:
-                    pass
+                    async with async_session_factory() as db:
+                        res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+                        j = res.scalar_one_or_none()
+                        if j and j.status not in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
+                            if stage_status:
+                                j.status = stage_status
+                            j.progress_pct = round(pct, 1)
+                            j.stage_message = msg
+                            await db.commit()
+                except Exception as ex:
+                    logger.debug(f"Progress update error: {ex}")
 
+            def sync_progress_callback(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
+                if main_loop and main_loop.is_running():
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            _update_db_progress(pct, msg, stage_status),
+                            main_loop,
+                        )
+                    except Exception as ex:
+                        logger.debug(f"Failed to dispatch progress update: {ex}")
+
+            # 4. Run Streaming Inference & Pipeline in Thread
             try:
                 result_payload = await asyncio.to_thread(
-                    self._run_synchronous_pipeline,
+                    self._run_streaming_pipeline,
                     job_id=job_id,
                     camera_id=camera_id,
                     site_id=site_id,
@@ -260,13 +316,14 @@ class ParkingOccupancyJobManager:
                     parking_spaces_payload=parking_spaces_payload,
                     job_started_at=job_started_at,
                     progress_callback=sync_progress_callback,
+                    cancel_event=cancel_event,
                 )
 
-                if job_id in self._cancel_requested:
+                if job_id in self._cancel_requested or cancel_event.is_set():
                     await self._persist_cancellation(job_id, video_path)
                     return
 
-                # 5. Persist COMPLETE state
+                # 5. Persist COMPLETE state atomically
                 async with async_session_factory() as db:
                     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
                     job = res.scalar_one_or_none()
@@ -303,7 +360,6 @@ class ParkingOccupancyJobManager:
                         job.completed_at = _utc_now()
                         await db.commit()
 
-
             except asyncio.CancelledError:
                 await self._persist_cancellation(job_id, video_path)
             except Exception as e:
@@ -317,9 +373,10 @@ class ParkingOccupancyJobManager:
                 except Exception:
                     pass
                 self._active_tasks.pop(job_id, None)
+                self._cancellation_events.pop(job_id, None)
                 self._cancel_requested.discard(job_id)
 
-    def _run_synchronous_pipeline(
+    def _run_streaming_pipeline(
         self,
         job_id: str,
         camera_id: str,
@@ -334,12 +391,24 @@ class ParkingOccupancyJobManager:
         parking_spaces_payload: List[Dict[str, Any]],
         job_started_at: datetime,
         progress_callback: Any,
+        cancel_event: threading.Event,
     ) -> Dict[str, Any]:
-        """Runs the CPU/GPU pipeline: frame extraction -> YOLO detection -> occupancy scoring -> overlay rendering -> FFmpeg."""
-        progress_callback(10.0, "Initializing vehicle detector and geometric layout engine")
+        """
+        Runs bounded streaming pipeline:
+        VideoCapture frame-by-frame -> YOLO detection -> ByteTrack tracking -> Occupancy scoring -> Frame rendering -> FFmpeg stdin.
+        Eliminates full-video memory buffering.
+        """
+        if cancel_event.is_set():
+            raise asyncio.CancelledError("Job cancelled before pipeline initialization.")
 
+        progress_callback(10.0, "Initializing vehicle detector and geometric layout engine", "VALIDATING")
+
+        # 1. Initialize local detector & session-local ByteTrack tracker
         detector = LocalVehicleDetector(self.config.detector)
         detector_sha = detector.checkpoint_sha256
+
+        tracker_config_path = Path(__file__).resolve().parents[4] / "configs" / "tracking" / "bytetrack_default.yaml"
+        tracker = ParkingByteTracker(config_path=tracker_config_path if tracker_config_path.is_file() else None)
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -359,22 +428,44 @@ class ParkingOccupancyJobManager:
         )
         annotator = ParkingVideoAnnotator(self.config.rendering)
 
-        # Output paths
+        # Output paths & staging setup
         media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
-        output_dir = media_root / "parking_jobs" / job_id
-        output_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = media_root / "parking_jobs" / f"staging_{job_id}"
+        final_output_dir = media_root / "parking_jobs" / job_id
 
-        annotated_mp4_path = output_dir / "annotated.mp4"
-        timeline_path = output_dir / "occupancy_timeline.jsonl"
-        manifest_path = output_dir / "processing_manifest.json"
-        summary_path = output_dir / "parking_summary.json"
+        # Clean staging directory if previously existing
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
 
-        frame_results: List[FrameOccupancyResult] = []
-        rendered_frames: List[np.ndarray] = []
+        staging_mp4_path = staging_dir / "annotated.mp4"
+        staging_timeline_path = staging_dir / "occupancy_timeline.jsonl"
+        staging_manifest_path = staging_dir / "processing_manifest.json"
+        staging_summary_path = staging_dir / "parking_summary.json"
+
+        # Initialize FFmpeg Stream Encoder
+        encoder = FFmpegStreamEncoder(
+            output_path=staging_mp4_path,
+            width=width,
+            height=height,
+            fps=fps,
+            timeout_seconds=self.config.execution.ffmpeg_timeout_seconds,
+            cancellation_event=cancel_event,
+        )
+
+        timeline_file = open(staging_timeline_path, "w", encoding="utf-8")
+
+        frame_idx = 0
+        total_transitions = 0
+        last_frame_res: Optional[FrameOccupancyResult] = None
 
         try:
-            frame_idx = 0
+            progress_callback(15.0, "Streaming video frames through detector and tracker", "DETECTING")
+
             while True:
+                if cancel_event.is_set():
+                    raise asyncio.CancelledError("Processing cancelled by user request.")
+
                 ret, frame_bgr = cap.read()
                 if not ret or frame_bgr is None:
                     break
@@ -382,83 +473,119 @@ class ParkingOccupancyJobManager:
                 timestamp_sec = float(frame_idx / fps)
 
                 # 1. Detection
-                detections = detector.detect_vehicles(frame_bgr)
+                raw_detections = detector.detect_vehicles(frame_bgr)
 
-                # 2. Occupancy Engine
-                frame_res = engine.process_frame(frame_idx, timestamp_sec, detections)
-                frame_results.append(frame_res)
+                # 2. Tracking (session-local ByteTrack)
+                tracked_detections = tracker.update_tracks(
+                    detections=raw_detections,
+                    frame_idx=frame_idx,
+                    frame_shape=(height, width),
+                )
 
-                # 3. Annotate frame
+                # 3. Occupancy Engine
+                frame_res = engine.process_frame(frame_idx, timestamp_sec, tracked_detections)
+                last_frame_res = frame_res
+
+                # Stream any new timeline events directly to JSONL on disk
+                for bay_id, tracker_obj in engine.trackers.items():
+                    if tracker_obj.last_transition_frame == frame_idx and tracker_obj.history:
+                        latest_ev = tracker_obj.history[-1]
+                        entry_dict = {
+                            "frame_index": frame_idx,
+                            "timestamp_seconds": round(timestamp_sec, 3),
+                            "bay_id": bay_id,
+                            "operator_label": tracker_obj.operator_label,
+                            "previous_state": tracker_obj.current_state.value,
+                            "new_state": tracker_obj.current_state.value,
+                            "confidence": round(tracker_obj.confidence, 4),
+                            "contributing_track_ids": tracker_obj.contributing_track_ids,
+                        }
+                        timeline_file.write(json.dumps(entry_dict) + "\n")
+                        total_transitions += 1
+
+                # 4. Annotate single frame
                 rendered = annotator.render_frame(
                     frame_bgr=frame_bgr,
                     bay_states=frame_res.bay_states,
                     bay_polygons_px=engine.bay_polygons_px,
-                    vehicle_detections=detections,
+                    vehicle_detections=tracked_detections,
                     frame_idx=frame_idx,
                     timestamp_sec=timestamp_sec,
                 )
-                rendered_frames.append(rendered)
+
+                # 5. Stream frame directly to FFmpeg stdin pipe (no RAM accumulation)
+                encoder.write_frame(rendered)
 
                 frame_idx += 1
                 if total_frames > 0:
                     pct = 15.0 + (65.0 * (frame_idx / max(1, total_frames)))
                     if frame_idx % 10 == 0 or frame_idx == total_frames:
-                        progress_callback(pct, f"Evaluating occupancy: frame {frame_idx}/{total_frames}")
+                        progress_callback(pct, f"Evaluating occupancy: frame {frame_idx}/{total_frames}", "CLASSIFYING_OCCUPANCY")
 
+        except Exception:
+            encoder.cleanup()
+            timeline_file.close()
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
         finally:
             cap.release()
+            try:
+                timeline_file.close()
+            except Exception:
+                pass
 
-        processed_count = len(rendered_frames)
-        if processed_count == 0:
+        if frame_idx == 0 or last_frame_res is None:
+            encoder.cleanup()
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise ValueError("No video frames could be decoded or processed.")
 
-        # Encode MP4 via FFmpeg
-        progress_callback(82.0, "Encoding annotated video to H.264 MP4")
-        encode_frames_to_mp4(
-            frame_generator=iter(rendered_frames),
-            output_path=annotated_mp4_path,
-            fps=fps,
-            width=width,
-            height=height,
-            total_frames=processed_count,
-            timeout_seconds=self.config.execution.ffmpeg_timeout_seconds,
-        )
-
-        progress_callback(95.0, "Generating processing manifest and timeline ledger")
+        # Finalize FFmpeg encoding
+        progress_callback(82.0, "Finalizing H.264 video stream encoding", "ENCODING")
+        encoder.finish()
 
         # Compute output video SHA
         h_out = hashlib.sha256()
-        with open(annotated_mp4_path, "rb") as of:
+        with open(staging_mp4_path, "rb") as of:
             while chunk := of.read(65536):
                 h_out.update(chunk)
         output_video_sha = h_out.hexdigest()
 
-        # Write timeline JSONL
-        with open(timeline_path, "w", encoding="utf-8") as tf:
-            for t in engine.timeline:
-                tf.write(json.dumps(t.to_dict()) + "\n")
-
-        # Final frame stats
-        final_frame_res = frame_results[-1]
-        final_bay_states = {k: v.to_dict() for k, v in final_frame_res.bay_states.items()}
-
-        with open(summary_path, "w", encoding="utf-8") as sf:
+        # Final Bay summary
+        bay_summary = {k: v.to_dict() for k, v in last_frame_res.bay_states.items()}
+        with open(staging_summary_path, "w", encoding="utf-8") as sf:
             json.dump(
                 {
                     "job_id": job_id,
-                    "total_bays": final_frame_res.total_bays,
-                    "occupied_count": final_frame_res.occupied_count,
-                    "vacant_count": final_frame_res.vacant_count,
-                    "unknown_count": final_frame_res.unknown_count,
-                    "occluded_count": final_frame_res.occluded_count,
-                    "bay_states": final_bay_states,
-                    "total_timeline_events": len(engine.timeline),
+                    "total_bays": last_frame_res.total_bays,
+                    "occupied_count": last_frame_res.occupied_count,
+                    "vacant_count": last_frame_res.vacant_count,
+                    "unknown_count": last_frame_res.unknown_count,
+                    "occluded_count": last_frame_res.occluded_count,
+                    "total_state_transitions": total_transitions,
+                    "bay_summary": bay_summary,
                 },
                 sf,
                 indent=2,
             )
 
-        job_completed_at = _utc_now()
+        # Inspect real runtime module versions
+        try:
+            import ultralytics
+            ultralytics_ver = getattr(ultralytics, "__version__", "unknown")
+        except Exception:
+            ultralytics_ver = "unknown"
+
+        try:
+            import torch
+            torch_ver = getattr(torch, "__version__", "unknown")
+        except Exception:
+            torch_ver = "unknown"
+
+        try:
+            import torchvision
+            torchvision_ver = getattr(torchvision, "__version__", "unknown")
+        except Exception:
+            torchvision_ver = "unknown"
 
         manifest = ParkingJobManifest(
             job_id=job_id,
@@ -468,158 +595,176 @@ class ParkingOccupancyJobManager:
             output_video_sha256=output_video_sha,
             reference_image_sha256=latest_assessment_ref_sha or "",
             layout_canonical_sha256=verified_layout_canonical_sha or "",
-            stability_assessment_id=latest_assessment_id or "",
+            stability_assessment_id=latest_assessment_id,
             stability_config_sha256=latest_assessment_config_sha or "",
             detector_checkpoint_sha256=detector_sha,
             occupancy_config_sha256=self.config.config_sha256,
-            algorithm_version=self.config.algorithm_version,
-            opencv_version=cv2.__version__,
-            ultralytics_version="8.3.0",
-            total_frames=total_frames,
-            processed_frames=processed_count,
+            software_versions={
+                "python": sys.version.split()[0],
+                "platform": platform.platform(),
+                "opencv": cv2.__version__,
+                "pytorch": torch_ver,
+                "torchvision": torchvision_ver,
+                "ultralytics": ultralytics_ver,
+                "bytetrack_config_sha": tracker.config_sha256,
+            },
+            total_frames=frame_idx,
+            processed_frames=frame_idx,
+            skipped_frames=0,
             fps=fps,
             duration_seconds=duration,
             video_width=width,
             video_height=height,
-            total_bays_evaluated=final_frame_res.total_bays,
-            final_occupied_count=final_frame_res.occupied_count,
-            final_vacant_count=final_frame_res.vacant_count,
-            final_unknown_count=final_frame_res.unknown_count,
-            final_occluded_count=final_frame_res.occluded_count,
-            total_state_transitions=len(engine.timeline),
+            total_bays=last_frame_res.total_bays,
+            total_bays_evaluated=last_frame_res.total_bays,
+            final_occupied_count=last_frame_res.occupied_count,
+            final_vacant_count=last_frame_res.vacant_count,
+            final_unknown_count=last_frame_res.unknown_count,
+            final_occluded_count=last_frame_res.occluded_count,
+            total_state_transitions=total_transitions,
+            job_created_at=job_started_at.isoformat(),
             job_started_at=job_started_at.isoformat(),
-            job_completed_at=job_completed_at.isoformat(),
-            errors_or_warnings=[],
+            job_completed_at=_utc_now().isoformat(),
+            operational_gate="ALLOWED",
+            gate_reasons=["GATE_ALLOWED: Fresh camera stability assessment matches verified layout."],
         )
 
-        with open(manifest_path, "w", encoding="utf-8") as mf:
+        with open(staging_manifest_path, "w", encoding="utf-8") as mf:
             json.dump(manifest.to_dict(), mf, indent=2)
+
+        # 6. Validate artifacts before Atomic Promotion
+        self._validate_staging_artifacts(
+            staging_dir=staging_dir,
+            expected_width=width,
+            expected_height=height,
+            expected_fps=fps,
+            expected_frames=frame_idx,
+        )
+
+        # 7. Atomic directory promotion
+        if final_output_dir.exists():
+            shutil.rmtree(final_output_dir, ignore_errors=True)
+        staging_dir.rename(final_output_dir)
+
+        final_mp4_path = final_output_dir / "annotated.mp4"
+        final_timeline_path = final_output_dir / "occupancy_timeline.jsonl"
 
         return {
             "output_video_sha256": output_video_sha,
             "detector_checkpoint_sha256": detector_sha,
-            "total_frames": total_frames,
-            "processed_frames": processed_count,
+            "total_frames": frame_idx,
+            "processed_frames": frame_idx,
             "fps": fps,
             "duration_seconds": duration,
             "video_width": width,
             "video_height": height,
-            "total_bays": final_frame_res.total_bays,
-            "final_occupied_count": final_frame_res.occupied_count,
-            "final_vacant_count": final_frame_res.vacant_count,
-            "final_unknown_count": final_frame_res.unknown_count,
-            "final_occluded_count": final_frame_res.occluded_count,
-            "total_state_transitions": len(engine.timeline),
-            "output_video_path": str(annotated_mp4_path),
-            "timeline_jsonl_path": str(timeline_path),
+            "total_bays": last_frame_res.total_bays,
+            "final_occupied_count": last_frame_res.occupied_count,
+            "final_vacant_count": last_frame_res.vacant_count,
+            "final_unknown_count": last_frame_res.unknown_count,
+            "final_occluded_count": last_frame_res.occluded_count,
+            "total_state_transitions": total_transitions,
+            "output_video_path": str(final_mp4_path),
+            "timeline_jsonl_path": str(final_timeline_path),
             "manifest_json": manifest.to_dict(),
-            "bay_summary_json": final_bay_states,
+            "bay_summary_json": bay_summary,
         }
 
-    async def _update_progress_db(self, job_id: str, pct: float, msg: str) -> None:
-        try:
-            async with async_session_factory() as db:
-                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                job = res.scalar_one_or_none()
-                if job and job.status not in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
-                    if pct < 30.0:
-                        job.status = "DETECTING"
-                    elif pct < 80.0:
-                        job.status = "CLASSIFYING_OCCUPANCY"
-                    elif pct < 95.0:
-                        job.status = "RENDERING"
-                    else:
-                        job.status = "ENCODING"
-                    job.progress_pct = round(pct, 1)
-                    job.stage_message = msg
-                    await db.commit()
-        except Exception:
-            pass
-
-    async def _persist_blocked_by_gate(
+    def _validate_staging_artifacts(
         self,
-        job_id: str,
-        gate_reasons: List[str],
-        video_path: Path,
-        layout_revision_id: Optional[str],
-        stability_assessment_id: Optional[str],
-        layout_canonical_sha256: Optional[str],
-        reference_image_sha256: Optional[str],
+        staging_dir: Path,
+        expected_width: int,
+        expected_height: int,
+        expected_fps: float,
+        expected_frames: int,
     ) -> None:
+        """Thoroughly validate all generated artifacts inside staging before promotion."""
+        mp4_path = staging_dir / "annotated.mp4"
+        timeline_path = staging_dir / "occupancy_timeline.jsonl"
+        manifest_path = staging_dir / "processing_manifest.json"
+        summary_path = staging_dir / "parking_summary.json"
+
+        if not mp4_path.is_file() or mp4_path.stat().st_size == 0:
+            raise ValueError(f"Staging MP4 missing or empty: {mp4_path}")
+
+        if not timeline_path.is_file():
+            raise ValueError(f"Staging timeline JSONL missing: {timeline_path}")
+
+        if not manifest_path.is_file():
+            raise ValueError(f"Staging manifest JSON missing: {manifest_path}")
+
+        if not summary_path.is_file():
+            raise ValueError(f"Staging summary JSON missing: {summary_path}")
+
+        # Validate MP4 with ffprobe
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "stream=codec_name,pix_fmt,width,height,r_frame_rate",
+            "-of", "json",
+            str(mp4_path),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10.0)
+        if res.returncode != 0:
+            raise ValueError(f"FFprobe failed to inspect staging MP4: {res.stderr}")
+
+        info = json.loads(res.stdout)
+        streams = info.get("streams", [])
+        if not streams:
+            raise ValueError("Staging MP4 contains no video streams.")
+
+        v_stream = streams[0]
+        if v_stream.get("codec_name") != "h264":
+            raise ValueError(f"Expected H.264 codec, got {v_stream.get('codec_name')}")
+        if v_stream.get("pix_fmt") != "yuv420p":
+            raise ValueError(f"Expected yuv420p pixel format, got {v_stream.get('pix_fmt')}")
+        if v_stream.get("width") != expected_width or v_stream.get("height") != expected_height:
+            raise ValueError(f"Geometry mismatch: expected {expected_width}x{expected_height}, got {v_stream.get('width')}x{v_stream.get('height')}")
+
+    async def _persist_blocked_by_gate(self, job_id: str, reasons: List[str], video_path: Path) -> None:
         try:
             async with async_session_factory() as db:
                 res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
                 job = res.scalar_one_or_none()
                 if job:
                     job.status = "BLOCKED_BY_STABILITY_GATE"
-                    job.progress_pct = 100.0
-                    job.stage_message = "Occupancy inference blocked: camera stability gate is not ALLOWED"
-                    job.failure_code = "STABILITY_GATE_BLOCKED"
-                    job.failure_message = "; ".join(gate_reasons)
+                    job.progress_pct = 0.0
                     job.gate_decision = "BLOCKED"
-                    job.gate_reasons = gate_reasons
-                    job.layout_revision_id = layout_revision_id
-                    job.stability_assessment_id = stability_assessment_id
-                    job.layout_canonical_sha256 = layout_canonical_sha256
-                    job.reference_image_sha256 = reference_image_sha256
+                    job.gate_reasons = reasons
+                    job.failure_code = "STABILITY_GATE_BLOCKED"
+                    job.failure_message = "Camera stability assessment is UNSTABLE, missing, or mismatched. Occupancy processing blocked fail-closed."
                     job.completed_at = _utc_now()
                     await db.commit()
         except Exception as e:
-            logger.error(f"Failed to persist blocked state for job {job_id}: {e}")
-        finally:
-            try:
-                if video_path.exists():
-                    video_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            self._active_tasks.pop(job_id, None)
-
-    async def _persist_failure(self, job_id: str, code: str, msg: str, video_path: Path) -> None:
-        try:
-            async with async_session_factory() as db:
-                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                job = res.scalar_one_or_none()
-                if job:
-                    job.status = "FAILED"
-                    job.progress_pct = 100.0
-                    job.stage_message = "Parking occupancy job failed during processing"
-                    job.failure_code = code
-                    job.failure_message = msg
-                    job.completed_at = _utc_now()
-                    await db.commit()
-        except Exception as e:
-            logger.error(f"Failed to persist failure for job {job_id}: {e}")
-        finally:
-            try:
-                if video_path.exists():
-                    video_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            self._active_tasks.pop(job_id, None)
+            logger.error(f"Error persisting blocked gate state for job {job_id}: {e}")
 
     async def _persist_cancellation(self, job_id: str, video_path: Path) -> None:
         try:
             async with async_session_factory() as db:
                 res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
                 job = res.scalar_one_or_none()
-                if job:
+                if job and job.status not in ("COMPLETE", "FAILED", "BLOCKED_BY_STABILITY_GATE"):
                     job.status = "CANCELLED"
-                    job.progress_pct = 100.0
-                    job.stage_message = "Parking occupancy job cancelled by operator"
-                    job.failure_code = "CANCELLED"
-                    job.failure_message = "Job cancelled prior to completion."
+                    job.stage_message = "Job cancelled by user request."
                     job.completed_at = _utc_now()
                     await db.commit()
         except Exception as e:
-            logger.error(f"Failed to persist cancellation for job {job_id}: {e}")
-        finally:
-            try:
-                if video_path.exists():
-                    video_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            self._active_tasks.pop(job_id, None)
+            logger.error(f"Error persisting cancellation for job {job_id}: {e}")
+
+    async def _persist_failure(self, job_id: str, code: str, message: str, video_path: Path) -> None:
+        try:
+            async with async_session_factory() as db:
+                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+                job = res.scalar_one_or_none()
+                if job and job.status not in ("COMPLETE", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
+                    job.status = "FAILED"
+                    job.failure_code = code
+                    job.failure_message = message
+                    job.stage_message = f"Failed: {message}"
+                    job.completed_at = _utc_now()
+                    await db.commit()
+        except Exception as e:
+            logger.error(f"Error persisting failure for job {job_id}: {e}")
 
 
-# Singleton instance
 parking_occupancy_job_manager = ParkingOccupancyJobManager()

@@ -166,13 +166,10 @@ class ParkingJobManifest:
     output_video_sha256: str
     reference_image_sha256: str
     layout_canonical_sha256: str
-    stability_assessment_id: str
+    stability_assessment_id: Optional[str]
     stability_config_sha256: str
     detector_checkpoint_sha256: str
     occupancy_config_sha256: str
-    algorithm_version: str
-    opencv_version: str
-    ultralytics_version: str
     total_frames: int
     processed_frames: int
     fps: float
@@ -187,6 +184,15 @@ class ParkingJobManifest:
     total_state_transitions: int
     job_started_at: str
     job_completed_at: str
+    total_bays: int = 0
+    skipped_frames: int = 0
+    algorithm_version: str = "1.0.0"
+    opencv_version: str = ""
+    ultralytics_version: str = ""
+    software_versions: Dict[str, Any] = field(default_factory=dict)
+    job_created_at: Optional[str] = None
+    operational_gate: str = "ALLOWED"
+    gate_reasons: List[str] = field(default_factory=list)
     errors_or_warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

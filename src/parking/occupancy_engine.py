@@ -239,8 +239,8 @@ class TemporalBayTracker:
             self.consecutive_vacant_evidence = 0
             self.dropout_frames_count = 0
 
-            # Transition to OCCUPIED if sustained for required frames
-            if self.consecutive_occupied_evidence >= self.config.min_frames_occupied:
+            # Transition to OCCUPIED if sustained for required frames or recovering from OCCLUDED
+            if self.consecutive_occupied_evidence >= self.config.min_frames_occupied or (prev_state == OccupancyState.OCCLUDED and self.consecutive_occupied_evidence >= 1):
                 if self.current_state != OccupancyState.OCCUPIED:
                     self.current_state = OccupancyState.OCCUPIED
                     self.last_transition_frame = frame_idx
@@ -260,11 +260,28 @@ class TemporalBayTracker:
             # No occupied evidence in this frame
             if self.current_state == OccupancyState.OCCUPIED:
                 self.dropout_frames_count += 1
-                # If within tolerance, do not immediately clear occupied state
                 if self.dropout_frames_count <= self.config.dropout_tolerance_frames:
-                    # Tolerated dropout / brief occlusion
-                    pass
+                    # Enter temporary OCCLUDED state within dropout window
+                    self.current_state = OccupancyState.OCCLUDED
+                    self.last_transition_frame = frame_idx
+                    self.last_transition_timestamp = timestamp_sec
+                    timeline_entry = OccupancyTimelineEntry(
+                        frame_index=frame_idx,
+                        timestamp_seconds=timestamp_sec,
+                        bay_id=self.bay_id,
+                        operator_label=self.operator_label,
+                        previous_state=prev_state,
+                        new_state=OccupancyState.OCCLUDED,
+                        trigger_reason=f"Temporary detector dropout / occlusion (frame {self.dropout_frames_count}/{self.config.dropout_tolerance_frames})",
+                        confidence=self.confidence,
+                        contributing_track_ids=list(self.contributing_track_ids),
+                    )
                 else:
+                    self.consecutive_vacant_evidence += 1
+                    self.consecutive_occupied_evidence = 0
+            elif self.current_state == OccupancyState.OCCLUDED:
+                self.dropout_frames_count += 1
+                if self.dropout_frames_count > self.config.dropout_tolerance_frames:
                     self.consecutive_vacant_evidence += 1
                     self.consecutive_occupied_evidence = 0
             else:

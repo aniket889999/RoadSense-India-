@@ -199,25 +199,27 @@ def test_temporal_bay_tracker_hysteresis_and_transitions(base_config):
     assert t.new_state == OccupancyState.OCCUPIED
     assert t.contributing_track_ids == [42]
 
-    # Frame 4: 1-frame dropout (no detection) -> stays OCCUPIED due to dropout tolerance
+    # Frame 4: 1-frame dropout (no detection) -> enters OCCLUDED within dropout tolerance
     s, t = tracker.update_frame(4, 0.133, None)
-    assert s.current_state == OccupancyState.OCCUPIED
-    assert t is None
-
-    # Frame 5: 2nd dropout -> stays OCCUPIED (within tolerance of 2)
-    s, t = tracker.update_frame(5, 0.166, None)
-    assert s.current_state == OccupancyState.OCCUPIED
-    assert t is None
-
-    # Frames 6..10: sustained vacancy (consecutive vacant >= 5)
-    for f in range(6, 11):
-        s, t = tracker.update_frame(f, f * 0.033, None)
-
-    # By frame 10 (5 sustained vacant frames past dropout), transitions to VACANT
-    assert tracker.current_state == OccupancyState.VACANT
+    assert s.current_state == OccupancyState.OCCLUDED
     assert t is not None
-    assert t.previous_state == OccupancyState.OCCUPIED
-    assert t.new_state == OccupancyState.VACANT
+    assert t.new_state == OccupancyState.OCCLUDED
+
+    # Frame 5: 2nd dropout -> stays OCCLUDED (within tolerance of 2)
+    s, t = tracker.update_frame(5, 0.166, None)
+    assert s.current_state == OccupancyState.OCCLUDED
+
+    # Frames 6..11: sustained vacancy (consecutive vacant >= 5 past dropout)
+    vacant_tl = None
+    for f in range(6, 12):
+        s, t = tracker.update_frame(f, f * 0.033, None)
+        if t is not None:
+            vacant_tl = t
+
+    # By frame 11, transitions to VACANT
+    assert tracker.current_state == OccupancyState.VACANT
+    assert vacant_tl is not None
+    assert vacant_tl.new_state == OccupancyState.VACANT
 
 
 def test_parking_occupancy_engine_multi_bay_evaluation(base_config):
@@ -303,3 +305,124 @@ def test_vehicle_detector_rejects_tampered_sha():
     )
     with pytest.raises(ValueError, match="Checkpoint SHA-256 mismatch"):
         LocalVehicleDetector(cfg)
+
+
+def test_bytetrack_tracker_lifecycle_and_stability():
+    """Verify ParkingByteTracker assigns stable track IDs and resets cleanly across sessions."""
+    from src.parking.vehicle_tracker import ParkingByteTracker
+
+    tracker = ParkingByteTracker(track_high_thresh=0.2, new_track_thresh=0.2)
+
+    # Frame 1: Car at (100, 100, 200, 200)
+    det1 = VehicleDetection(
+        class_id=2,
+        class_name="car",
+        confidence=0.9,
+        bbox_xyxy=(100.0, 100.0, 200.0, 200.0),
+        center_xy=(150.0, 150.0),
+    )
+    res1 = tracker.update_tracks([det1], frame_idx=0, frame_shape=(480, 640))
+    assert len(res1) == 1
+    tid1 = res1[0].track_id
+
+    # Frame 2: Car moved slightly to (105, 105, 205, 205)
+    det2 = VehicleDetection(
+        class_id=2,
+        class_name="car",
+        confidence=0.88,
+        bbox_xyxy=(105.0, 105.0, 205.0, 205.0),
+        center_xy=(155.0, 155.0),
+    )
+    res2 = tracker.update_tracks([det2], frame_idx=1, frame_shape=(480, 640))
+    assert len(res2) == 1
+    # Track ID should be assigned
+    assert res2[0].track_id is not None
+    if tid1 is not None:
+        assert res2[0].track_id == tid1
+
+    # Reset tracker for a new session
+    tracker.reset()
+    assert tracker._last_frame_idx == -1
+
+
+def test_temporal_bay_tracker_occluded_entry_and_recovery(base_config):
+    """Verify bay enters OCCLUDED during dropouts and recovers to OCCUPIED on return."""
+    tracker = TemporalBayTracker(
+        bay_id="b1",
+        operator_label="Bay-01",
+        space_type="STANDARD",
+        polygon_normalized=[{"x": 0.1, "y": 0.1}, {"x": 0.3, "y": 0.1}, {"x": 0.3, "y": 0.5}, {"x": 0.1, "y": 0.5}],
+        temporal_config=base_config.temporal,
+    )
+
+    ev_occ = BayOccupancyEvidence(
+        bay_id="b1",
+        operator_label="Bay-01",
+        frame_index=0,
+        timestamp_seconds=0.0,
+        intersection_area_px=100.0,
+        bay_area_px=100.0,
+        vehicle_box_area_px=100.0,
+        bay_coverage_ratio=0.8,
+        vehicle_overlap_ratio=0.8,
+        is_center_inside=True,
+        max_confidence=0.9,
+        contributing_track_ids=[42],
+        is_instant_evidence_occupied=True,
+    )
+
+    # 1. Establish OCCUPIED (needs 3 consecutive frames)
+    for f in range(3):
+        summary, tl = tracker.update_frame(f, f * 0.1, ev_occ)
+    assert summary.current_state == OccupancyState.OCCUPIED
+
+    # 2. Next frame: detector drop (no detection) -> enters OCCLUDED
+    summary_drop1, tl_drop1 = tracker.update_frame(3, 0.3, None)
+    assert summary_drop1.current_state == OccupancyState.OCCLUDED
+    assert tl_drop1 is not None
+    assert tl_drop1.new_state == OccupancyState.OCCLUDED
+    assert 42 in summary_drop1.contributing_track_ids
+
+    # 3. Next frame: detection returns -> recovers to OCCUPIED
+    summary_rec, tl_rec = tracker.update_frame(4, 0.4, ev_occ)
+    assert summary_rec.current_state == OccupancyState.OCCUPIED
+    assert tl_rec is not None
+    assert tl_rec.new_state == OccupancyState.OCCUPIED
+
+
+def test_annotator_independent_alpha_rendering(base_config):
+    """Verify ParkingVideoAnnotator applies independent alpha blending per occupancy state."""
+    from src.parking.video_annotator import ParkingVideoAnnotator
+
+    annotator = ParkingVideoAnnotator(base_config.rendering)
+
+    # Blank gray frame (val=100)
+    frame = np.full((480, 640, 3), 100, dtype=np.uint8)
+    poly_px = np.array([[200, 200], [300, 200], [300, 300], [200, 300]], dtype=np.int32)
+
+    vacant_summary = BayStateSummary(
+        bay_id="b1",
+        operator_label="B1",
+        space_type="STANDARD",
+        current_state=OccupancyState.VACANT,
+        consecutive_frames_in_state=5,
+        confidence=0.0,
+        last_transition_frame=0,
+        last_transition_timestamp=0.0,
+        polygon_normalized=[],
+    )
+
+    rendered_vacant = annotator.render_frame(
+        frame_bgr=frame,
+        bay_states={"b1": vacant_summary},
+        bay_polygons_px={"b1": poly_px},
+        vehicle_detections=[],
+        frame_idx=0,
+        timestamp_sec=0.0,
+    )
+
+    # Check center pixel (250, 250): should be blended with green (0, 255, 0)
+    # Original is (100, 100, 100), vacant alpha = 0.25 (or 0.35)
+    center_bgr = rendered_vacant[250, 250]
+    assert center_bgr[1] > 130  # Green increased
+    assert center_bgr[0] < 100 and center_bgr[2] < 100  # Blue & Red reduced

@@ -12,6 +12,8 @@ import {
   StabilityAssessment,
   CameraOperationalGate,
   CameraStabilityAuditEvent,
+  ParkingOccupancyJob,
+  ParkingOccupancyJobCancelResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -331,4 +333,67 @@ export async function listCameraStabilityAuditEvents(cameraId: string): Promise<
     throw new Error(err.detail || 'Failed to list stability audit events');
   }
   return res.json();
+}
+
+// ============================================================================
+// Gate-Controlled Parking Occupancy (Phase 2B)
+// ============================================================================
+
+export async function submitOccupancyJob(
+  cameraId: string,
+  videoFile: File
+): Promise<ParkingOccupancyJob> {
+  const formData = new FormData();
+  formData.append('file', videoFile, videoFile.name);
+
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/occupancy/jobs`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to submit parking occupancy job');
+  }
+  return res.json();
+}
+
+export async function listOccupancyJobs(cameraId: string): Promise<ParkingOccupancyJob[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/occupancy/jobs`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list occupancy jobs');
+  }
+  return res.json();
+}
+
+export async function getOccupancyJob(jobId: string): Promise<ParkingOccupancyJob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to fetch occupancy job details');
+  }
+  return res.json();
+}
+
+export async function cancelOccupancyJob(jobId: string): Promise<ParkingOccupancyJobCancelResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to cancel occupancy job');
+  }
+  return res.json();
+}
+
+export function getOccupancyVideoUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/video`;
+}
+
+export function getOccupancyManifestUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/manifest`;
+}
+
+export function getOccupancyTimelineUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/timeline`;
 }

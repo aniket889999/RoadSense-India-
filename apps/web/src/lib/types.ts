@@ -326,3 +326,85 @@ export interface CameraOperationalGate {
   created_at?: string | null;
   is_fresh: boolean;
 }
+
+// ============================================================================
+// Gate-Controlled Parking Occupancy (Phase 2B)
+// ============================================================================
+
+export type OccupancyJobStatus =
+  | 'QUEUED'
+  | 'VALIDATING'
+  | 'DETECTING'
+  | 'TRACKING'
+  | 'CLASSIFYING_OCCUPANCY'
+  | 'RENDERING'
+  | 'ENCODING'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'BLOCKED_BY_STABILITY_GATE';
+
+export type BayOccupancyState = 'UNKNOWN' | 'VACANT' | 'OCCUPIED' | 'OCCLUDED';
+
+export interface BaySummaryItem {
+  operator_label: string;
+  space_type: SpaceType;
+  final_state: BayOccupancyState;
+  final_confidence: number;
+  transitions_count: number;
+  last_vehicle_track_id?: number | null;
+}
+
+export interface ParkingOccupancyJob {
+  id: string;
+  camera_id: string;
+  site_id: string;
+  layout_revision_id?: string | null;
+  stability_assessment_id?: string | null;
+
+  status: OccupancyJobStatus;
+  progress_pct: number;
+  stage_message?: string | null;
+  failure_code?: string | null;
+  failure_message?: string | null;
+
+  gate_decision?: string | null;
+  gate_reasons?: string[] | null;
+
+  input_video_sha256?: string | null;
+  output_video_sha256?: string | null;
+  reference_image_sha256?: string | null;
+  layout_canonical_sha256?: string | null;
+  detector_checkpoint_sha256?: string | null;
+  occupancy_config_sha256?: string | null;
+
+  total_frames: number;
+  processed_frames: number;
+  fps: number;
+  duration_seconds: number;
+  video_width: number;
+  video_height: number;
+
+  total_bays: number;
+  final_occupied_count: number;
+  final_vacant_count: number;
+  final_unknown_count: number;
+  final_occluded_count: number;
+  total_state_transitions: number;
+
+  has_annotated_video: boolean;
+  has_timeline: boolean;
+  has_manifest: boolean;
+  bay_summary?: Record<string, BaySummaryItem> | null;
+
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ParkingOccupancyJobCancelResponse {
+  job_id: string;
+  status: string;
+  cancelled: boolean;
+  message: string;
+}

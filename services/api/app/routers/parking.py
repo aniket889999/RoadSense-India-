@@ -6,6 +6,7 @@ import hashlib
 import io
 import logging
 import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from services.api.app.models.entities import (
     CameraStabilityAuditEvent,
     LayoutAuditEvent,
     ParkingLayoutRevision,
+    ParkingOccupancyJob,
     ParkingSpace,
     Site,
 )
@@ -46,6 +48,8 @@ from services.api.app.schemas.parking import (
     LayoutValidationErrorDict,
     LayoutValidationResponse,
     LayoutVerifyRequest,
+    ParkingOccupancyJobCancelResponse,
+    ParkingOccupancyJobResponse,
     ParkingSpaceSchema,
     ApproachZoneSchema,
     PointSchema,
@@ -55,6 +59,7 @@ from services.api.app.schemas.parking import (
     StabilityAssessmentCancelResponse,
     StabilityAssessmentResponse,
 )
+from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
 from services.api.app.services.reference_image_service import (
     ReferenceImageProcessingError,
     ReferenceImageSecurityError,
@@ -1810,3 +1815,252 @@ async def list_camera_stability_audit_events(
         )
         for e in events
     ]
+
+
+# ============================================================================
+# Phase 2B: Gate-Controlled Parking Occupancy & Video Inference Endpoints
+# ============================================================================
+
+def _build_occupancy_job_response(job: ParkingOccupancyJob) -> ParkingOccupancyJobResponse:
+    has_video = bool(job.output_video_path and Path(job.output_video_path).exists())
+    has_timeline = bool(job.timeline_jsonl_path and Path(job.timeline_jsonl_path).exists())
+    has_manifest = bool(job.manifest_json is not None)
+    return ParkingOccupancyJobResponse(
+        id=job.id,
+        camera_id=job.camera_id,
+        site_id=job.site_id,
+        layout_revision_id=job.layout_revision_id,
+        stability_assessment_id=job.stability_assessment_id,
+        status=job.status,
+        progress_pct=job.progress_pct,
+        stage_message=job.stage_message,
+        failure_code=job.failure_code,
+        failure_message=job.failure_message,
+        gate_decision=job.gate_decision,
+        gate_reasons=job.gate_reasons,
+        input_video_sha256=job.input_video_sha256,
+        output_video_sha256=job.output_video_sha256,
+        reference_image_sha256=job.reference_image_sha256,
+        layout_canonical_sha256=job.layout_canonical_sha256,
+        detector_checkpoint_sha256=job.detector_checkpoint_sha256,
+        occupancy_config_sha256=job.occupancy_config_sha256,
+        total_frames=job.total_frames,
+        processed_frames=job.processed_frames,
+        fps=job.fps,
+        duration_seconds=job.duration_seconds,
+        video_width=job.video_width,
+        video_height=job.video_height,
+        total_bays=job.total_bays,
+        final_occupied_count=job.final_occupied_count,
+        final_vacant_count=job.final_vacant_count,
+        final_unknown_count=job.final_unknown_count,
+        final_occluded_count=job.final_occluded_count,
+        total_state_transitions=job.total_state_transitions,
+        has_annotated_video=has_video,
+        has_timeline=has_timeline,
+        has_manifest=has_manifest,
+        bay_summary=job.bay_summary_json,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+    )
+
+
+@router.post("/cameras/{camera_id}/occupancy/jobs", response_model=ParkingOccupancyJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def submit_parking_occupancy_job(
+    camera_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Submit a video file for gate-controlled parking occupancy evaluation and video annotation.
+    Enforces fail-closed camera stability gate: returns HTTP 202; background job will set
+    BLOCKED_BY_STABILITY_GATE if camera is not calibrated with an active verified layout and fresh STABLE assessment.
+    """
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    cfg = parking_occupancy_job_manager.config
+    max_upload_bytes = cfg.execution.max_upload_bytes
+
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
+
+    staging_dir = Path(tempfile.gettempdir()) / "roadsense_staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    temp_video_path = staging_dir / f"occupancy_input_{uuid.uuid4().hex}.mp4"
+
+    bytes_read = 0
+    try:
+        with open(temp_video_path, "wb") as f_out:
+            while chunk := await file.read(65536):
+                bytes_read += len(chunk)
+                if bytes_read > max_upload_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Uploaded file exceeds maximum allowed size of {max_upload_bytes} bytes ({max_upload_bytes / (1024*1024):.1f}MB).",
+                    )
+                f_out.write(chunk)
+    except HTTPException:
+        temp_video_path.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        temp_video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to stream upload: {e}")
+
+    if bytes_read == 0:
+        temp_video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty (0 bytes).")
+
+    job_id = str(uuid.uuid4())
+    job = ParkingOccupancyJob(
+        id=job_id,
+        camera_id=cam.id,
+        site_id=cam.site_id,
+        status="QUEUED",
+        progress_pct=0.0,
+        stage_message="Job queued for gate validation and evaluation",
+        created_at=utc_now(),
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    # Launch async job manager execution
+    parking_occupancy_job_manager.submit_occupancy_job(
+        job_id=job_id,
+        camera_id=cam.id,
+        site_id=cam.site_id,
+        video_path=temp_video_path,
+    )
+
+    return _build_occupancy_job_response(job)
+
+
+@router.get("/parking/jobs/{job_id}", response_model=ParkingOccupancyJobResponse)
+async def get_parking_occupancy_job_detail(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve status, metrics, and manifest summary of a parking occupancy job."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+    return _build_occupancy_job_response(job)
+
+
+@router.get("/cameras/{camera_id}/occupancy/jobs", response_model=List[ParkingOccupancyJobResponse])
+async def list_camera_occupancy_jobs(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List historical parking occupancy jobs for a camera."""
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    if not cam_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    res = await db.execute(
+        select(ParkingOccupancyJob)
+        .where(ParkingOccupancyJob.camera_id == camera_id)
+        .order_by(desc(ParkingOccupancyJob.created_at))
+    )
+    jobs = res.scalars().all()
+    return [_build_occupancy_job_response(j) for j in jobs]
+
+
+@router.post("/parking/jobs/{job_id}/cancel", response_model=ParkingOccupancyJobCancelResponse)
+async def cancel_parking_occupancy_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel an active or queued parking occupancy job."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if job.status in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
+        return ParkingOccupancyJobCancelResponse(
+            job_id=job_id,
+            status=job.status,
+            cancelled=False,
+            message=f"Job is already in terminal state '{job.status}'.",
+        )
+
+    await parking_occupancy_job_manager.cancel_occupancy_job(job_id)
+    job.status = "CANCELLED"
+    job.progress_pct = 100.0
+    job.stage_message = "Job cancelled by operator request"
+    job.failure_code = "CANCELLED"
+    job.failure_message = "Job cancelled by operator request."
+    job.completed_at = utc_now()
+    await db.commit()
+
+    return ParkingOccupancyJobCancelResponse(
+        job_id=job_id,
+        status="CANCELLED",
+        cancelled=True,
+        message="Parking occupancy job cancelled successfully.",
+    )
+
+
+@router.get("/parking/jobs/{job_id}/video")
+async def get_parking_job_annotated_video(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream the generated annotated MP4 video."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if not job.output_video_path or not Path(job.output_video_path).exists():
+        raise HTTPException(status_code=404, detail="Annotated video file not available for this job.")
+
+    return FileResponse(
+        path=job.output_video_path,
+        media_type="video/mp4",
+        filename=f"annotated_parking_{job_id[:8]}.mp4",
+    )
+
+
+@router.get("/parking/jobs/{job_id}/manifest")
+async def get_parking_job_manifest(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve the full processing manifest JSON for a parking occupancy job."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if not job.manifest_json:
+        raise HTTPException(status_code=404, detail="Processing manifest not available for this job.")
+
+    return job.manifest_json
+
+
+@router.get("/parking/jobs/{job_id}/timeline")
+async def get_parking_job_timeline(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the state-transition timeline JSONL ledger."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if not job.timeline_jsonl_path or not Path(job.timeline_jsonl_path).exists():
+        raise HTTPException(status_code=404, detail="Timeline ledger file not available for this job.")
+
+    return FileResponse(
+        path=job.timeline_jsonl_path,
+        media_type="application/x-ndjson",
+        filename=f"occupancy_timeline_{job_id[:8]}.jsonl",
+    )

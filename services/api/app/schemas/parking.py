@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -357,6 +357,60 @@ class AcknowledgeStabilityRequest(BaseModel):
 
 class StabilityAssessmentCancelResponse(BaseModel):
     assessment_id: str
+    status: str
+    cancelled: bool
+    message: str
+
+
+class ParkingOccupancyJobResponse(BaseModel):
+    id: str
+    camera_id: str
+    site_id: str
+    layout_revision_id: Optional[str] = None
+    stability_assessment_id: Optional[str] = None
+
+    status: str  # QUEUED, VALIDATING, DETECTING, TRACKING, CLASSIFYING_OCCUPANCY, RENDERING, ENCODING, COMPLETE, FAILED, CANCELLED, BLOCKED_BY_STABILITY_GATE
+    progress_pct: float
+    stage_message: Optional[str] = None
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+
+    gate_decision: Optional[str] = None
+    gate_reasons: Optional[List[str]] = None
+
+    input_video_sha256: Optional[str] = None
+    output_video_sha256: Optional[str] = None
+    reference_image_sha256: Optional[str] = None
+    layout_canonical_sha256: Optional[str] = None
+    detector_checkpoint_sha256: Optional[str] = None
+    occupancy_config_sha256: Optional[str] = None
+
+    total_frames: int = 0
+    processed_frames: int = 0
+    fps: float = 0.0
+    duration_seconds: float = 0.0
+    video_width: int = 0
+    video_height: int = 0
+
+    total_bays: int = 0
+    final_occupied_count: int = 0
+    final_vacant_count: int = 0
+    final_unknown_count: int = 0
+    final_occluded_count: int = 0
+    total_state_transitions: int = 0
+
+    has_annotated_video: bool = False
+    has_timeline: bool = False
+    has_manifest: bool = False
+    bay_summary: Optional[Dict[str, Any]] = None
+
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class ParkingOccupancyJobCancelResponse(BaseModel):
+    job_id: str
     status: str
     cancelled: bool
     message: str

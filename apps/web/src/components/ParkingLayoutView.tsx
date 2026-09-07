@@ -33,10 +33,12 @@ import { LayoutSubmitModal } from './LayoutSubmitModal';
 import { ReferenceImageReplaceModal } from './ReferenceImageReplaceModal';
 import { CameraCalibrationModal } from './CameraCalibrationModal';
 import { CameraStabilityPanel } from './CameraStabilityPanel';
+import { ParkingOccupancyPanel } from './ParkingOccupancyPanel';
 import {
   AlertCircle,
   AlertTriangle,
   Camera as CameraIcon,
+  Car,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -85,7 +87,7 @@ export function ParkingLayoutView() {
   const [isSaving, setIsSaving] = useState(false);
   const [isBranchingDraft, setIsBranchingDraft] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [activeRightTab, setActiveRightTab] = useState<'editor' | 'stability'>('editor');
+  const [activeRightTab, setActiveRightTab] = useState<'editor' | 'stability' | 'occupancy'>('editor');
 
   // Modals
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
@@ -775,9 +777,27 @@ export function ParkingLayoutView() {
               <ShieldAlert className="w-3.5 h-3.5" />
               <span>Camera Stability Gate</span>
             </button>
+            <button
+              id="parking-occupancy-tab-button"
+              onClick={() => setActiveRightTab('occupancy')}
+              className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
+                activeRightTab === 'occupancy'
+                  ? 'bg-command-surface text-cyan-400 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-white'
+              }`}
+            >
+              <Car className="w-3.5 h-3.5" />
+              <span>Occupancy Pipeline</span>
+            </button>
           </div>
 
-          {activeRightTab === 'stability' ? (
+          {activeRightTab === 'occupancy' ? (
+            <ParkingOccupancyPanel
+              cameraId={selectedCameraId}
+              cameraName={activeCamera?.name}
+              activeLayoutId={activeLayout?.id}
+            />
+          ) : activeRightTab === 'stability' ? (
             <CameraStabilityPanel
               cameraId={selectedCameraId}
               cameraName={activeCamera?.name}

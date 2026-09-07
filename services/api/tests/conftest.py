@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from services.api.app.db.base import Base
 from services.api.app.db.session import get_db
 import services.api.app.services.stability_job_manager as job_mgr_module
+import services.api.app.services.parking_occupancy_job_manager as occ_job_mgr_module
 
 
 @pytest.fixture
@@ -43,6 +44,7 @@ async def db_session(monkeypatch):
         autoflush=False,
     )
     monkeypatch.setattr(job_mgr_module, "async_session_factory", session_factory)
+    monkeypatch.setattr(occ_job_mgr_module, "async_session_factory", session_factory)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

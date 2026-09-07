@@ -1,0 +1,57 @@
+version: "v1.0.0"
+algorithm_version: "2.0.0-gated-temporal-occupancy"
+
+detector:
+  model_path: "models/yolov8n.pt"
+  expected_model_sha256: "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
+  confidence_threshold: 0.35
+  iou_threshold: 0.45
+  allowed_classes: [2, 3, 5, 7]  # COCO: car(2), motorcycle(3), bus(5), truck(7)
+  class_names:
+    2: "car"
+    3: "motorcycle"
+    5: "bus"
+    7: "truck"
+  device: "cpu"
+
+tracking:
+  enabled: true
+  track_high_thresh: 0.35
+  track_low_thresh: 0.15
+  new_track_thresh: 0.40
+  track_buffer: 30
+  match_thresh: 0.80
+
+scoring:
+  min_bay_coverage_ratio: 0.25
+  min_vehicle_overlap_ratio: 0.20
+  high_coverage_threshold: 0.40
+  min_detection_confidence: 0.30
+  require_center_or_coverage: true
+
+temporal:
+  min_frames_occupied: 3
+  min_frames_vacant: 5
+  dropout_tolerance_frames: 2
+
+rendering:
+  vacant_color_bgr: [0, 255, 0]      # Neon Green
+  vacant_fill_alpha: 0.25
+  occupied_color_bgr: [0, 0, 255]    # Red
+  occupied_fill_alpha: 0.35
+  unknown_color_bgr: [128, 128, 128] # Gray
+  unknown_fill_alpha: 0.20
+  occluded_color_bgr: [0, 165, 255]  # Amber / Orange
+  occluded_fill_alpha: 0.30
+  vehicle_box_bgr: [255, 255, 0]     # Cyan
+  draw_vehicle_boxes: true
+  draw_track_ids: true
+  draw_bay_labels: true
+  draw_summary_hud: true
+
+execution:
+  max_concurrent_jobs: 2
+  max_upload_bytes: 209715200       # 200 MB
+  max_duration_seconds: 300.0       # 5 minutes
+  ffprobe_timeout_seconds: 15.0
+  ffmpeg_timeout_seconds: 180.0

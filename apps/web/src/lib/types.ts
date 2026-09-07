@@ -241,3 +241,170 @@ export interface LayoutValidationResult {
   spaces_count: number;
   approach_zones_count: number;
 }
+
+export type StabilityDecision = 'STABLE' | 'UNSTABLE' | 'INSUFFICIENT_EVIDENCE' | 'ERROR';
+export type OperationalGate = 'ALLOWED' | 'BLOCKED';
+export type StabilityStatus = 'QUEUED' | 'VALIDATING' | 'ANALYZING' | 'COMPLETE' | 'FAILED' | 'CANCELLED';
+
+export interface SampleMeasurement {
+  sample_index: number;
+  timestamp_seconds: number;
+  frame_index: number;
+  matched_features: number;
+  inlier_count: number;
+  inlier_ratio: number;
+  translation_px_x: number;
+  translation_px_y: number;
+  translation_magnitude_px: number;
+  translation_normalized: number;
+  scale_factor: number;
+  scale_change: number;
+  rotation_degrees: number;
+  perspective_distortion: number;
+  reprojection_error: number;
+  decision: StabilityDecision;
+  rejection_reasons: string[];
+}
+
+export interface StabilityAssessment {
+  id: string;
+  camera_id: string;
+  layout_revision_id?: string | null;
+  layout_canonical_sha256?: string | null;
+  reference_image_sha256: string;
+  video_sha256?: string | null;
+  status: StabilityStatus;
+  progress_pct: number;
+  stage_message?: string | null;
+  failure_code?: string | null;
+  failure_message?: string | null;
+  config_version?: string | null;
+  config_sha256?: string | null;
+  algorithm_version?: string | null;
+  opencv_version?: string | null;
+  thresholds_snapshot?: Record<string, any> | null;
+  sample_measurements: SampleMeasurement[];
+  aggregate_decision?: StabilityDecision | null;
+  operational_gate?: OperationalGate | null;
+  gate_reasons: string[];
+  summary_metrics?: Record<string, any> | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  operator_acknowledged_at?: string | null;
+  operator_label?: string | null;
+  operator_note?: string | null;
+}
+
+export interface CameraStabilityAuditEvent {
+  id: string;
+  assessment_id: string;
+  camera_id: string;
+  event_type: string;
+  operator_identity: string;
+  explicit_reason: string;
+  note?: string | null;
+  previous_gate_state?: string | null;
+  resulting_gate_state: string;
+  previous_calibration_status?: string | null;
+  resulting_calibration_status: string;
+  assessment_sha256?: string | null;
+  config_sha256?: string | null;
+  reference_image_sha256: string;
+  layout_canonical_sha256?: string | null;
+  created_at: string;
+}
+
+export interface CameraOperationalGate {
+  camera_id: string;
+  operational_gate: OperationalGate;
+  gate_reasons: string[];
+  aggregate_decision?: StabilityDecision | null;
+  assessment_id?: string | null;
+  reference_image_sha256?: string | null;
+  layout_canonical_sha256?: string | null;
+  created_at?: string | null;
+  is_fresh: boolean;
+}
+
+// ============================================================================
+// Gate-Controlled Parking Occupancy (Phase 2B)
+// ============================================================================
+
+export type OccupancyJobStatus =
+  | 'QUEUED'
+  | 'VALIDATING'
+  | 'DETECTING'
+  | 'TRACKING'
+  | 'CLASSIFYING_OCCUPANCY'
+  | 'RENDERING'
+  | 'ENCODING'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'BLOCKED_BY_STABILITY_GATE';
+
+export type BayOccupancyState = 'UNKNOWN' | 'VACANT' | 'OCCUPIED' | 'OCCLUDED';
+
+export interface BaySummaryItem {
+  operator_label: string;
+  space_type: SpaceType;
+  final_state: BayOccupancyState;
+  final_confidence: number;
+  transitions_count: number;
+  last_vehicle_track_id?: number | null;
+}
+
+export interface ParkingOccupancyJob {
+  id: string;
+  camera_id: string;
+  site_id: string;
+  layout_revision_id?: string | null;
+  stability_assessment_id?: string | null;
+
+  status: OccupancyJobStatus;
+  progress_pct: number;
+  stage_message?: string | null;
+  failure_code?: string | null;
+  failure_message?: string | null;
+
+  gate_decision?: string | null;
+  gate_reasons?: string[] | null;
+
+  input_video_sha256?: string | null;
+  output_video_sha256?: string | null;
+  reference_image_sha256?: string | null;
+  layout_canonical_sha256?: string | null;
+  detector_checkpoint_sha256?: string | null;
+  occupancy_config_sha256?: string | null;
+
+  total_frames: number;
+  processed_frames: number;
+  fps: number;
+  duration_seconds: number;
+  video_width: number;
+  video_height: number;
+
+  total_bays: number;
+  final_occupied_count: number;
+  final_vacant_count: number;
+  final_unknown_count: number;
+  final_occluded_count: number;
+  total_state_transitions: number;
+
+  has_annotated_video: boolean;
+  has_timeline: boolean;
+  has_manifest: boolean;
+  bay_summary?: Record<string, BaySummaryItem> | null;
+
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ParkingOccupancyJobCancelResponse {
+  job_id: string;
+  status: string;
+  cancelled: boolean;
+  message: string;
+}

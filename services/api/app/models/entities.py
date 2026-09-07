@@ -211,6 +211,8 @@ class Camera(Base):
     # Relationships
     site: Mapped[Site] = relationship("Site", back_populates="cameras")
     layout_revisions: Mapped[List[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision", back_populates="camera", cascade="all, delete-orphan")
+    stability_assessments: Mapped[List["CameraStabilityAssessment"]] = relationship("CameraStabilityAssessment", back_populates="camera", cascade="all, delete-orphan")
+    occupancy_jobs: Mapped[List["ParkingOccupancyJob"]] = relationship("ParkingOccupancyJob", back_populates="camera", cascade="all, delete-orphan")
 
 
 class ParkingLayoutRevision(Base):
@@ -296,3 +298,128 @@ class LayoutAuditEvent(Base):
 
     # Relationships
     layout_revision: Mapped[ParkingLayoutRevision] = relationship("ParkingLayoutRevision", back_populates="audit_events")
+
+
+class CameraStabilityAssessment(Base):
+    """Immutable operational camera stability assessment record."""
+    __tablename__ = "camera_stability_assessments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    layout_revision_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="SET NULL"), nullable=True)
+    layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), default="COMPLETE", nullable=False) # QUEUED, VALIDATING, ANALYZING, COMPLETE, FAILED, CANCELLED
+    progress_pct: Mapped[float] = mapped_column(Float, default=100.0, nullable=False)
+    stage_message: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    failure_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    config_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    config_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    reference_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    video_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    algorithm_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    opencv_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    thresholds_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    sample_measurements: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
+
+    aggregate_decision: Mapped[Optional[str]] = mapped_column(String(32), nullable=True) # STABLE, UNSTABLE, INSUFFICIENT_EVIDENCE, ERROR
+    operational_gate: Mapped[Optional[str]] = mapped_column(String(32), nullable=True) # ALLOWED, BLOCKED
+    gate_reasons: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    summary_metrics: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Legacy fields preserved as nullable
+    operator_acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    operator_label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    operator_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="stability_assessments")
+    layout_revision: Mapped[Optional[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision")
+    audit_events: Mapped[list[CameraStabilityAuditEvent]] = relationship("CameraStabilityAuditEvent", back_populates="assessment", cascade="all, delete-orphan")
+
+
+class CameraStabilityAuditEvent(Base):
+    """Append-only audit event log for camera stability assessments and calibration state transitions."""
+    __tablename__ = "camera_stability_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    assessment_id: Mapped[str] = mapped_column(String(64), ForeignKey("camera_stability_assessments.id", ondelete="CASCADE"), nullable=False, index=True)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False) # OPERATOR_ACKNOWLEDGED, CALIBRATION_INVALIDATED
+    operator_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    explicit_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    previous_gate_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resulting_gate_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    previous_calibration_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resulting_calibration_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    assessment_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    config_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    assessment: Mapped[CameraStabilityAssessment] = relationship("CameraStabilityAssessment", back_populates="audit_events")
+
+
+class ParkingOccupancyJob(Base):
+    """Asynchronous background processing record for gated parking occupancy and video annotation."""
+    __tablename__ = "parking_occupancy_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    site_id: Mapped[str] = mapped_column(String(64), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True)
+    layout_revision_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("parking_layout_revisions.id", ondelete="SET NULL"), nullable=True)
+    stability_assessment_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("camera_stability_assessments.id", ondelete="SET NULL"), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), default="QUEUED", nullable=False)  # QUEUED, VALIDATING, DETECTING, TRACKING, CLASSIFYING_OCCUPANCY, RENDERING, ENCODING, COMPLETE, FAILED, CANCELLED, BLOCKED_BY_STABILITY_GATE
+    progress_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    stage_message: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    failure_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    gate_decision: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # ALLOWED, BLOCKED
+    gate_reasons: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+
+    input_video_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    output_video_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reference_image_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    layout_canonical_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    detector_checkpoint_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    occupancy_config_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    total_frames: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_frames: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fps: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    video_width: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    video_height: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    total_bays: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    final_occupied_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    final_vacant_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    final_unknown_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    final_occluded_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_state_transitions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    output_video_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    timeline_jsonl_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    manifest_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    bay_summary_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="occupancy_jobs")

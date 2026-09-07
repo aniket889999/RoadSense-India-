@@ -9,6 +9,11 @@ import {
   ParkingSpace,
   ApproachZone,
   Site,
+  StabilityAssessment,
+  CameraOperationalGate,
+  CameraStabilityAuditEvent,
+  ParkingOccupancyJob,
+  ParkingOccupancyJobCancelResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -233,4 +238,162 @@ export async function invalidateLayout(
     throw new Error(err.detail || 'Failed to invalidate layout');
   }
   return res.json();
+}
+
+// ============================================================================
+// Camera Stability Assessment & Operational Gate (Phase 2A)
+// ============================================================================
+
+export async function getCameraOperationalGate(cameraId: string): Promise<CameraOperationalGate> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/gate`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to fetch operational gate: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listCameraStabilityAssessments(cameraId: string): Promise<StabilityAssessment[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/assessments`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to list stability assessments: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getStabilityAssessmentDetail(assessmentId: string): Promise<StabilityAssessment> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to fetch assessment detail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function assessCameraStability(
+  cameraId: string,
+  videoFile: File
+): Promise<StabilityAssessment> {
+  const formData = new FormData();
+  formData.append('file', videoFile, videoFile.name);
+
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/assess`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to assess camera stability');
+  }
+  return res.json();
+}
+
+export async function cancelStabilityAssessment(assessmentId: string): Promise<{ assessment_id: string; status: string; cancelled: boolean; message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to cancel stability assessment');
+  }
+  return res.json();
+}
+
+export async function acknowledgeStabilityAssessment(
+  assessmentId: string,
+  operatorLabel: string,
+  note?: string,
+  triggerInvalidation?: boolean,
+  confirmInvalidation?: boolean,
+  invalidationReason?: string
+): Promise<CameraStabilityAuditEvent> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/stability/assessments/${assessmentId}/acknowledge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      local_operator_label: operatorLabel,
+      note,
+      trigger_calibration_invalidation: triggerInvalidation || false,
+      confirm_invalidation: confirmInvalidation || false,
+      invalidation_reason: invalidationReason,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to acknowledge stability assessment');
+  }
+  return res.json();
+}
+
+export async function listCameraStabilityAuditEvents(cameraId: string): Promise<CameraStabilityAuditEvent[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/stability/audit-events`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list stability audit events');
+  }
+  return res.json();
+}
+
+// ============================================================================
+// Gate-Controlled Parking Occupancy (Phase 2B)
+// ============================================================================
+
+export async function submitOccupancyJob(
+  cameraId: string,
+  videoFile: File
+): Promise<ParkingOccupancyJob> {
+  const formData = new FormData();
+  formData.append('file', videoFile, videoFile.name);
+
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/occupancy/jobs`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to submit parking occupancy job');
+  }
+  return res.json();
+}
+
+export async function listOccupancyJobs(cameraId: string): Promise<ParkingOccupancyJob[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/occupancy/jobs`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list occupancy jobs');
+  }
+  return res.json();
+}
+
+export async function getOccupancyJob(jobId: string): Promise<ParkingOccupancyJob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to fetch occupancy job details');
+  }
+  return res.json();
+}
+
+export async function cancelOccupancyJob(jobId: string): Promise<ParkingOccupancyJobCancelResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to cancel occupancy job');
+  }
+  return res.json();
+}
+
+export function getOccupancyVideoUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/video`;
+}
+
+export function getOccupancyManifestUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/manifest`;
+}
+
+export function getOccupancyTimelineUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/timeline`;
 }

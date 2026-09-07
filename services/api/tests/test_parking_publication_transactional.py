@@ -373,3 +373,178 @@ async def test_preexisting_final_directory_safety(tmp_path, monkeypatch):
     assert existing_file.read_bytes() == b"existing pristine video"
     # Staging directory must be cleaned up
     assert not staging_dir.exists()
+
+
+@pytest.mark.anyio
+async def test_cancellation_cas_wins_before_publication(db_session):
+    """Deterministic test: Cancellation CAS transitions RUNNING job to CANCELLED and blocks publication reservation."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    job_id = str(uuid.uuid4())
+    job = ParkingOccupancyJob(
+        id=job_id,
+        camera_id=cam.id,
+        site_id=site.id,
+        status="RUNNING",
+    )
+    db_session.add_all([site, cam, job])
+    await db_session.commit()
+
+    # Cancellation CAS executes first
+    res = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    assert res["cancelled"] is True
+    assert res["status"] == "CANCELLED"
+
+    # Subsequent publication reservation fails
+    pub_reserved = await parking_occupancy_job_manager._reserve_publishing_state(job_id)
+    assert pub_reserved is False
+
+    # Status remains CANCELLED (expire session cache to read committed row from other session)
+    db_session.expire_all()
+    db_job = (await db_session.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))).scalar_one()
+    assert db_job.status == "CANCELLED"
+
+
+@pytest.mark.anyio
+async def test_publication_cas_wins_before_cancellation(db_session, client):
+    """Deterministic test: Publication CAS transitions job to PUBLISHING and subsequent cancellation fails."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    job_id = str(uuid.uuid4())
+    job = ParkingOccupancyJob(
+        id=job_id,
+        camera_id=cam.id,
+        site_id=site.id,
+        status="RUNNING",
+    )
+    db_session.add_all([site, cam, job])
+    await db_session.commit()
+
+    # Publication CAS executes first
+    pub_reserved = await parking_occupancy_job_manager._reserve_publishing_state(job_id)
+    assert pub_reserved is True
+
+    # Cancellation attempt fails
+    cancel_res = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    assert cancel_res["cancelled"] is False
+    assert cancel_res["status"] == "PUBLISHING"
+
+    # API endpoint also returns cancelled=False without mutating status
+    resp = await client.post(f"/api/v1/parking/jobs/{job_id}/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is False
+    assert resp.json()["status"] == "PUBLISHING"
+
+    # Status in DB remains PUBLISHING (expire session cache to read committed row)
+    db_session.expire_all()
+    db_job = (await db_session.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))).scalar_one()
+    assert db_job.status == "PUBLISHING"
+
+
+@pytest.mark.anyio
+async def test_endpoint_never_overwrites_terminal_states(db_session, client):
+    """Verify endpoint never overwrites COMPLETE, FAILED, BLOCKED_BY_STABILITY_GATE, or CANCELLED."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    cam_id = cam.id
+    site_id = site.id
+    db_session.add_all([site, cam])
+    await db_session.commit()
+
+    for term_status in ("COMPLETE", "FAILED", "BLOCKED_BY_STABILITY_GATE", "CANCELLED"):
+        job_id = str(uuid.uuid4())
+        job = ParkingOccupancyJob(
+            id=job_id,
+            camera_id=cam_id,
+            site_id=site_id,
+            status=term_status,
+        )
+        db_session.add(job)
+        await db_session.commit()
+
+        resp = await client.post(f"/api/v1/parking/jobs/{job_id}/cancel")
+        assert resp.status_code == 200
+        assert resp.json()["cancelled"] is False
+        assert resp.json()["status"] == term_status
+
+        # DB status remains unmodified
+        db_session.expire_all()
+        db_job = (await db_session.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))).scalar_one()
+        assert db_job.status == term_status
+
+
+@pytest.mark.anyio
+async def test_cancellation_event_set_only_when_cas_succeeds(db_session):
+    """Verify cancellation threading.Event is set if and only if cancellation CAS succeeds."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    db_session.add_all([site, cam])
+    await db_session.commit()
+
+    # Case 1: Cancellable job -> event IS set
+    job_id_1 = str(uuid.uuid4())
+    job1 = ParkingOccupancyJob(id=job_id_1, camera_id=cam.id, site_id=site.id, status="DETECTING")
+    db_session.add(job1)
+    await db_session.commit()
+
+    evt1 = threading.Event()
+    parking_occupancy_job_manager._cancellation_events[job_id_1] = evt1
+    assert not evt1.is_set()
+
+    res1 = await parking_occupancy_job_manager.request_job_cancellation(job_id_1)
+    assert res1["cancelled"] is True
+    assert evt1.is_set()
+
+    # Case 2: Non-cancellable job (COMPLETE) -> event is NOT set
+    job_id_2 = str(uuid.uuid4())
+    job2 = ParkingOccupancyJob(id=job_id_2, camera_id=cam.id, site_id=site.id, status="COMPLETE")
+    db_session.add(job2)
+    await db_session.commit()
+
+    evt2 = threading.Event()
+    parking_occupancy_job_manager._cancellation_events[job_id_2] = evt2
+    assert not evt2.is_set()
+
+    res2 = await parking_occupancy_job_manager.request_job_cancellation(job_id_2)
+    assert res2["cancelled"] is False
+    assert not evt2.is_set()
+
+
+@pytest.mark.anyio
+async def test_repeated_cancellation_is_idempotent(db_session):
+    """Verify repeated cancellation calls on the same job are safe and idempotent."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    job_id = str(uuid.uuid4())
+    job = ParkingOccupancyJob(id=job_id, camera_id=cam.id, site_id=site.id, status="TRACKING")
+    db_session.add_all([site, cam, job])
+    await db_session.commit()
+
+    # 1st cancellation
+    res1 = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    assert res1["cancelled"] is True
+    assert res1["status"] == "CANCELLED"
+
+    # 2nd cancellation
+    res2 = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    assert res2["cancelled"] is False
+    assert res2["status"] == "CANCELLED"
+
+
+def test_bytetrack_fps_and_incompatible_constructor_fail_closed(monkeypatch):
+    """Verify ParkingByteTracker passes validated runtime FPS and fails closed on incompatible constructor."""
+    from src.parking.vehicle_tracker import ParkingByteTracker
+
+    # 1. Valid constructor receives validated runtime FPS
+    tracker = ParkingByteTracker(fps=60)
+    assert tracker.fps == 60
+    assert getattr(tracker._tracker, "frame_rate", None) == 60
+
+    # 2. Incompatible BYTETracker constructor (raising TypeError on frame_rate) fails closed with RuntimeError
+    class IncompatibleBYTETracker:
+        def __init__(self, args):
+            raise TypeError("BYTETracker.__init__() got an unexpected keyword argument 'frame_rate'")
+
+    monkeypatch.setattr("src.parking.vehicle_tracker.BYTETracker", IncompatibleBYTETracker)
+    with pytest.raises(RuntimeError, match="Incompatible BYTETracker constructor: 'frame_rate' parameter is required"):
+        ParkingByteTracker(fps=30)

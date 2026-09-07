@@ -2109,34 +2109,17 @@ async def cancel_parking_occupancy_job(
     job_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel an active or queued parking occupancy job."""
-    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-    job = res.scalar_one_or_none()
-    if not job:
+    """Cancel an active or queued parking occupancy job atomically through manager CAS."""
+    res = await db.execute(select(ParkingOccupancyJob.id).where(ParkingOccupancyJob.id == job_id))
+    if not res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    if job.status in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE", "PUBLISHING"):
-        return ParkingOccupancyJobCancelResponse(
-            job_id=job_id,
-            status=job.status,
-            cancelled=False,
-            message=f"Job is already in terminal or non-cancellable state '{job.status}'.",
-        )
-
-    await parking_occupancy_job_manager.cancel_occupancy_job(job_id)
-    job.status = "CANCELLED"
-    job.progress_pct = 100.0
-    job.stage_message = "Job cancelled by operator request"
-    job.failure_code = "CANCELLED"
-    job.failure_message = "Job cancelled by operator request."
-    job.completed_at = utc_now()
-    await db.commit()
-
+    result = await parking_occupancy_job_manager.request_job_cancellation(job_id)
     return ParkingOccupancyJobCancelResponse(
-        job_id=job_id,
-        status="CANCELLED",
-        cancelled=True,
-        message="Parking occupancy job cancelled successfully.",
+        job_id=result["job_id"],
+        status=result["status"],
+        cancelled=result["cancelled"],
+        message=result["message"],
     )
 
 

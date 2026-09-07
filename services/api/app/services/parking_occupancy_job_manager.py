@@ -101,13 +101,78 @@ class ParkingOccupancyJobManager:
         self._active_tasks[job_id] = task
         return task
 
+    async def request_job_cancellation(self, job_id: str) -> Dict[str, Any]:
+        """
+        Atomically request cancellation of an active or queued occupancy job using database CAS.
+        PUBLISHING and every terminal state are strictly excluded.
+        Sets cooperative cancellation event only if the CAS succeeds.
+        """
+        cancellable_statuses = (
+            "QUEUED",
+            "PENDING",
+            "VALIDATING",
+            "DETECTING",
+            "TRACKING",
+            "CLASSIFYING_OCCUPANCY",
+            "RENDERING",
+            "ENCODING",
+            "RUNNING",
+        )
+        try:
+            async with async_session_factory() as db:
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.in_(cancellable_statuses))
+                    .values(
+                        status="CANCELLED",
+                        progress_pct=100.0,
+                        stage_message="Job cancelled by operator request",
+                        failure_code="CANCELLED",
+                        failure_message="Job cancelled by operator request.",
+                        completed_at=_utc_now(),
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+
+                if res.rowcount > 0:
+                    self._cancel_requested.add(job_id)
+                    evt = self._cancellation_events.get(job_id)
+                    if evt:
+                        evt.set()
+                    return {
+                        "job_id": job_id,
+                        "status": "CANCELLED",
+                        "cancelled": True,
+                        "message": "Parking occupancy job cancelled successfully.",
+                    }
+
+                # CAS failed: fetch current state from DB
+                check_res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+                job = check_res.scalar_one_or_none()
+                if not job:
+                    return {
+                        "job_id": job_id,
+                        "status": "NOT_FOUND",
+                        "cancelled": False,
+                        "message": "Parking occupancy job not found.",
+                    }
+
+                return {
+                    "job_id": job_id,
+                    "status": job.status,
+                    "cancelled": False,
+                    "message": f"Job is in non-cancellable state '{job.status}'.",
+                }
+        except Exception as e:
+            logger.error(f"Error executing cancellation CAS for job {job_id}: {e}")
+            raise
+
     async def cancel_occupancy_job(self, job_id: str) -> bool:
-        """Request cooperative cancellation of an active or queued occupancy job."""
-        self._cancel_requested.add(job_id)
-        evt = self._cancellation_events.get(job_id)
-        if evt:
-            evt.set()
-        return True
+        """Cooperative cancellation alias delegating to atomic request_job_cancellation."""
+        res = await self.request_job_cancellation(job_id)
+        return bool(res.get("cancelled", False))
 
     async def _execute_job(
         self,
@@ -390,14 +455,20 @@ class ParkingOccupancyJobManager:
                 async def _update_db_progress(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
                     try:
                         async with async_session_factory() as db:
-                            res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                            j = res.scalar_one_or_none()
-                            if j and j.status not in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE", "PUBLISHING"):
-                                if stage_status:
-                                    j.status = stage_status
-                                j.progress_pct = round(pct, 1)
-                                j.stage_message = msg
-                                await db.commit()
+                            values_dict: Dict[str, Any] = {
+                                "progress_pct": round(pct, 1),
+                                "stage_message": msg,
+                            }
+                            if stage_status:
+                                values_dict["status"] = stage_status
+                            stmt = (
+                                update(ParkingOccupancyJob)
+                                .where(ParkingOccupancyJob.id == job_id)
+                                .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES + ("PUBLISHING",)))
+                                .values(**values_dict)
+                            )
+                            await db.execute(stmt)
+                            await db.commit()
                     except Exception as ex:
                         logger.debug(f"Progress update error: {ex}")
 

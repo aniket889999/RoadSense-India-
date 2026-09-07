@@ -190,16 +190,22 @@ class ParkingByteTracker:
         )
         try:
             self._tracker = BYTETracker(self._args, frame_rate=self.fps)
-        except TypeError:
-            self._tracker = BYTETracker(self._args)
+        except TypeError as e:
+            raise RuntimeError(
+                f"Incompatible BYTETracker constructor: 'frame_rate' parameter is required but rejected ({e}). "
+                "Pinned Ultralytics version with runtime FPS support is required."
+            ) from e
         self._last_frame_idx: int = -1
 
     def reset(self) -> None:
         """Reset tracker state completely between jobs."""
         try:
             self._tracker = BYTETracker(self._args, frame_rate=self.fps)
-        except TypeError:
-            self._tracker = BYTETracker(self._args)
+        except TypeError as e:
+            raise RuntimeError(
+                f"Incompatible BYTETracker constructor: 'frame_rate' parameter is required but rejected ({e}). "
+                "Pinned Ultralytics version with runtime FPS support is required."
+            ) from e
         self._last_frame_idx = -1
         self._track_consecutive_hits.clear()
         self._track_last_seen_frame.clear()

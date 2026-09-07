@@ -17,6 +17,7 @@ from src.parking.occupancy_contracts import (
     BayStateSummary,
     FrameOccupancyResult,
     OccupancyState,
+    ParkingJobCancelled,
     VehicleDetection,
 )
 
@@ -303,7 +304,7 @@ class FFmpegStreamEncoder:
 
         if self.cancellation_event and self.cancellation_event.is_set():
             self.cleanup()
-            raise RuntimeError("FFmpeg encoding cancelled by user request.")
+            raise ParkingJobCancelled("FFmpeg encoding cancelled by user request.")
 
         if not isinstance(frame_bgr, np.ndarray):
             raise TypeError("Frame must be a numpy ndarray.")

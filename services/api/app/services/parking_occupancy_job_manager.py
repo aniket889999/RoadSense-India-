@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
 import cv2
 import numpy as np
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 
 from services.api.app.core.config import settings
 from services.api.app.core.logging import logger
@@ -34,6 +34,7 @@ from src.parking.occupancy_config import ParkingOccupancyConfig, load_parking_oc
 from src.parking.occupancy_contracts import (
     FrameOccupancyResult,
     OccupancyState,
+    ParkingJobCancelled,
     ParkingJobManifest,
 )
 from src.parking.occupancy_engine import ParkingOccupancyEngine
@@ -42,6 +43,8 @@ from src.parking.stability_engine import inspect_video_media_safe
 from src.parking.vehicle_detector import LocalVehicleDetector
 from src.parking.vehicle_tracker import ParkingByteTracker
 from src.parking.video_annotator import FFmpegStreamEncoder, ParkingVideoAnnotator
+
+TERMINAL_STATES = ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE")
 
 
 def _utc_now() -> datetime:
@@ -60,6 +63,7 @@ class ParkingOccupancyJobManager:
         self._max_concurrency: int = max(1, self.config.execution.max_concurrent_jobs or max_concurrency)
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._active_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._running_jobs: Set[str] = set()
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._cancel_requested: Set[str] = set()
 
@@ -104,11 +108,13 @@ class ParkingOccupancyJobManager:
         if evt:
             evt.set()
 
-        task = self._active_tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
-            return True
-        return False
+        # Only directly cancel the asyncio task if it has not yet started execution in thread
+        if job_id not in self._running_jobs:
+            task = self._active_tasks.get(job_id)
+            if task and not task.done():
+                task.cancel()
+                return True
+        return True
 
     async def _execute_job(
         self,
@@ -301,6 +307,7 @@ class ParkingOccupancyJobManager:
 
             # 4. Run Streaming Inference & Pipeline in Thread
             try:
+                self._running_jobs.add(job_id)
                 result_payload = await asyncio.to_thread(
                     self._run_streaming_pipeline,
                     job_id=job_id,
@@ -323,49 +330,24 @@ class ParkingOccupancyJobManager:
                     await self._persist_cancellation(job_id, video_path)
                     return
 
-                # 5. Persist COMPLETE state atomically
-                async with async_session_factory() as db:
-                    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                    job = res.scalar_one_or_none()
-                    if job:
-                        job.status = "COMPLETE"
-                        job.progress_pct = 100.0
-                        job.stage_message = "Parking occupancy evaluation and annotated video encoding complete"
-                        job.gate_decision = "ALLOWED"
-                        job.gate_reasons = ["GATE_ALLOWED: Fresh camera stability assessment matches verified layout."]
-                        job.input_video_sha256 = input_video_sha
-                        job.output_video_sha256 = result_payload["output_video_sha256"]
-                        job.reference_image_sha256 = current_ref_sha
-                        job.layout_canonical_sha256 = current_layout_sha
-                        job.detector_checkpoint_sha256 = result_payload["detector_checkpoint_sha256"]
-                        job.occupancy_config_sha256 = self.config.config_sha256
-                        job.layout_revision_id = verified_layout_id
-                        job.stability_assessment_id = latest_assessment_id
-                        job.total_frames = result_payload["total_frames"]
-                        job.processed_frames = result_payload["processed_frames"]
-                        job.fps = result_payload["fps"]
-                        job.duration_seconds = result_payload["duration_seconds"]
-                        job.video_width = result_payload["video_width"]
-                        job.video_height = result_payload["video_height"]
-                        job.total_bays = result_payload["total_bays"]
-                        job.final_occupied_count = result_payload["final_occupied_count"]
-                        job.final_vacant_count = result_payload["final_vacant_count"]
-                        job.final_unknown_count = result_payload["final_unknown_count"]
-                        job.final_occluded_count = result_payload["final_occluded_count"]
-                        job.total_state_transitions = result_payload["total_state_transitions"]
-                        job.output_video_path = result_payload["output_video_path"]
-                        job.timeline_jsonl_path = result_payload["timeline_jsonl_path"]
-                        job.manifest_json = result_payload["manifest_json"]
-                        job.bay_summary_json = result_payload["bay_summary_json"]
-                        job.completed_at = _utc_now()
-                        await db.commit()
+                # 5. Persist COMPLETE state atomically via CAS update
+                await self._persist_complete(
+                    job_id=job_id,
+                    input_video_sha=input_video_sha,
+                    current_ref_sha=current_ref_sha,
+                    current_layout_sha=current_layout_sha,
+                    verified_layout_id=verified_layout_id,
+                    latest_assessment_id=latest_assessment_id,
+                    result_payload=result_payload,
+                )
 
-            except asyncio.CancelledError:
+            except (ParkingJobCancelled, asyncio.CancelledError):
                 await self._persist_cancellation(job_id, video_path)
             except Exception as e:
                 logger.error(f"Error during occupancy execution for job {job_id}: {e}", exc_info=True)
                 await self._persist_failure(job_id, "EXECUTION_ERROR", str(e), video_path)
             finally:
+                self._running_jobs.discard(job_id)
                 # Cleanup temp input file
                 try:
                     if video_path.exists():
@@ -486,22 +468,29 @@ class ParkingOccupancyJobManager:
                 frame_res = engine.process_frame(frame_idx, timestamp_sec, tracked_detections)
                 last_frame_res = frame_res
 
-                # Stream any new timeline events directly to JSONL on disk
-                for bay_id, tracker_obj in engine.trackers.items():
-                    if tracker_obj.last_transition_frame == frame_idx and tracker_obj.history:
-                        latest_ev = tracker_obj.history[-1]
-                        entry_dict = {
-                            "frame_index": frame_idx,
-                            "timestamp_seconds": round(timestamp_sec, 3),
-                            "bay_id": bay_id,
-                            "operator_label": tracker_obj.operator_label,
-                            "previous_state": tracker_obj.current_state.value,
-                            "new_state": tracker_obj.current_state.value,
-                            "confidence": round(tracker_obj.confidence, 4),
-                            "contributing_track_ids": tracker_obj.contributing_track_ids,
-                        }
-                        timeline_file.write(json.dumps(entry_dict) + "\n")
-                        total_transitions += 1
+                if cancel_event.is_set():
+                    raise ParkingJobCancelled(f"Job {job_id} cancelled during video frame decoding.")
+
+                timestamp_sec = float(frame_idx / fps)
+
+                # 1. Detection
+                raw_detections = detector.detect_vehicles(frame_bgr)
+
+                # 2. Tracking (session-local ByteTrack)
+                tracked_detections = tracker.update_tracks(
+                    detections=raw_detections,
+                    frame_idx=frame_idx,
+                    frame_shape=(height, width),
+                )
+
+                # 3. Occupancy Engine
+                frame_res = engine.process_frame(frame_idx, timestamp_sec, tracked_detections)
+                last_frame_res = frame_res
+
+                # Stream real state transitions directly to JSONL on disk
+                for tl_entry in frame_res.state_transitions:
+                    timeline_file.write(json.dumps(tl_entry.to_dict()) + "\n")
+                    total_transitions += 1
 
                 # 4. Annotate single frame
                 rendered = annotator.render_frame(
@@ -721,48 +710,128 @@ class ParkingOccupancyJobManager:
         if v_stream.get("width") != expected_width or v_stream.get("height") != expected_height:
             raise ValueError(f"Geometry mismatch: expected {expected_width}x{expected_height}, got {v_stream.get('width')}x{v_stream.get('height')}")
 
+    async def _persist_complete(
+        self,
+        job_id: str,
+        input_video_sha: str,
+        current_ref_sha: Optional[str],
+        current_layout_sha: Optional[str],
+        verified_layout_id: Optional[str],
+        latest_assessment_id: Optional[str],
+        result_payload: Dict[str, Any],
+    ) -> None:
+        try:
+            async with async_session_factory() as db:
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .values(
+                        status="COMPLETE",
+                        progress_pct=100.0,
+                        stage_message="Parking occupancy evaluation and annotated video encoding complete",
+                        gate_decision="ALLOWED",
+                        gate_reasons=["GATE_ALLOWED: Fresh camera stability assessment matches verified layout."],
+                        input_video_sha256=input_video_sha,
+                        output_video_sha256=result_payload["output_video_sha256"],
+                        reference_image_sha256=current_ref_sha,
+                        layout_canonical_sha256=current_layout_sha,
+                        detector_checkpoint_sha256=result_payload["detector_checkpoint_sha256"],
+                        occupancy_config_sha256=self.config.config_sha256,
+                        layout_revision_id=verified_layout_id,
+                        stability_assessment_id=latest_assessment_id,
+                        total_frames=result_payload["total_frames"],
+                        processed_frames=result_payload["processed_frames"],
+                        fps=result_payload["fps"],
+                        duration_seconds=result_payload["duration_seconds"],
+                        video_width=result_payload["video_width"],
+                        video_height=result_payload["video_height"],
+                        total_bays=result_payload["total_bays"],
+                        final_occupied_count=result_payload["final_occupied_count"],
+                        final_vacant_count=result_payload["final_vacant_count"],
+                        final_unknown_count=result_payload["final_unknown_count"],
+                        final_occluded_count=result_payload["final_occluded_count"],
+                        total_state_transitions=result_payload["total_state_transitions"],
+                        output_video_path=result_payload["output_video_path"],
+                        timeline_jsonl_path=result_payload["timeline_jsonl_path"],
+                        manifest_json=result_payload["manifest_json"],
+                        bay_summary_json=result_payload["bay_summary_json"],
+                        completed_at=_utc_now(),
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+                if res.rowcount == 0:
+                    logger.warning(f"Job {job_id} already reached a terminal state; skipping COMPLETE transition.")
+        except Exception as e:
+            logger.error(f"Error persisting COMPLETE state for job {job_id}: {e}")
+
     async def _persist_blocked_by_gate(self, job_id: str, reasons: List[str], video_path: Path) -> None:
         try:
             async with async_session_factory() as db:
-                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                job = res.scalar_one_or_none()
-                if job:
-                    job.status = "BLOCKED_BY_STABILITY_GATE"
-                    job.progress_pct = 0.0
-                    job.gate_decision = "BLOCKED"
-                    job.gate_reasons = reasons
-                    job.failure_code = "STABILITY_GATE_BLOCKED"
-                    job.failure_message = "Camera stability assessment is UNSTABLE, missing, or mismatched. Occupancy processing blocked fail-closed."
-                    job.completed_at = _utc_now()
-                    await db.commit()
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .values(
+                        status="BLOCKED_BY_STABILITY_GATE",
+                        progress_pct=0.0,
+                        gate_decision="BLOCKED",
+                        gate_reasons=reasons,
+                        failure_code="STABILITY_GATE_BLOCKED",
+                        failure_message="Camera stability assessment is UNSTABLE, missing, or mismatched. Occupancy processing blocked fail-closed.",
+                        stage_message="Occupancy evaluation blocked fail-closed by camera stability gate.",
+                        completed_at=_utc_now(),
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+                if res.rowcount == 0:
+                    logger.warning(f"Job {job_id} already reached a terminal state; skipping BLOCKED transition.")
         except Exception as e:
             logger.error(f"Error persisting blocked gate state for job {job_id}: {e}")
 
     async def _persist_cancellation(self, job_id: str, video_path: Path) -> None:
         try:
             async with async_session_factory() as db:
-                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                job = res.scalar_one_or_none()
-                if job and job.status not in ("COMPLETE", "FAILED", "BLOCKED_BY_STABILITY_GATE"):
-                    job.status = "CANCELLED"
-                    job.stage_message = "Job cancelled by user request."
-                    job.completed_at = _utc_now()
-                    await db.commit()
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .values(
+                        status="CANCELLED",
+                        stage_message="Job cancelled by user request.",
+                        failure_code="CANCELLED",
+                        failure_message="Job cancelled prior to completion.",
+                        completed_at=_utc_now(),
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+                if res.rowcount == 0:
+                    logger.warning(f"Job {job_id} already reached a terminal state; skipping CANCELLED transition.")
         except Exception as e:
             logger.error(f"Error persisting cancellation for job {job_id}: {e}")
 
     async def _persist_failure(self, job_id: str, code: str, message: str, video_path: Path) -> None:
         try:
             async with async_session_factory() as db:
-                res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                job = res.scalar_one_or_none()
-                if job and job.status not in ("COMPLETE", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"):
-                    job.status = "FAILED"
-                    job.failure_code = code
-                    job.failure_message = message
-                    job.stage_message = f"Failed: {message}"
-                    job.completed_at = _utc_now()
-                    await db.commit()
+                stmt = (
+                    update(ParkingOccupancyJob)
+                    .where(ParkingOccupancyJob.id == job_id)
+                    .where(ParkingOccupancyJob.status.not_in(TERMINAL_STATES))
+                    .values(
+                        status="FAILED",
+                        failure_code=code,
+                        failure_message=message,
+                        stage_message=f"Failed: {message}",
+                        completed_at=_utc_now(),
+                    )
+                )
+                res = await db.execute(stmt)
+                await db.commit()
+                if res.rowcount == 0:
+                    logger.warning(f"Job {job_id} already reached a terminal state; skipping FAILED transition.")
         except Exception as e:
             logger.error(f"Error persisting failure for job {job_id}: {e}")
 

@@ -251,3 +251,47 @@ async def test_occupancy_job_cancellation(client):
     detail_resp = await client.get(f"/api/v1/parking/jobs/{job_id}")
     assert detail_resp.status_code == 200
     assert detail_resp.json()["status"] == "CANCELLED"
+
+
+@pytest.mark.anyio
+async def test_terminal_state_race_prevention(client, db_session):
+    """Verify that CAS terminal state transitions prevent terminal state overwrites (race conditions)."""
+    from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
+    from services.api.app.models.entities import ParkingOccupancyJob
+    from sqlalchemy import select
+
+    s_resp = await client.post("/api/v1/sites", json={"name": "Race Site"})
+    site_id = s_resp.json()["id"]
+    c_resp = await client.post(f"/api/v1/sites/{site_id}/cameras", json={"name": "Race Cam"})
+    camera_id = c_resp.json()["id"]
+
+    vid_bytes = _create_synthetic_video_bytes(stationary=True, frames=10)
+    sub = await client.post(
+        f"/api/v1/cameras/{camera_id}/occupancy/jobs",
+        files={"file": ("race.mp4", vid_bytes, "video/mp4")},
+    )
+    job_id = sub.json()["id"]
+
+    # 1. Cancel the job
+    await client.post(f"/api/v1/parking/jobs/{job_id}/cancel")
+    d1 = (await client.get(f"/api/v1/parking/jobs/{job_id}")).json()
+    assert d1["status"] == "CANCELLED"
+
+    # 2. Attempt to overwrite with FAILED
+    await parking_occupancy_job_manager._persist_failure(
+        job_id=job_id,
+        code="LATE_FAILURE",
+        message="Should not overwrite CANCELLED",
+        video_path=Path("/tmp/dummy"),
+    )
+    d2 = (await client.get(f"/api/v1/parking/jobs/{job_id}")).json()
+    assert d2["status"] == "CANCELLED"  # Remains CANCELLED
+
+    # 3. Attempt to overwrite with BLOCKED_BY_STABILITY_GATE
+    await parking_occupancy_job_manager._persist_blocked_by_gate(
+        job_id=job_id,
+        reasons=["LATE_GATE_BLOCK"],
+        video_path=Path("/tmp/dummy"),
+    )
+    d3 = (await client.get(f"/api/v1/parking/jobs/{job_id}")).json()
+    assert d3["status"] == "CANCELLED"  # Remains CANCELLED

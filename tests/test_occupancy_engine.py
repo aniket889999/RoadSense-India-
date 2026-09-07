@@ -426,3 +426,118 @@ def test_annotator_independent_alpha_rendering(base_config):
     center_bgr = rendered_vacant[250, 250]
     assert center_bgr[1] > 130  # Green increased
     assert center_bgr[0] < 100 and center_bgr[2] < 100  # Blue & Red reduced
+
+
+def test_temporal_bay_tracker_all_five_state_transitions(base_config):
+    """
+    Exhaustively verify all 5 deterministic state transitions:
+    1. UNKNOWN -> VACANT
+    2. UNKNOWN -> OCCUPIED
+    3. OCCUPIED -> OCCLUDED
+    4. OCCLUDED -> OCCUPIED
+    5. OCCLUDED -> VACANT
+    """
+    ev_occ = BayOccupancyEvidence(
+        bay_id="b1",
+        operator_label="B1",
+        frame_index=0,
+        timestamp_seconds=0.0,
+        intersection_area_px=100.0,
+        bay_area_px=100.0,
+        vehicle_box_area_px=100.0,
+        bay_coverage_ratio=0.8,
+        vehicle_overlap_ratio=0.8,
+        is_center_inside=True,
+        max_confidence=0.92,
+        contributing_track_ids=[101],
+        is_instant_evidence_occupied=True,
+    )
+
+    # 1. UNKNOWN -> VACANT
+    t_vac = TemporalBayTracker(
+        bay_id="b1",
+        operator_label="B1",
+        space_type="STANDARD",
+        polygon_normalized=[],
+        temporal_config=base_config.temporal,
+    )
+    assert t_vac.current_state == OccupancyState.UNKNOWN
+    assert t_vac.last_transition_frame == -1
+
+    tl_vac = None
+    for f in range(5):  # min_frames_vacant = 5
+        s, tl = t_vac.update_frame(f, f * 0.033, None)
+        if tl:
+            tl_vac = tl
+    assert t_vac.current_state == OccupancyState.VACANT
+    assert tl_vac is not None
+    assert tl_vac.previous_state == OccupancyState.UNKNOWN
+    assert tl_vac.new_state == OccupancyState.VACANT
+    assert tl_vac.previous_state != tl_vac.new_state
+
+    # 2. UNKNOWN -> OCCUPIED
+    t_occ = TemporalBayTracker(
+        bay_id="b1",
+        operator_label="B1",
+        space_type="STANDARD",
+        polygon_normalized=[],
+        temporal_config=base_config.temporal,
+    )
+    tl_occ = None
+    for f in range(3):  # min_frames_occupied = 3
+        s, tl = t_occ.update_frame(f, f * 0.033, ev_occ)
+        if tl:
+            tl_occ = tl
+    assert t_occ.current_state == OccupancyState.OCCUPIED
+    assert tl_occ is not None
+    assert tl_occ.previous_state == OccupancyState.UNKNOWN
+    assert tl_occ.new_state == OccupancyState.OCCUPIED
+    assert tl_occ.previous_state != tl_occ.new_state
+    assert tl_occ.contributing_track_ids == [101]
+
+    # 3. OCCUPIED -> OCCLUDED
+    s_drop, tl_drop = t_occ.update_frame(3, 3 * 0.033, None)
+    assert s_drop.current_state == OccupancyState.OCCLUDED
+    assert tl_drop is not None
+    assert tl_drop.previous_state == OccupancyState.OCCUPIED
+    assert tl_drop.new_state == OccupancyState.OCCLUDED
+    assert tl_drop.previous_state != tl_drop.new_state
+
+    # 4. OCCLUDED -> OCCUPIED
+    s_rec, tl_rec = t_occ.update_frame(4, 4 * 0.033, ev_occ)
+    assert s_rec.current_state == OccupancyState.OCCUPIED
+    assert tl_rec is not None
+    assert tl_rec.previous_state == OccupancyState.OCCLUDED
+    assert tl_rec.new_state == OccupancyState.OCCUPIED
+    assert tl_rec.previous_state != tl_rec.new_state
+
+    # 5. OCCLUDED -> VACANT (enter OCCLUDED then sustained clear beyond dropout window)
+    t_occ.update_frame(5, 5 * 0.033, None)  # dropout frame 1 -> OCCLUDED
+    tl_ov = None
+    for f in range(6, 14):
+        s, tl = t_occ.update_frame(f, f * 0.033, None)
+        if tl:
+            tl_ov = tl
+    assert t_occ.current_state == OccupancyState.VACANT
+    assert tl_ov is not None
+    assert tl_ov.previous_state == OccupancyState.OCCLUDED
+    assert tl_ov.new_state == OccupancyState.VACANT
+    assert tl_ov.previous_state != tl_ov.new_state
+
+
+def test_temporal_bay_tracker_no_false_frame_zero_transition(base_config):
+    """Verify that a single unconfirmed frame on startup does not falsely trigger a frame-zero transition."""
+    tracker = TemporalBayTracker(
+        bay_id="b1",
+        operator_label="B1",
+        space_type="STANDARD",
+        polygon_normalized=[],
+        temporal_config=base_config.temporal,
+    )
+    assert tracker.last_transition_frame == -1
+
+    # Frame 0: single vacant evidence (need 5 to transition)
+    summary, tl = tracker.update_frame(0, 0.0, None)
+    assert summary.current_state == OccupancyState.UNKNOWN
+    assert summary.last_transition_frame == -1
+    assert tl is None  # NO transition emitted

@@ -202,8 +202,8 @@ class TemporalBayTracker:
         self.consecutive_vacant_evidence: int = 0
         self.dropout_frames_count: int = 0
         self.confidence: float = 0.0
-        self.last_transition_frame: int = 0
-        self.last_transition_timestamp: float = 0.0
+        self.last_transition_frame: int = -1
+        self.last_transition_timestamp: float = -1.0
         self.contributing_track_ids: List[int] = []
         self.history: List[BayOccupancyEvidence] = []
 
@@ -377,6 +377,7 @@ class ParkingOccupancyEngine:
         Evaluate all parking bays on a single frame with vehicle detections.
         """
         bay_summaries: Dict[str, BayStateSummary] = {}
+        frame_transitions: List[OccupancyTimelineEntry] = []
 
         for bay_id, tracker in self.trackers.items():
             bay_poly = self.bay_polygons_px[bay_id]
@@ -400,6 +401,7 @@ class ParkingOccupancyEngine:
             bay_summaries[bay_id] = summary
             if timeline_entry:
                 self.timeline.append(timeline_entry)
+                frame_transitions.append(timeline_entry)
 
         occupied = sum(1 for s in bay_summaries.values() if s.current_state == OccupancyState.OCCUPIED)
         vacant = sum(1 for s in bay_summaries.values() if s.current_state == OccupancyState.VACANT)
@@ -416,4 +418,5 @@ class ParkingOccupancyEngine:
             vacant_count=vacant,
             unknown_count=unknown,
             occluded_count=occluded,
+            state_transitions=frame_transitions,
         )

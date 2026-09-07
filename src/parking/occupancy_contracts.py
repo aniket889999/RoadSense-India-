@@ -102,6 +102,11 @@ class BayStateSummary:
         }
 
 
+class ParkingJobCancelled(Exception):
+    """Raised when a parking occupancy job is cooperatively cancelled during worker execution."""
+    pass
+
+
 @dataclass
 class FrameOccupancyResult:
     """Full frame-level evaluation result including all bays and vehicle detections."""
@@ -114,6 +119,7 @@ class FrameOccupancyResult:
     vacant_count: int
     unknown_count: int
     occluded_count: int
+    state_transitions: List[OccupancyTimelineEntry] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -126,6 +132,7 @@ class FrameOccupancyResult:
             "vacant_count": self.vacant_count,
             "unknown_count": self.unknown_count,
             "occluded_count": self.occluded_count,
+            "state_transitions": [t.to_dict() for t in self.state_transitions],
         }
 
 

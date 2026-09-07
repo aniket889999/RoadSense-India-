@@ -66,6 +66,11 @@ class ParkingOccupancyJobManager:
         self._running_jobs: Set[str] = set()
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._cancel_requested: Set[str] = set()
+        self._detector_override: Optional[Any] = None
+
+    def set_detector_override(self, detector: Optional[Any]) -> None:
+        """Inject a test double vehicle detector for deterministic automated tests and validation."""
+        self._detector_override = detector
 
     @property
     def semaphore(self) -> asyncio.Semaphore:
@@ -699,8 +704,8 @@ class ParkingOccupancyJobManager:
                 raise ParkingJobCancelled("Job cancelled before detector and tracker initialization.")
 
             # 2. Initialize local detector & session-local ByteTrack tracker with validated runtime FPS
-            detector = LocalVehicleDetector(self.config.detector)
-            detector_sha = detector.checkpoint_sha256
+            detector = self._detector_override or LocalVehicleDetector(self.config.detector)
+            detector_sha = getattr(detector, "checkpoint_sha256", "0" * 64)
 
             tracker_config_path = Path(__file__).resolve().parents[4] / "configs" / "tracking" / "bytetrack_default.yaml"
             tracker = ParkingByteTracker(
@@ -859,7 +864,8 @@ class ParkingOccupancyJobManager:
             except Exception:
                 torchvision_ver = "unknown"
 
-            device_str = str(getattr(detector.config, "device", None) or "cpu")
+            det_cfg = getattr(detector, "config", None)
+            device_str = str(getattr(det_cfg, "device", None) or "cpu")
 
             manifest = ParkingJobManifest(
                 job_id=job_id,

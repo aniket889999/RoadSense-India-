@@ -548,3 +548,91 @@ def test_bytetrack_fps_and_incompatible_constructor_fail_closed(monkeypatch):
     monkeypatch.setattr("src.parking.vehicle_tracker.BYTETracker", IncompatibleBYTETracker)
     with pytest.raises(RuntimeError, match="Incompatible BYTETracker constructor: 'frame_rate' parameter is required"):
         ParkingByteTracker(fps=30)
+
+
+@pytest.mark.anyio
+async def test_startup_cas_fails_if_cancellation_wins_first(db_session, tmp_path):
+    """Verify that if cancellation CAS wins while job is QUEUED, worker startup CAS fails, status remains CANCELLED, and temp upload is cleaned."""
+    fake_video = tmp_path / "race_input.upload.tmp"
+    fake_video.write_bytes(b"temp video data")
+
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    job_id = str(uuid.uuid4())
+    job = ParkingOccupancyJob(
+        id=job_id,
+        camera_id=cam.id,
+        site_id=site.id,
+        status="QUEUED",
+        started_at=None,
+    )
+    db_session.add_all([site, cam, job])
+    await db_session.commit()
+
+    # 1. Cancellation CAS wins first
+    cancel_res = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    assert cancel_res["cancelled"] is True
+    assert cancel_res["status"] == "CANCELLED"
+
+    # 2. Worker executes
+    cancel_evt = threading.Event()
+    await parking_occupancy_job_manager._execute_job(
+        job_id=job_id,
+        camera_id=cam.id,
+        site_id=site.id,
+        video_path=fake_video,
+        cancel_event=cancel_evt,
+    )
+
+    # 3. Reload job from DB: status must remain CANCELLED (never turned into VALIDATING or FAILED)
+    db_session.expire_all()
+    db_job = (await db_session.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))).scalar_one()
+    assert db_job.status == "CANCELLED"
+    assert db_job.started_at is None  # started_at only populated when startup CAS succeeds
+
+    # 4. Upload temporary file must be cleaned
+    assert not fake_video.exists()
+
+    # 5. Manager registries cleaned
+    assert job_id not in parking_occupancy_job_manager._running_jobs
+    assert job_id not in parking_occupancy_job_manager._active_tasks
+
+
+@pytest.mark.anyio
+async def test_startup_cas_never_overwrites_terminal_or_publishing_states(db_session, tmp_path):
+    """Verify worker startup CAS matches 0 rows and never overwrites COMPLETE, FAILED, CANCELLED, BLOCKED, or PUBLISHING."""
+    site = Site(id=str(uuid.uuid4()), name="Test Site", timezone="UTC")
+    cam = Camera(id=str(uuid.uuid4()), site_id=site.id, name="Test Cam")
+    cam_id = cam.id
+    site_id = site.id
+    db_session.add_all([site, cam])
+    await db_session.commit()
+
+    for non_cancellable in ("COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE", "PUBLISHING"):
+        fake_video = tmp_path / f"{non_cancellable}.upload.tmp"
+        fake_video.write_bytes(b"temp video data")
+
+        job_id = str(uuid.uuid4())
+        job = ParkingOccupancyJob(
+            id=job_id,
+            camera_id=cam_id,
+            site_id=site_id,
+            status=non_cancellable,
+            started_at=None,
+        )
+        db_session.add(job)
+        await db_session.commit()
+
+        cancel_evt = threading.Event()
+        await parking_occupancy_job_manager._execute_job(
+            job_id=job_id,
+            camera_id=cam_id,
+            site_id=site_id,
+            video_path=fake_video,
+            cancel_event=cancel_evt,
+        )
+
+        db_session.expire_all()
+        db_job = (await db_session.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))).scalar_one()
+        assert db_job.status == non_cancellable
+        assert not fake_video.exists()

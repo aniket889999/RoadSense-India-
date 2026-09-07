@@ -192,22 +192,58 @@ class ParkingOccupancyJobManager:
                     await self._persist_cancellation(job_id, video_path)
                     return
 
-                job_started_at = _utc_now()
                 main_loop = asyncio.get_running_loop()
 
-                # 1. Update initial status to VALIDATING
+                # 1. Update initial status to VALIDATING atomically via CAS (only QUEUED or PENDING -> VALIDATING)
+                startup_started_at = _utc_now()
+                startup_cas_ok = False
                 try:
                     async with async_session_factory() as db:
-                        res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
-                        job = res.scalar_one_or_none()
-                        if job:
-                            job.status = "VALIDATING"
-                            job.started_at = job_started_at
-                            job.progress_pct = 5.0
-                            job.stage_message = "Validating camera layout and camera stability gate"
-                            await db.commit()
+                        stmt = (
+                            update(ParkingOccupancyJob)
+                            .where(ParkingOccupancyJob.id == job_id)
+                            .where(ParkingOccupancyJob.status.in_(("QUEUED", "PENDING")))
+                            .values(
+                                status="VALIDATING",
+                                started_at=startup_started_at,
+                                progress_pct=5.0,
+                                stage_message="Validating camera layout and camera stability gate",
+                            )
+                        )
+                        res = await db.execute(stmt)
+                        await db.commit()
+                        startup_cas_ok = res.rowcount > 0
                 except Exception as e:
-                    logger.error(f"Failed to update initial status for job {job_id}: {e}")
+                    logger.error(f"Failed to execute startup CAS for job {job_id}: {e}")
+                    await self._persist_failure(job_id, "STARTUP_CAS_ERROR", str(e), video_path)
+                    return
+
+                if not startup_cas_ok:
+                    # CAS failed: reload current state from DB
+                    try:
+                        async with async_session_factory() as db:
+                            res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+                            current_job = res.scalar_one_or_none()
+                    except Exception as e:
+                        logger.error(f"Failed to reload job {job_id} after failed startup CAS: {e}")
+                        current_job = None
+
+                    if current_job is None:
+                        logger.warning(f"Occupancy job {job_id} missing during startup validation.")
+                        return
+
+                    if current_job.status == "CANCELLED":
+                        logger.info(f"Occupancy job {job_id} was cancelled before startup validation.")
+                        return
+
+                    if current_job.status in TERMINAL_STATES or current_job.status == "PUBLISHING":
+                        logger.info(f"Occupancy job {job_id} already in state '{current_job.status}'; aborting startup without overwriting.")
+                        return
+
+                    logger.warning(f"Occupancy job {job_id} in unexpected state '{current_job.status}' during startup; aborting.")
+                    return
+
+                job_started_at = startup_started_at
 
                 if job_id in self._cancel_requested or cancel_event.is_set():
                     await self._persist_cancellation(job_id, video_path)

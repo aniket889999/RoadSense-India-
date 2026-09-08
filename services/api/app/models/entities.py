@@ -423,3 +423,24 @@ class ParkingOccupancyJob(Base):
 
     # Relationships
     camera: Mapped[Camera] = relationship("Camera", back_populates="occupancy_jobs")
+    audit_events: Mapped[list["ParkingJobAuditEvent"]] = relationship("ParkingJobAuditEvent", back_populates="job", cascade="all, delete-orphan")
+
+
+class ParkingJobAuditEvent(Base):
+    """Append-only audit event log for parking occupancy jobs, retentions, and safe purges."""
+    __tablename__ = "parking_job_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    job_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_occupancy_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)  # JOB_PURGED, DELETED_TOMBSTONE, CANCELLATION_REQUESTED
+    operator_identity_assertion: Mapped[str] = mapped_column(String(128), nullable=False)
+    deletion_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    prior_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    resulting_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    artifact_hashes: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    purge_result: Mapped[str] = mapped_column(String(64), nullable=False)  # SUCCESS, PARTIAL, NOOP
+    request_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    job: Mapped[ParkingOccupancyJob] = relationship("ParkingOccupancyJob", back_populates="audit_events")

@@ -80,6 +80,8 @@ export function ParkingOccupancyPanel({
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteOperatorLabel, setDeleteOperatorLabel] = useState('site_operator');
+  const [deleteReason, setDeleteReason] = useState('Operator initiated evidence and job purge');
 
   // Video Upload & Safety Check State
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
@@ -102,30 +104,67 @@ export function ParkingOccupancyPanel({
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const [gateRes, jobsRes] = await Promise.all([
+      const [gateData, jobsData] = await Promise.all([
         getCameraOperationalGate(cameraId).catch(() => null),
         listOccupancyJobs(cameraId).catch(() => []),
       ]);
-      setGate(gateRes);
-      setJobs(jobsRes);
-      if (jobsRes.length > 0) {
-        setSelectedJob((prev) => {
-          if (!prev) return jobsRes[0];
-          const updated = jobsRes.find((j) => j.id === prev.id);
-          return updated || jobsRes[0];
-        });
+      setGate(gateData);
+      setJobs(jobsData);
+      if (jobsData.length > 0 && !selectedJob) {
+        setSelectedJob(jobsData[0]);
       }
     } catch (err: any) {
-      console.error('Failed to load occupancy data:', err);
+      console.error('Failed to load parking occupancy data:', err);
       setErrorMessage(err.message || 'Failed to load occupancy data');
     } finally {
       setIsLoading(false);
     }
-  }, [cameraId]);
+  }, [cameraId, selectedJob]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Handle Cancel Job
+  const handleCancelJob = async () => {
+    if (!selectedJob) return;
+    setIsCancelling(true);
+    try {
+      const res = await cancelOccupancyJob(selectedJob.id);
+      if (res.cancelled) {
+        const fresh = await getOccupancyJob(selectedJob.id);
+        setSelectedJob(fresh);
+        setJobs((prev) => prev.map((j) => (j.id === fresh.id ? fresh : j)));
+      }
+    } catch (err: any) {
+      console.error('Failed to cancel occupancy job:', err);
+      setErrorMessage(err.message || 'Failed to cancel job');
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  // Handle Safe Delete Job with operator label and reason
+  const handleDeleteJob = async () => {
+    if (!selectedJob) return;
+    setIsDeleting(true);
+    try {
+      await deleteOccupancyJob(selectedJob.id, {
+        confirmation_acknowledged: true,
+        local_operator_label: deleteOperatorLabel.trim() || 'site_operator',
+        deletion_reason: deleteReason.trim() || 'Operator initiated evidence and job purge',
+        expected_status: selectedJob.status,
+      });
+      setJobs((prev) => prev.filter((j) => j.id !== selectedJob.id));
+      setSelectedJob(jobs.find((j) => j.id !== selectedJob.id) || null);
+      setDeleteConfirmOpen(false);
+    } catch (err: any) {
+      console.error('Failed to delete occupancy job:', err);
+      setErrorMessage(err.message || 'Failed to delete job');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Polling for in-progress jobs
   useEffect(() => {
@@ -182,42 +221,6 @@ export function ParkingOccupancyPanel({
       setErrorMessage(err.detail || err.message || 'Occupancy job submission rejected by system.');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  // Handle Cancel Job
-  const handleCancelJob = async () => {
-    if (!selectedJob) return;
-    setIsCancelling(true);
-    try {
-      const res = await cancelOccupancyJob(selectedJob.id);
-      if (res.cancelled) {
-        const fresh = await getOccupancyJob(selectedJob.id);
-        setSelectedJob(fresh);
-        setJobs((prev) => prev.map((j) => (j.id === fresh.id ? fresh : j)));
-      }
-    } catch (err: any) {
-      console.error('Failed to cancel occupancy job:', err);
-      setErrorMessage(err.message || 'Failed to cancel job');
-    } finally {
-      setIsCancelling(false);
-    }
-  };
-
-  // Handle Safe Delete Job
-  const handleDeleteJob = async () => {
-    if (!selectedJob) return;
-    setIsDeleting(true);
-    try {
-      await deleteOccupancyJob(selectedJob.id);
-      setJobs((prev) => prev.filter((j) => j.id !== selectedJob.id));
-      setSelectedJob(jobs.find((j) => j.id !== selectedJob.id) || null);
-      setDeleteConfirmOpen(false);
-    } catch (err: any) {
-      console.error('Failed to delete occupancy job:', err);
-      setErrorMessage(err.message || 'Failed to delete job');
-    } finally {
-      setIsDeleting(false);
     }
   };
 
@@ -970,12 +973,41 @@ export function ParkingOccupancyPanel({
           <div className="bg-command-bg border border-command-border rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl">
             <div className="flex items-center space-x-2 text-rose-400 font-bold text-sm">
               <AlertTriangle className="w-5 h-5" />
-              <span>Confirm Local Artifact Deletion</span>
+              <span>Confirm Fail-Closed Artifact Deletion</span>
             </div>
             <p className="text-xs text-command-muted font-mono leading-relaxed">
               Are you sure you want to delete job <strong className="text-white">{selectedJob.id.slice(0, 8)}</strong> and its associated annotated video and timeline artifacts?
-              This operation is confined to local media storage and is irreversible.
+              This operation purges local disk artifacts and records an immutable tombstone audit event.
             </p>
+
+            <div className="space-y-3 pt-1">
+              <div>
+                <label className="block text-[11px] font-mono text-command-muted mb-1">
+                  Operator Identity Assertion:
+                </label>
+                <input
+                  type="text"
+                  value={deleteOperatorLabel}
+                  onChange={(e) => setDeleteOperatorLabel(e.target.value)}
+                  placeholder="e.g. operator_name"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-radar-bright"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono text-command-muted mb-1">
+                  Deletion & Purge Reason:
+                </label>
+                <input
+                  type="text"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  placeholder="e.g. Routine retention policy purge"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-radar-bright"
+                />
+              </div>
+            </div>
+
             <div className="flex items-center justify-end space-x-2 pt-2">
               <button
                 onClick={() => setDeleteConfirmOpen(false)}
@@ -986,8 +1018,8 @@ export function ParkingOccupancyPanel({
               </button>
               <button
                 onClick={handleDeleteJob}
-                disabled={isDeleting}
-                className="py-1.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs font-mono flex items-center space-x-1.5 shadow-sm"
+                disabled={isDeleting || !deleteOperatorLabel.trim() || deleteReason.trim().length < 5}
+                className="py-1.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs font-mono flex items-center space-x-1.5 shadow-sm"
               >
                 {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                 <span>{isDeleting ? 'Deleting...' : 'Confirm Purge'}</span>
@@ -995,6 +1027,7 @@ export function ParkingOccupancyPanel({
             </div>
           </div>
         </div>
+      )}
     </div>
   );
 }

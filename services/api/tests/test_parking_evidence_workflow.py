@@ -51,16 +51,31 @@ async def test_safe_job_deletion_and_retention_controls(tmp_path, monkeypatch):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.delete(f"/api/v1/parking/jobs/{job_id}")
+        res = await client.request(
+            "DELETE",
+            f"/api/v1/parking/jobs/{job_id}",
+            json={
+                "confirmation_acknowledged": True,
+                "local_operator_label": "lead_sec_operator",
+                "deletion_reason": "Compliance retention purge",
+                "expected_status": "COMPLETE",
+            },
+        )
         assert res.status_code == 200
         assert res.json()["deleted"] is True
+        assert res.json()["resulting_status"] == "DELETED"
 
         # Check directory deleted
         assert not job_dir.exists()
 
-        # Check 404 on subsequent get
+        # Check tombstone status on subsequent get
         res_get = await client.get(f"/api/v1/parking/jobs/{job_id}")
-        assert res_get.status_code == 404
+        assert res_get.status_code == 200
+        assert res_get.json()["status"] == "DELETED"
+
+        # Check artifact endpoints return 404
+        res_vid = await client.get(f"/api/v1/parking/jobs/{job_id}/video")
+        assert res_vid.status_code == 404
 
 
 @pytest.mark.anyio

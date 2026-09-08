@@ -27,6 +27,7 @@ from services.api.app.models.entities import (
     CameraStabilityAssessment,
     CameraStabilityAuditEvent,
     LayoutAuditEvent,
+    ParkingJobAuditEvent,
     ParkingLayoutRevision,
     ParkingOccupancyJob,
     ParkingSpace,
@@ -49,6 +50,8 @@ from services.api.app.schemas.parking import (
     LayoutValidationResponse,
     LayoutVerifyRequest,
     ParkingOccupancyJobCancelResponse,
+    ParkingOccupancyJobDeleteRequest,
+    ParkingOccupancyJobDeleteResponse,
     ParkingOccupancyJobResponse,
     ParkingSpaceSchema,
     ApproachZoneSchema,
@@ -2231,47 +2234,191 @@ async def get_parking_job_summary(
     )
 
 
-@router.delete("/parking/jobs/{job_id}")
+@router.delete("/parking/jobs/{job_id}", response_model=ParkingOccupancyJobDeleteResponse)
 async def delete_parking_occupancy_job(
     job_id: str,
+    req: ParkingOccupancyJobDeleteRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Safely delete a parking occupancy job record and all associated local artifacts.
-    Enforces path confinement within MEDIA_ROOT/parking_jobs and prevents traversal / symlink escapes.
+    Safely delete a parking occupancy job and purge its local artifacts with fail-closed retention controls.
+
+    Requirements:
+    - confirmation_acknowledged must be true
+    - non-blank local_operator_label assertion
+    - meaningful deletion_reason (>= 5 chars)
+    - Terminal states only: COMPLETE, FAILED, CANCELLED, BLOCKED_BY_STABILITY_GATE
+    - Guarded DB CAS to PURGING
+    - Confined filesystem validation (no traversal or symlinks)
+    - Atomic quarantine rename before purge; restored on DB commit failure
+    - Minimal DELETED tombstone & append-only ParkingJobAuditEvent recorded in DB
     """
+    request_time = datetime.now(timezone.utc)
+
+    if not req.confirmation_acknowledged:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit confirmation (confirmation_acknowledged=true) is required for deletion.",
+        )
+
+    op_label = (req.local_operator_label or "").strip()
+    if not op_label:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Non-blank local_operator_label is required.",
+        )
+
+    reason = (req.deletion_reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A meaningful deletion_reason (at least 5 characters) is required.",
+        )
+
+    # 1. Fetch current job for state check
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    # Forbid deletion of actively executing or publishing jobs
-    active_statuses = {"VALIDATING", "DETECTING", "TRACKING", "CLASSIFYING_OCCUPANCY", "RENDERING", "ENCODING", "PUBLISHING"}
-    if job.status in active_statuses:
+    terminal_statuses = {"COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"}
+
+    if job.status == "DELETED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot delete job in active state '{job.status}'. Cancel the job first before deleting artifacts.",
+            detail=f"Job {job_id} has already been deleted and purged.",
         )
 
-    # Confined filesystem cleanup
-    media_root = get_storage_root()
-    jobs_root = media_root / "parking_jobs"
+    if job.status not in terminal_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete job in non-terminal state '{job.status}'. Deletion is strictly permitted only from terminal states ({', '.join(sorted(terminal_statuses))}).",
+        )
+
+    if req.expected_status and job.status != req.expected_status:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Concurrency mismatch: expected job status '{req.expected_status}', but current status is '{job.status}'.",
+        )
+
+    prior_status = job.status
+
+    # 2. Guarded DB CAS: transition status from terminal state to PURGING
+    from sqlalchemy import update
+    conditions = [
+        ParkingOccupancyJob.id == job_id,
+        ParkingOccupancyJob.status.in_(list(terminal_statuses)),
+    ]
+    if req.expected_status:
+        conditions.append(ParkingOccupancyJob.status == req.expected_status)
+
+    cas_stmt = (
+        update(ParkingOccupancyJob)
+        .where(*conditions)
+        .values(status="PURGING")
+    )
+    cas_res = await db.execute(cas_stmt)
+    if cas_res.rowcount == 0:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Failed to reserve PURGING state: job status changed concurrently.",
+        )
+    await db.flush()
+
+    # Capture artifact hashes before disk purge
+    artifact_hashes = {
+        "input_video_sha256": job.input_video_sha256,
+        "output_video_sha256": job.output_video_sha256,
+        "reference_image_sha256": job.reference_image_sha256,
+        "layout_canonical_sha256": job.layout_canonical_sha256,
+        "manifest_sha256": (job.manifest_json or {}).get("manifest_sha256"),
+        "summary_sha256": (job.manifest_json or {}).get("summary_sha256"),
+        "timeline_sha256": (job.manifest_json or {}).get("timeline_sha256"),
+    }
+
+    # 3. Path confinement & symlink validation before any filesystem operations
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Storage root directory cannot be a symlink.")
+
+    jobs_root = (media_root / "parking_jobs").resolve()
+    if jobs_root.is_symlink():
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Parking jobs root directory cannot be a symlink.")
+
     job_dir = jobs_root / job_id
+    if ".." in job_dir.parts:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Invalid job path.")
 
-    if ".." not in job_dir.parts:
-        try:
-            resolved_jobs_root = jobs_root.resolve()
-            resolved_job_dir = job_dir.resolve()
-            if resolved_job_dir.is_relative_to(resolved_jobs_root) and resolved_job_dir.exists():
-                if not resolved_job_dir.is_symlink():
-                    import shutil
-                    shutil.rmtree(resolved_job_dir, ignore_errors=True)
-                    logger.info(f"Safely purged local artifacts for job {job_id} at {resolved_job_dir}")
-        except Exception as e:
-            logger.warning(f"Error purging artifact directory for job {job_id}: {e}")
+    # Check symlinks down to jobs_root
+    curr = job_dir
+    while curr != jobs_root and curr != curr.parent:
+        if curr.is_symlink():
+            await db.rollback()
+            raise HTTPException(status_code=400, detail="Symlinked path component detected in job directory hierarchy.")
+        curr = curr.parent
 
-    # Remove database record
-    await db.delete(job)
-    await db.commit()
+    # 4. Atomic quarantine rename & strict rmtree
+    quarantine_dir = jobs_root / f".quarantine_{job_id}_{uuid.uuid4().hex[:8]}"
+    quarantined = False
+    purge_result = "NOOP"
 
-    return {"deleted": True, "job_id": job_id, "message": f"Job {job_id} and associated artifacts safely removed."}
+    try:
+        if job_dir.exists():
+            if job_dir.is_symlink():
+                raise RuntimeError("Job directory is a symlink.")
+            job_dir.rename(quarantine_dir)
+            quarantined = True
+
+            import shutil
+            shutil.rmtree(quarantine_dir)
+            quarantined = False
+            purge_result = "SUCCESS"
+
+        # 5. DB transition to DELETED tombstone & record audit event
+        job.status = "DELETED"
+        job.output_video_path = None
+        job.timeline_jsonl_path = None
+        job.stage_message = f"Purged by {op_label}: {reason}"
+
+        audit_event = ParkingJobAuditEvent(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            event_type="JOB_DELETED_AND_PURGED",
+            operator_identity_assertion=op_label,
+            deletion_reason=reason,
+            prior_status=prior_status,
+            resulting_status="DELETED",
+            artifact_hashes=artifact_hashes,
+            purge_result=purge_result,
+            request_time=request_time,
+            completed_time=datetime.now(timezone.utc),
+        )
+        db.add(audit_event)
+        await db.commit()
+
+    except Exception as e:
+        await db.rollback()
+        # Restore quarantined directory if DB commit or rmtree failed
+        if quarantined and quarantine_dir.exists() and not job_dir.exists():
+            try:
+                quarantine_dir.rename(job_dir)
+            except Exception as restore_err:
+                logger.error(f"Failed to restore quarantined directory {quarantine_dir} to {job_dir}: {restore_err}")
+        logger.exception(f"Failed during deletion of job {job_id}")
+        raise HTTPException(status_code=500, detail=f"Job deletion failed: {str(e)}")
+
+    completed_time = datetime.now(timezone.utc)
+    return ParkingOccupancyJobDeleteResponse(
+        deleted=True,
+        job_id=job_id,
+        prior_status=prior_status,
+        resulting_status="DELETED",
+        operator_identity_assertion=op_label,
+        deletion_reason=reason,
+        purged_at=completed_time,
+        message=f"Job {job_id} artifacts successfully purged and job record marked DELETED.",
+    )

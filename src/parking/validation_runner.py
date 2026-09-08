@@ -7,10 +7,12 @@ using the public HTTP/API workflow through ASGITransport.
 from __future__ import annotations
 
 import asyncio
+import collections
 from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -471,6 +473,184 @@ async def run_stable_parking_e2e_validation(
                     details=f"Bays: 4 total, {final_occ} occupied, {final_vac} vacant, {final_unk} unknown, {final_occ_drop} occluded",
                 )
             )
+
+            # --- Part B: In-depth Temporal Evidence Validation ---
+            timeline_events = []
+            for line_str in timeline_lines:
+                try:
+                    timeline_events.append(json.loads(line_str))
+                except Exception:
+                    pass
+
+            # 1. Check ordering and chronological consistency
+            timestamps = [e.get("timestamp_seconds", 0.0) for e in timeline_events]
+            is_chronological = all(timestamps[i] <= timestamps[i+1] for i in range(len(timestamps)-1))
+            checks.append(
+                ValidationCheckItem(
+                    check_name="temporal_sequence_and_ordering",
+                    category="temporal_evidence",
+                    expected="chronologically_non_decreasing",
+                    observed=f"{len(timestamps)} timestamps, strictly non-decreasing" if is_chronological else "timestamp order violation",
+                    passed=is_chronological and len(timestamps) > 0,
+                    details=f"First ts: {timestamps[0] if timestamps else 0}s, Last ts: {timestamps[-1] if timestamps else 0}s",
+                )
+            )
+            if not is_chronological:
+                failure_reasons.append("Timeline events are not in non-decreasing chronological order.")
+
+            # 2. Per-bay state transitions and dropout recovery
+            bay_events: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
+            for ev in timeline_events:
+                bay_events[ev.get("bay_id", "")].append(ev)
+
+            has_duplicates = False
+            has_state_chain_error = False
+            for bid, ev_list in bay_events.items():
+                for idx, ev in enumerate(ev_list):
+                    if idx == 0:
+                        if ev.get("previous_state") != OccupancyState.UNKNOWN.value:
+                            has_state_chain_error = True
+                    else:
+                        prev_ev = ev_list[idx - 1]
+                        if ev.get("previous_state") != prev_ev.get("new_state"):
+                            has_state_chain_error = True
+                        if ev.get("new_state") == prev_ev.get("new_state"):
+                            has_duplicates = True
+
+            b1_ev = next((v for k, v in bay_events.items() if k.endswith("_1")), [])
+            b2_ev = next((v for k, v in bay_events.items() if k.endswith("_2")), [])
+            b3_ev = next((v for k, v in bay_events.items() if k.endswith("_3")), [])
+            b4_ev = next((v for k, v in bay_events.items() if k.endswith("_4")), [])
+
+            b1_states = [e.get("new_state") for e in b1_ev]
+            b2_states = [e.get("new_state") for e in b2_ev]
+            b3_states = [e.get("new_state") for e in b3_ev]
+            b4_states = [e.get("new_state") for e in b4_ev]
+
+            b1_valid = (b1_states in (["OCCUPIED", "VACANT"], ["OCCUPIED", "OCCLUDED", "VACANT"])) and (b1_states[-1] == "VACANT")
+            b2_valid = (b2_states == ["VACANT", "OCCUPIED"]) and (b2_states[-1] == "OCCUPIED")
+            b3_valid = (b3_states == ["VACANT"]) and (b3_states[-1] == "VACANT")
+            b4_valid = (b4_states[0] == "OCCUPIED") and ("OCCLUDED" in b4_states) and (b4_states[-1] == "OCCUPIED")
+
+            temporal_transitions_passed = (
+                not has_duplicates
+                and not has_state_chain_error
+                and b1_valid
+                and b2_valid
+                and b3_valid
+                and b4_valid
+            )
+
+            checks.append(
+                ValidationCheckItem(
+                    check_name="temporal_per_bay_transitions_and_dropout_recovery",
+                    category="temporal_evidence",
+                    expected={
+                        "Bay-1": "OCCUPIED -> ... -> VACANT",
+                        "Bay-2": ["VACANT", "OCCUPIED"],
+                        "Bay-3": ["VACANT"],
+                        "Bay-4": "OCCUPIED -> OCCLUDED -> ... -> OCCUPIED",
+                    },
+                    observed={
+                        "Bay-1": b1_states,
+                        "Bay-2": b2_states,
+                        "Bay-3": b3_states,
+                        "Bay-4": b4_states,
+                    },
+                    passed=temporal_transitions_passed,
+                    details=f"No duplicate transitions: {not has_duplicates}, State continuity: {not has_state_chain_error}, Occlusion recovery: {b4_valid}",
+                )
+            )
+            if not temporal_transitions_passed:
+                failure_reasons.append(
+                    f"Temporal state transition mismatch: B1={b1_states}, B2={b2_states}, B3={b3_states}, B4={b4_states}"
+                )
+
+            # 3. Final state agreement with summary JSON
+            final_timeline_states = {
+                bid: ev_list[-1].get("new_state") if ev_list else OccupancyState.UNKNOWN.value
+                for bid, ev_list in bay_events.items()
+            }
+            summary_states = {
+                bid: info.get("current_state") or info.get("final_state")
+                for bid, info in bay_summary.items()
+            }
+            states_agree = (final_timeline_states == summary_states and len(summary_states) == 4)
+            checks.append(
+                ValidationCheckItem(
+                    check_name="temporal_and_summary_final_state_agreement",
+                    category="temporal_evidence",
+                    expected=summary_states,
+                    observed=final_timeline_states,
+                    passed=states_agree,
+                    details=f"Compared {len(summary_states)} bay states between timeline and summary",
+                )
+            )
+            if not states_agree:
+                failure_reasons.append(f"Final states in timeline ({final_timeline_states}) do not agree with summary JSON ({summary_states}).")
+
+            # --- Part C: Validate Decoded MP4 Overlay Colors & Regions ---
+            video_color_checks_passed = True
+            color_observations = {}
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_v_file:
+                tmp_v_file.write(video_content)
+                tmp_v_path = tmp_v_file.name
+
+            try:
+                cap_out = cv2.VideoCapture(tmp_v_path)
+                cap_out.set(cv2.CAP_PROP_POS_FRAMES, 5)
+                ret5, frame5 = cap_out.read()
+
+                cap_out.set(cv2.CAP_PROP_POS_FRAMES, 50)
+                ret50, frame50 = cap_out.read()
+                cap_out.release()
+
+                if ret5 and frame5 is not None:
+                    b1_roi = frame5[400:600, 150:350]
+                    b1_mean_bgr = [float(np.mean(b1_roi[:, :, c])) for c in range(3)]
+                    color_observations["bay1_frame5_mean_bgr"] = [round(x, 1) for x in b1_mean_bgr]
+                    b1_red_dominant = b1_mean_bgr[2] > b1_mean_bgr[0]
+
+                    b2_roi = frame5[400:600, 600:800]
+                    b2_mean_bgr = [float(np.mean(b2_roi[:, :, c])) for c in range(3)]
+                    color_observations["bay2_frame5_mean_bgr"] = [round(x, 1) for x in b2_mean_bgr]
+                    b2_green_dominant = b2_mean_bgr[1] > b2_mean_bgr[0]
+
+                    b3_roi = frame5[400:600, 1050:1250]
+                    b3_mean_bgr = [float(np.mean(b3_roi[:, :, c])) for c in range(3)]
+                    color_observations["bay3_frame5_mean_bgr"] = [round(x, 1) for x in b3_mean_bgr]
+                    b3_green_dominant = b3_mean_bgr[1] > b3_mean_bgr[0]
+
+                    if not (b1_red_dominant and b2_green_dominant and b3_green_dominant):
+                        video_color_checks_passed = False
+
+                if ret50 and frame50 is not None:
+                    b4_roi = frame50[400:600, 1500:1700]
+                    b4_mean_bgr = [float(np.mean(b4_roi[:, :, c])) for c in range(3)]
+                    color_observations["bay4_frame50_occluded_bgr"] = [round(x, 1) for x in b4_mean_bgr]
+                    b4_amber_dominant = (b4_mean_bgr[2] > b4_mean_bgr[0]) and (b4_mean_bgr[1] > b4_mean_bgr[0])
+                    if not b4_amber_dominant:
+                        video_color_checks_passed = False
+
+            finally:
+                if os.path.exists(tmp_v_path):
+                    try:
+                        os.remove(tmp_v_path)
+                    except Exception:
+                        pass
+
+            checks.append(
+                ValidationCheckItem(
+                    check_name="overlay_color_and_visual_dominance",
+                    category="visual_rendering",
+                    expected="Red OCCUPIED (R>B), Green VACANT (G>B), Amber OCCLUDED (R>B & G>B)",
+                    observed=color_observations,
+                    passed=video_color_checks_passed,
+                    details=f"Observed channel metrics: {json.dumps(color_observations)}",
+                )
+            )
+            if not video_color_checks_passed:
+                failure_reasons.append("Decoded MP4 frames failed color dominance checks for occupied/vacant/occluded bays.")
 
             software_versions = {
                 "opencv": cv2.__version__,

@@ -20,17 +20,23 @@ from src.parking.stability_engine import evaluate_video_camera_stability
 @pytest.mark.anyio
 async def test_safe_job_deletion_and_retention_controls(tmp_path, monkeypatch):
     """Verify safe job deletion endpoint purges confined artifact directory and database record."""
+    import uuid
+    uid = uuid.uuid4().hex[:8]
     fake_media = tmp_path / "media_root"
     fake_media.mkdir(parents=True)
     monkeypatch.setattr(settings, "MEDIA_ROOT", str(fake_media))
 
+    site_id = f"site_del_{uid}"
+    cam_id = f"cam_del_{uid}"
+    job_id = f"{uuid.uuid4()}"
+
     async with async_session_factory() as db:
-        site = Site(id="site_del_01", name="Delete Test Site")
-        cam = Camera(id="cam_del_01", site_id="site_del_01", name="Cam Delete")
+        site = Site(id=site_id, name="Delete Test Site")
+        cam = Camera(id=cam_id, site_id=site_id, name="Cam Delete")
         job = ParkingOccupancyJob(
-            id="job_del_01",
-            camera_id="cam_del_01",
-            site_id="site_del_01",
+            id=job_id,
+            camera_id=cam_id,
+            site_id=site_id,
             status="COMPLETE",
             progress_pct=100.0,
             output_video_sha256="a" * 64,
@@ -39,13 +45,13 @@ async def test_safe_job_deletion_and_retention_controls(tmp_path, monkeypatch):
         await db.commit()
 
     # Create dummy artifact dir
-    job_dir = fake_media / "parking_jobs" / "job_del_01"
+    job_dir = fake_media / "parking_jobs" / job_id
     job_dir.mkdir(parents=True)
     (job_dir / "annotated.mp4").write_bytes(b"dummy")
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.delete("/api/v1/parking/jobs/job_del_01")
+        res = await client.delete(f"/api/v1/parking/jobs/{job_id}")
         assert res.status_code == 200
         assert res.json()["deleted"] is True
 
@@ -53,23 +59,33 @@ async def test_safe_job_deletion_and_retention_controls(tmp_path, monkeypatch):
         assert not job_dir.exists()
 
         # Check 404 on subsequent get
-        res_get = await client.get("/api/v1/parking/jobs/job_del_01")
+        res_get = await client.get(f"/api/v1/parking/jobs/{job_id}")
         assert res_get.status_code == 404
 
 
 @pytest.mark.anyio
-async def test_run_synthetic_validation_endpoint():
-    """Verify POST /api/v1/parking/validation/run-synthetic executes the automated harness."""
+async def test_no_synthetic_validation_endpoint_in_production_api():
+    """Verify POST /api/v1/parking/validation/run-synthetic is not exposed in production API."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/api/v1/parking/validation/run-synthetic")
-        assert res.status_code == 200
-        data = res.json()
-        assert data["is_synthetic_fixture"] is True
-        assert "SYNTHETIC TEST EVIDENCE" in data["disclaimer"]
-        assert data["passed"] is True
-        assert data["operational_gate"] == "ALLOWED"
-        assert len(data["checks"]) >= 4
+        assert res.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_isolated_synthetic_validation_runner_execution(tmp_path):
+    """Verify the isolated ASGITransport synthetic validation runner executes cleanly."""
+    from src.parking.validation_runner import run_stable_parking_e2e_validation
+    report = await run_stable_parking_e2e_validation(
+        work_dir=tmp_path / "val_work",
+        use_synthetic_detector_double=True,
+    )
+    assert report.is_synthetic_fixture is True
+    assert "SYNTHETIC TEST EVIDENCE" in report.disclaimer
+    assert report.passed is True
+    assert report.operational_gate == "ALLOWED"
+    assert len(report.checks) >= 4
+
 
 
 @pytest.mark.anyio

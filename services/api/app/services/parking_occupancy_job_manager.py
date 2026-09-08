@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import uuid
 import cv2
 import numpy as np
@@ -58,7 +58,13 @@ class ParkingOccupancyJobManager:
     and atomic staging-to-final promotion.
     """
 
-    def __init__(self, max_concurrency: int = 2) -> None:
+    def __init__(
+        self,
+        max_concurrency: int = 2,
+        detector_factory: Optional[Callable[[], Any]] = None,
+        db_session_factory: Optional[Any] = None,
+        media_root: Optional[Path] = None,
+    ) -> None:
         self.config: ParkingOccupancyConfig = load_parking_occupancy_config()
         self._max_concurrency: int = max(1, self.config.execution.max_concurrent_jobs or max_concurrency)
         self._semaphore: Optional[asyncio.Semaphore] = None
@@ -66,11 +72,13 @@ class ParkingOccupancyJobManager:
         self._running_jobs: Set[str] = set()
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._cancel_requested: Set[str] = set()
-        self._detector_override: Optional[Any] = None
+        self._detector_factory = detector_factory
+        self._db_session_factory = db_session_factory
+        self._media_root = media_root
 
-    def set_detector_override(self, detector: Optional[Any]) -> None:
-        """Inject a test double vehicle detector for deterministic automated tests and validation."""
-        self._detector_override = detector
+    def _get_db_session(self):
+        factory = self._db_session_factory or async_session_factory
+        return factory()
 
     @property
     def semaphore(self) -> asyncio.Semaphore:
@@ -124,7 +132,7 @@ class ParkingOccupancyJobManager:
             "RUNNING",
         )
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
@@ -203,7 +211,7 @@ class ParkingOccupancyJobManager:
                 startup_started_at = _utc_now()
                 startup_cas_ok = False
                 try:
-                    async with async_session_factory() as db:
+                    async with self._get_db_session() as db:
                         stmt = (
                             update(ParkingOccupancyJob)
                             .where(ParkingOccupancyJob.id == job_id)
@@ -226,7 +234,7 @@ class ParkingOccupancyJobManager:
                 if not startup_cas_ok:
                     # CAS failed: reload current state from DB
                     try:
-                        async with async_session_factory() as db:
+                        async with self._get_db_session() as db:
                             res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
                             current_job = res.scalar_one_or_none()
                     except Exception as e:
@@ -269,7 +277,7 @@ class ParkingOccupancyJobManager:
                 parking_spaces_payload: List[Dict[str, Any]] = []
 
                 try:
-                    async with async_session_factory() as db:
+                    async with self._get_db_session() as db:
                         cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
                         cam = cam_res.scalar_one_or_none()
                         if not cam:
@@ -417,7 +425,7 @@ class ParkingOccupancyJobManager:
                 # 4. Provenance Re-Validation immediately prior to model / tracker loading
                 reval_stability_cfg = load_stability_config()
                 try:
-                    async with async_session_factory() as db:
+                    async with self._get_db_session() as db:
                         c_res = await db.execute(select(Camera).where(Camera.id == camera_id))
                         c_now = c_res.scalar_one_or_none()
                         if not c_now or c_now.reference_image_sha256 != reserved_ref_sha:
@@ -495,7 +503,7 @@ class ParkingOccupancyJobManager:
                 # Thread-safe async progress updater
                 async def _update_db_progress(pct: float, msg: str, stage_status: Optional[str] = None) -> None:
                     try:
-                        async with async_session_factory() as db:
+                        async with self._get_db_session() as db:
                             values_dict: Dict[str, Any] = {
                                 "progress_pct": round(pct, 1),
                                 "stage_message": msg,
@@ -632,24 +640,16 @@ class ParkingOccupancyJobManager:
 
         progress_callback(10.0, "Initializing vehicle detector and geometric layout engine", "VALIDATING")
 
-        # 1. Output paths & staging setup beneath configured parking jobs root
-        media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+        media_root = (self._media_root if self._media_root is not None else (Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media")).resolve()
+        if media_root.is_symlink():
+            raise ValueError(f"Symlink found in media root path: {media_root}")
 
-        curr = media_root
-        while curr != curr.parent:
-            if curr.is_symlink():
-                raise ValueError(f"Symlink found in media root path: {curr}")
-            curr = curr.parent
-
-        jobs_root = media_root / "parking_jobs"
-        curr = jobs_root
-        while curr != curr.parent:
-            if curr.is_symlink():
-                raise ValueError(f"Symlink found in jobs root path: {curr}")
-            curr = curr.parent
+        jobs_root = (media_root / "parking_jobs").resolve()
+        if jobs_root.is_symlink():
+            raise ValueError(f"Symlink found in jobs root path: {jobs_root}")
 
         jobs_root.mkdir(parents=True, exist_ok=True)
-        resolved_jobs_root = jobs_root.resolve()
+        resolved_jobs_root = jobs_root
 
         final_output_dir = jobs_root / job_id
         if ".." in final_output_dir.parts:
@@ -704,7 +704,10 @@ class ParkingOccupancyJobManager:
                 raise ParkingJobCancelled("Job cancelled before detector and tracker initialization.")
 
             # 2. Initialize local detector & session-local ByteTrack tracker with validated runtime FPS
-            detector = self._detector_override or LocalVehicleDetector(self.config.detector)
+            if self._detector_factory is not None:
+                detector = self._detector_factory()
+            else:
+                detector = LocalVehicleDetector(self.config.detector)
             detector_sha = getattr(detector, "checkpoint_sha256", "0" * 64)
 
             tracker_config_path = Path(__file__).resolve().parents[4] / "configs" / "tracking" / "bytetrack_default.yaml"
@@ -1179,7 +1182,7 @@ class ParkingOccupancyJobManager:
     async def _reserve_publishing_state(self, job_id: str) -> bool:
         """Atomically reserve the PUBLISHING state in the database using a guarded CAS update."""
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
@@ -1209,7 +1212,7 @@ class ParkingOccupancyJobManager:
         result_payload: Dict[str, Any],
     ) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
@@ -1257,7 +1260,7 @@ class ParkingOccupancyJobManager:
 
     async def _persist_blocked_by_gate(self, job_id: str, reasons: List[str], video_path: Path) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
@@ -1282,7 +1285,7 @@ class ParkingOccupancyJobManager:
 
     async def _persist_cancellation(self, job_id: str, video_path: Path) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)
@@ -1304,7 +1307,7 @@ class ParkingOccupancyJobManager:
 
     async def _persist_failure(self, job_id: str, code: str, message: str, video_path: Path) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 stmt = (
                     update(ParkingOccupancyJob)
                     .where(ParkingOccupancyJob.id == job_id)

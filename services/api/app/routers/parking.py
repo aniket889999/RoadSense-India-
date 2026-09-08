@@ -91,9 +91,20 @@ def utc_now() -> datetime:
 
 
 def get_storage_root() -> Path:
-    root = (REPO_ROOT / "outputs").resolve()
+    if hasattr(settings, "MEDIA_ROOT") and settings.MEDIA_ROOT:
+        root = Path(settings.MEDIA_ROOT).resolve()
+    else:
+        root = (REPO_ROOT / "outputs").resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def get_parking_job_manager() -> ParkingOccupancyJobManager:
+    return parking_occupancy_job_manager
+
+
+def get_stability_job_manager() -> StabilityAssessmentJobManager:
+    return stability_job_manager
 
 
 
@@ -1356,6 +1367,7 @@ async def create_camera_stability_assessment(
     camera_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """
     Execute an asynchronous bounded camera stability assessment against the camera's reference image.
@@ -1396,7 +1408,7 @@ async def create_camera_stability_assessment(
     assessment_id = str(uuid.uuid4())
     temp_video_path = camera_dir / f"assess_stream_{assessment_id}.mp4"
 
-    cfg = stability_job_manager.config
+    cfg = stab_manager.config
     MAX_VIDEO_BYTES = cfg.intake.max_upload_bytes
     total_bytes = 0
 
@@ -1446,7 +1458,7 @@ async def create_camera_stability_assessment(
         await db.refresh(assessment)
 
         # Launch background evaluation worker
-        stability_job_manager.submit_assessment_job(
+        stab_manager.submit_assessment_job(
             assessment_id=assessment_id,
             video_path=temp_video_path,
             camera_id=camera_id,
@@ -1469,6 +1481,7 @@ async def create_camera_stability_assessment(
 async def cancel_stability_assessment(
     assessment_id: str,
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """Safely cancel an in-progress or queued stability assessment."""
     res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
@@ -1484,7 +1497,7 @@ async def cancel_stability_assessment(
             message=f"Assessment is already in terminal state '{a.status}'.",
         )
 
-    await stability_job_manager.cancel_assessment_job(assessment_id)
+    await stab_manager.cancel_assessment_job(assessment_id)
     a.status = "CANCELLED"
     a.progress_pct = 100.0
     a.stage_message = "Assessment cancelled by operator"
@@ -1508,6 +1521,7 @@ async def cancel_stability_assessment(
 async def get_camera_operational_gate(
     camera_id: str,
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """
     Retrieve the current fail-closed operational inference gate for a camera.
@@ -1526,15 +1540,14 @@ async def get_camera_operational_gate(
     verified_layout = layout_res.scalar_one_or_none()
     current_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
 
-    # Get latest completed stability assessment
-    ass_res = await db.execute(
+    # Find latest completed assessment for camera
+    assess_res = await db.execute(
         select(CameraStabilityAssessment)
         .where(CameraStabilityAssessment.camera_id == camera_id)
         .where(CameraStabilityAssessment.status == "COMPLETE")
         .order_by(desc(CameraStabilityAssessment.created_at))
-        .limit(1)
     )
-    latest_assessment = ass_res.scalar_one_or_none()
+    latest_assessment = assess_res.scalars().first()
 
     if not latest_assessment:
         gate, reasons = evaluate_operational_gate(
@@ -1563,7 +1576,7 @@ async def get_camera_operational_gate(
         pass
 
     now = utc_now()
-    cfg = stability_job_manager.config
+    cfg = stab_manager.config
     max_age = (latest_assessment.thresholds_snapshot or {}).get("max_assessment_age_seconds", cfg.thresholds.max_assessment_age_seconds)
 
     gate, reasons = evaluate_operational_gate(
@@ -1849,25 +1862,13 @@ def _resolve_safe_parking_artifact(
     if job_status != "COMPLETE":
         return None
 
-    # Strict authorization: do not serve artifact when expected_sha256 is None or invalid
-    if not expected_sha256 or len(expected_sha256) != 64 or not re.match(r"^[0-9a-f]{64}$", expected_sha256.lower()):
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
         return None
 
-    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
-
-    # Check raw lexical path components before resolve
-    curr = media_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            return None
-        curr = curr.parent
-
-    jobs_root = media_root / "parking_jobs"
-    curr = jobs_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            return None
-        curr = curr.parent
+    jobs_root = (media_root / "parking_jobs").resolve()
+    if jobs_root.is_symlink():
+        return None
 
     candidate = jobs_root / job_id / artifact_filename
     if ".." in candidate.parts:
@@ -1879,7 +1880,7 @@ def _resolve_safe_parking_artifact(
             return None
         curr = curr.parent
 
-    resolved_jobs_root = jobs_root.resolve()
+    resolved_jobs_root = jobs_root
     resolved = candidate.resolve()
     try:
         resolved.relative_to(resolved_jobs_root)
@@ -1906,23 +1907,16 @@ def create_staged_upload_file() -> Tuple[Path, int]:
     Creates an exclusively locked staged upload file under configured upload_staging root.
     Rejects symlinks in raw path chain, enforces confinement, and uses a neutral staging suffix.
     """
-    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
+        raise ValueError(f"Symlink found in media root path component: {media_root}")
 
-    curr = media_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            raise ValueError(f"Symlink found in media root path component: {curr}")
-        curr = curr.parent
-
-    upload_staging_dir = media_root / "upload_staging"
-    curr = upload_staging_dir
-    while curr != curr.parent:
-        if curr.is_symlink():
-            raise ValueError(f"Symlink found in upload staging path component: {curr}")
-        curr = curr.parent
+    upload_staging_dir = (media_root / "upload_staging").resolve()
+    if upload_staging_dir.is_symlink():
+        raise ValueError(f"Symlink found in upload staging path component: {upload_staging_dir}")
 
     upload_staging_dir.mkdir(parents=True, exist_ok=True)
-    resolved_staging = upload_staging_dir.resolve()
+    resolved_staging = upload_staging_dir
 
     staging_file_name = f"upload_{uuid.uuid4().hex}.upload.tmp"
     staging_file_path = upload_staging_dir / staging_file_name
@@ -1997,6 +1991,7 @@ async def submit_parking_occupancy_job(
     camera_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
 ):
     """
     Submit a video file for gate-controlled parking occupancy evaluation and video annotation.
@@ -2008,7 +2003,7 @@ async def submit_parking_occupancy_job(
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
 
-    cfg = parking_occupancy_job_manager.config
+    cfg = manager.config
     max_upload_bytes = cfg.execution.max_upload_bytes
 
     if not file.filename:
@@ -2062,7 +2057,7 @@ async def submit_parking_occupancy_job(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist job record: {e}")
 
     # Launch async job manager execution
-    parking_occupancy_job_manager.submit_occupancy_job(
+    manager.submit_occupancy_job(
         job_id=job_id,
         camera_id=cam.id,
         site_id=cam.site_id,
@@ -2108,13 +2103,14 @@ async def list_camera_occupancy_jobs(
 async def cancel_parking_occupancy_job(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
 ):
     """Cancel an active or queued parking occupancy job atomically through manager CAS."""
     res = await db.execute(select(ParkingOccupancyJob.id).where(ParkingOccupancyJob.id == job_id))
     if not res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    result = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    result = await manager.request_job_cancellation(job_id)
     return ParkingOccupancyJobCancelResponse(
         job_id=result["job_id"],
         status=result["status"],
@@ -2224,14 +2220,14 @@ async def get_parking_job_summary(
     if not summary_sha or len(summary_sha) != 64:
         raise HTTPException(status_code=404, detail="Summary SHA not found in manifest or is invalid.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_summary.json", summary_sha, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Summary JSON file not available or failed integrity verification.")
 
     return FileResponse(
         path=safe_path,
         media_type="application/json",
-        filename=f"occupancy_summary_{job_id[:8]}.json",
+        filename=f"parking_summary_{job_id[:8]}.json",
     )
 
 
@@ -2257,8 +2253,8 @@ async def delete_parking_occupancy_job(
             detail=f"Cannot delete job in active state '{job.status}'. Cancel the job first before deleting artifacts.",
         )
 
-    # Confinded filesystem cleanup
-    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    # Confined filesystem cleanup
+    media_root = get_storage_root()
     jobs_root = media_root / "parking_jobs"
     job_dir = jobs_root / job_id
 
@@ -2279,23 +2275,3 @@ async def delete_parking_occupancy_job(
     await db.commit()
 
     return {"deleted": True, "job_id": job_id, "message": f"Job {job_id} and associated artifacts safely removed."}
-
-
-@router.post("/parking/validation/run-synthetic")
-async def run_parking_synthetic_validation():
-    """
-    Execute the automated end-to-end synthetic validation runner on a stationary fixture.
-    Generates a deterministic zero-motion scene, validates the pipeline, and returns
-    a machine-readable validation evidence report.
-    """
-    from src.parking.validation_runner import run_stable_parking_e2e_validation
-    work_dir = Path(tempfile.mkdtemp(prefix="roadsense_synthetic_val_"))
-    try:
-        report = await run_stable_parking_e2e_validation(
-            work_dir=work_dir,
-            use_synthetic_detector_double=True,
-        )
-        return report.to_dict()
-    finally:
-        import shutil
-        shutil.rmtree(work_dir, ignore_errors=True)

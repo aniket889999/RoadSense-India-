@@ -18,9 +18,9 @@ from src.parking.occupancy_contracts import BayStateSummary, OccupancyState, Veh
 from src.parking.stability_config import load_stability_config
 from src.parking.stability_engine import evaluate_video_camera_stability
 from src.parking.synthetic_scene_generator import generate_synthetic_parking_fixture
+from src.parking.testing_support import DeterministicVehicleDetectorDouble
 from src.parking.validation_evidence import ParkingValidationEvidenceReport
 from src.parking.validation_runner import run_stable_parking_e2e_validation
-from src.parking.vehicle_detector import DeterministicVehicleDetectorDouble
 from src.parking.video_annotator import ParkingVideoAnnotator
 
 

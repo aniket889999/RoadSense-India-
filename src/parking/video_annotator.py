@@ -321,8 +321,11 @@ class FFmpegStreamEncoder:
             self.cleanup()
             raise RuntimeError(f"FFmpeg process terminated early: {err_msg}")
 
+        if self.proc.stdin is None:
+            self.cleanup()
+            raise RuntimeError("FFmpeg process stdin stream is not initialized or is closed.")
+
         try:
-            assert self.proc.stdin is not None
             self.proc.stdin.write(frame_bgr.tobytes())
             self._frame_count += 1
         except (BrokenPipeError, OSError) as e:

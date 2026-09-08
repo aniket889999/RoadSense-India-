@@ -20,7 +20,6 @@ import {
   getOccupancyTimelineUrl,
   getOccupancySummaryUrl,
 } from '../lib/parkingApi';
-import { SyntheticValidationModal } from './SyntheticValidationModal';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -81,7 +80,6 @@ export function ParkingOccupancyPanel({
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [validationModalOpen, setValidationModalOpen] = useState(false);
 
   // Video Upload & Safety Check State
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
@@ -248,24 +246,6 @@ export function ParkingOccupancyPanel({
 
   return (
     <div className="space-y-4">
-      {/* 0. Synthetic Validation Runner Header Trigger */}
-      <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-950/40 via-command-surface to-emerald-950/30 border border-cyan-500/30 flex items-center justify-between">
-        <div className="flex items-center space-x-2.5">
-          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
-          <div>
-            <span className="font-bold text-xs text-command-text">Stationary Camera Validation Suite</span>
-            <p className="text-[10px] font-mono text-command-muted">Deterministic Phase 2C automated end-to-end verification</p>
-          </div>
-        </div>
-        <button
-          onClick={() => setValidationModalOpen(true)}
-          className="py-1.5 px-3 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-mono text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm"
-        >
-          <Cpu className="w-3.5 h-3.5" />
-          <span>Launch Synthetic Suite</span>
-        </button>
-      </div>
-
       {/* 1. Readiness Checklist */}
       <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-2.5">
         <div className="flex items-center justify-between border-b border-command-border pb-2">
@@ -1015,13 +995,6 @@ export function ParkingOccupancyPanel({
             </div>
           </div>
         </div>
-      )}
-
-      {/* Synthetic Validation Modal */}
-      <SyntheticValidationModal
-        isOpen={validationModalOpen}
-        onClose={() => setValidationModalOpen(false)}
-      />
     </div>
   );
 }

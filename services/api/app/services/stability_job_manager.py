@@ -25,12 +25,17 @@ def _utc_now() -> datetime:
 class StabilityAssessmentJobManager:
     """Manages bounded concurrency, background execution, progress tracking, and cancellation for stability assessments."""
 
-    def __init__(self, max_concurrency: int = 2) -> None:
+    def __init__(self, max_concurrency: int = 2, db_session_factory: Optional[Any] = None) -> None:
         self.config: StabilityConfig = load_stability_config()
         self._max_concurrency: int = max(1, self.config.execution.max_concurrent_jobs or max_concurrency)
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(self._max_concurrency)
         self._active_tasks: Dict[str, asyncio.Task[None]] = {}
         self._cancel_requested: Set[str] = set()
+        self._db_session_factory = db_session_factory
+
+    def _get_db_session(self):
+        factory = self._db_session_factory or async_session_factory
+        return factory()
 
     def submit_assessment_job(
         self,
@@ -77,7 +82,7 @@ class StabilityAssessmentJobManager:
         async with self._semaphore:
             # 1. Update DB to VALIDATING / STARTED
             try:
-                async with async_session_factory() as db:
+                async with self._get_db_session() as db:
                     res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
                     assessment = res.scalar_one_or_none()
                     if assessment:
@@ -127,7 +132,7 @@ class StabilityAssessmentJobManager:
                     return
 
                 # 4. Persist COMPLETE result
-                async with async_session_factory() as db:
+                async with self._get_db_session() as db:
                     res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
                     assessment = res.scalar_one_or_none()
                     if assessment:
@@ -153,7 +158,7 @@ class StabilityAssessmentJobManager:
             except Exception as e:
                 logger.error(f"Error during stability evaluation for assessment {assessment_id}: {e}", exc_info=True)
                 sanitized_msg = str(e)
-                async with async_session_factory() as db:
+                async with self._get_db_session() as db:
                     res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
                     assessment = res.scalar_one_or_none()
                     if assessment:
@@ -179,7 +184,7 @@ class StabilityAssessmentJobManager:
 
     async def _update_progress_db(self, assessment_id: str, pct: float, msg: str) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
                 assessment = res.scalar_one_or_none()
                 if assessment and assessment.status not in ("COMPLETE", "FAILED", "CANCELLED"):
@@ -192,7 +197,7 @@ class StabilityAssessmentJobManager:
 
     async def _persist_cancellation(self, assessment_id: str, video_path: Path) -> None:
         try:
-            async with async_session_factory() as db:
+            async with self._get_db_session() as db:
                 res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
                 assessment = res.scalar_one_or_none()
                 if assessment:

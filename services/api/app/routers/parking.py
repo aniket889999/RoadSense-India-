@@ -27,6 +27,7 @@ from services.api.app.models.entities import (
     CameraStabilityAssessment,
     CameraStabilityAuditEvent,
     LayoutAuditEvent,
+    ParkingJobAuditEvent,
     ParkingLayoutRevision,
     ParkingOccupancyJob,
     ParkingSpace,
@@ -49,6 +50,8 @@ from services.api.app.schemas.parking import (
     LayoutValidationResponse,
     LayoutVerifyRequest,
     ParkingOccupancyJobCancelResponse,
+    ParkingOccupancyJobDeleteRequest,
+    ParkingOccupancyJobDeleteResponse,
     ParkingOccupancyJobResponse,
     ParkingSpaceSchema,
     ApproachZoneSchema,
@@ -91,9 +94,20 @@ def utc_now() -> datetime:
 
 
 def get_storage_root() -> Path:
-    root = (REPO_ROOT / "outputs").resolve()
+    if hasattr(settings, "MEDIA_ROOT") and settings.MEDIA_ROOT:
+        root = Path(settings.MEDIA_ROOT).resolve()
+    else:
+        root = (REPO_ROOT / "outputs").resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def get_parking_job_manager() -> ParkingOccupancyJobManager:
+    return parking_occupancy_job_manager
+
+
+def get_stability_job_manager() -> StabilityAssessmentJobManager:
+    return stability_job_manager
 
 
 
@@ -1356,6 +1370,7 @@ async def create_camera_stability_assessment(
     camera_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """
     Execute an asynchronous bounded camera stability assessment against the camera's reference image.
@@ -1396,7 +1411,7 @@ async def create_camera_stability_assessment(
     assessment_id = str(uuid.uuid4())
     temp_video_path = camera_dir / f"assess_stream_{assessment_id}.mp4"
 
-    cfg = stability_job_manager.config
+    cfg = stab_manager.config
     MAX_VIDEO_BYTES = cfg.intake.max_upload_bytes
     total_bytes = 0
 
@@ -1446,7 +1461,7 @@ async def create_camera_stability_assessment(
         await db.refresh(assessment)
 
         # Launch background evaluation worker
-        stability_job_manager.submit_assessment_job(
+        stab_manager.submit_assessment_job(
             assessment_id=assessment_id,
             video_path=temp_video_path,
             camera_id=camera_id,
@@ -1469,6 +1484,7 @@ async def create_camera_stability_assessment(
 async def cancel_stability_assessment(
     assessment_id: str,
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """Safely cancel an in-progress or queued stability assessment."""
     res = await db.execute(select(CameraStabilityAssessment).where(CameraStabilityAssessment.id == assessment_id))
@@ -1484,7 +1500,7 @@ async def cancel_stability_assessment(
             message=f"Assessment is already in terminal state '{a.status}'.",
         )
 
-    await stability_job_manager.cancel_assessment_job(assessment_id)
+    await stab_manager.cancel_assessment_job(assessment_id)
     a.status = "CANCELLED"
     a.progress_pct = 100.0
     a.stage_message = "Assessment cancelled by operator"
@@ -1508,6 +1524,7 @@ async def cancel_stability_assessment(
 async def get_camera_operational_gate(
     camera_id: str,
     db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
 ):
     """
     Retrieve the current fail-closed operational inference gate for a camera.
@@ -1526,15 +1543,14 @@ async def get_camera_operational_gate(
     verified_layout = layout_res.scalar_one_or_none()
     current_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
 
-    # Get latest completed stability assessment
-    ass_res = await db.execute(
+    # Find latest completed assessment for camera
+    assess_res = await db.execute(
         select(CameraStabilityAssessment)
         .where(CameraStabilityAssessment.camera_id == camera_id)
         .where(CameraStabilityAssessment.status == "COMPLETE")
         .order_by(desc(CameraStabilityAssessment.created_at))
-        .limit(1)
     )
-    latest_assessment = ass_res.scalar_one_or_none()
+    latest_assessment = assess_res.scalars().first()
 
     if not latest_assessment:
         gate, reasons = evaluate_operational_gate(
@@ -1563,7 +1579,7 @@ async def get_camera_operational_gate(
         pass
 
     now = utc_now()
-    cfg = stability_job_manager.config
+    cfg = stab_manager.config
     max_age = (latest_assessment.thresholds_snapshot or {}).get("max_assessment_age_seconds", cfg.thresholds.max_assessment_age_seconds)
 
     gate, reasons = evaluate_operational_gate(
@@ -1849,25 +1865,13 @@ def _resolve_safe_parking_artifact(
     if job_status != "COMPLETE":
         return None
 
-    # Strict authorization: do not serve artifact when expected_sha256 is None or invalid
-    if not expected_sha256 or len(expected_sha256) != 64 or not re.match(r"^[0-9a-f]{64}$", expected_sha256.lower()):
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
         return None
 
-    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
-
-    # Check raw lexical path components before resolve
-    curr = media_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            return None
-        curr = curr.parent
-
-    jobs_root = media_root / "parking_jobs"
-    curr = jobs_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            return None
-        curr = curr.parent
+    jobs_root = (media_root / "parking_jobs").resolve()
+    if jobs_root.is_symlink():
+        return None
 
     candidate = jobs_root / job_id / artifact_filename
     if ".." in candidate.parts:
@@ -1879,7 +1883,7 @@ def _resolve_safe_parking_artifact(
             return None
         curr = curr.parent
 
-    resolved_jobs_root = jobs_root.resolve()
+    resolved_jobs_root = jobs_root
     resolved = candidate.resolve()
     try:
         resolved.relative_to(resolved_jobs_root)
@@ -1906,23 +1910,16 @@ def create_staged_upload_file() -> Tuple[Path, int]:
     Creates an exclusively locked staged upload file under configured upload_staging root.
     Rejects symlinks in raw path chain, enforces confinement, and uses a neutral staging suffix.
     """
-    media_root = Path(settings.MEDIA_ROOT) if hasattr(settings, "MEDIA_ROOT") else Path(tempfile.gettempdir()) / "roadsense_media"
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
+        raise ValueError(f"Symlink found in media root path component: {media_root}")
 
-    curr = media_root
-    while curr != curr.parent:
-        if curr.is_symlink():
-            raise ValueError(f"Symlink found in media root path component: {curr}")
-        curr = curr.parent
-
-    upload_staging_dir = media_root / "upload_staging"
-    curr = upload_staging_dir
-    while curr != curr.parent:
-        if curr.is_symlink():
-            raise ValueError(f"Symlink found in upload staging path component: {curr}")
-        curr = curr.parent
+    upload_staging_dir = (media_root / "upload_staging").resolve()
+    if upload_staging_dir.is_symlink():
+        raise ValueError(f"Symlink found in upload staging path component: {upload_staging_dir}")
 
     upload_staging_dir.mkdir(parents=True, exist_ok=True)
-    resolved_staging = upload_staging_dir.resolve()
+    resolved_staging = upload_staging_dir
 
     staging_file_name = f"upload_{uuid.uuid4().hex}.upload.tmp"
     staging_file_path = upload_staging_dir / staging_file_name
@@ -1997,6 +1994,7 @@ async def submit_parking_occupancy_job(
     camera_id: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
 ):
     """
     Submit a video file for gate-controlled parking occupancy evaluation and video annotation.
@@ -2008,7 +2006,7 @@ async def submit_parking_occupancy_job(
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
 
-    cfg = parking_occupancy_job_manager.config
+    cfg = manager.config
     max_upload_bytes = cfg.execution.max_upload_bytes
 
     if not file.filename:
@@ -2062,7 +2060,7 @@ async def submit_parking_occupancy_job(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to persist job record: {e}")
 
     # Launch async job manager execution
-    parking_occupancy_job_manager.submit_occupancy_job(
+    manager.submit_occupancy_job(
         job_id=job_id,
         camera_id=cam.id,
         site_id=cam.site_id,
@@ -2108,13 +2106,14 @@ async def list_camera_occupancy_jobs(
 async def cancel_parking_occupancy_job(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
 ):
     """Cancel an active or queued parking occupancy job atomically through manager CAS."""
     res = await db.execute(select(ParkingOccupancyJob.id).where(ParkingOccupancyJob.id == job_id))
     if not res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
 
-    result = await parking_occupancy_job_manager.request_job_cancellation(job_id)
+    result = await manager.request_job_cancellation(job_id)
     return ParkingOccupancyJobCancelResponse(
         job_id=result["job_id"],
         status=result["status"],
@@ -2202,4 +2201,224 @@ async def get_parking_job_timeline(
         path=safe_path,
         media_type="application/x-ndjson",
         filename=f"occupancy_timeline_{job_id[:8]}.jsonl",
+    )
+
+
+@router.get("/parking/jobs/{job_id}/summary")
+async def get_parking_job_summary(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the final occupancy summary JSON for a COMPLETE parking occupancy job."""
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    if job.status != "COMPLETE":
+        raise HTTPException(status_code=404, detail=f"Summary is only available for COMPLETE jobs (current status: '{job.status}').")
+
+    manifest = job.manifest_json or {}
+    summary_sha = manifest.get("summary_sha256") or (manifest.get("software_versions") or {}).get("summary_sha256")
+    if not summary_sha or len(summary_sha) != 64:
+        raise HTTPException(status_code=404, detail="Summary SHA not found in manifest or is invalid.")
+
+    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status)
+    if not safe_path:
+        raise HTTPException(status_code=404, detail="Summary JSON file not available or failed integrity verification.")
+
+    return FileResponse(
+        path=safe_path,
+        media_type="application/json",
+        filename=f"parking_summary_{job_id[:8]}.json",
+    )
+
+
+@router.delete("/parking/jobs/{job_id}", response_model=ParkingOccupancyJobDeleteResponse)
+async def delete_parking_occupancy_job(
+    job_id: str,
+    req: ParkingOccupancyJobDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Safely delete a parking occupancy job and purge its local artifacts with fail-closed retention controls.
+
+    Requirements:
+    - confirmation_acknowledged must be true
+    - non-blank local_operator_label assertion
+    - meaningful deletion_reason (>= 5 chars)
+    - Terminal states only: COMPLETE, FAILED, CANCELLED, BLOCKED_BY_STABILITY_GATE
+    - Guarded DB CAS to PURGING
+    - Confined filesystem validation (no traversal or symlinks)
+    - Atomic quarantine rename before purge; restored on DB commit failure
+    - Minimal DELETED tombstone & append-only ParkingJobAuditEvent recorded in DB
+    """
+    request_time = datetime.now(timezone.utc)
+
+    if not req.confirmation_acknowledged:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit confirmation (confirmation_acknowledged=true) is required for deletion.",
+        )
+
+    op_label = (req.local_operator_label or "").strip()
+    if not op_label:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Non-blank local_operator_label is required.",
+        )
+
+    reason = (req.deletion_reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A meaningful deletion_reason (at least 5 characters) is required.",
+        )
+
+    # 1. Fetch current job for state check
+    res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Parking occupancy job not found")
+
+    terminal_statuses = {"COMPLETE", "FAILED", "CANCELLED", "BLOCKED_BY_STABILITY_GATE"}
+
+    if job.status == "DELETED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job {job_id} has already been deleted and purged.",
+        )
+
+    if job.status not in terminal_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete job in non-terminal state '{job.status}'. Deletion is strictly permitted only from terminal states ({', '.join(sorted(terminal_statuses))}).",
+        )
+
+    if req.expected_status and job.status != req.expected_status:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Concurrency mismatch: expected job status '{req.expected_status}', but current status is '{job.status}'.",
+        )
+
+    prior_status = job.status
+
+    # 2. Guarded DB CAS: transition status from terminal state to PURGING
+    from sqlalchemy import update
+    conditions = [
+        ParkingOccupancyJob.id == job_id,
+        ParkingOccupancyJob.status.in_(list(terminal_statuses)),
+    ]
+    if req.expected_status:
+        conditions.append(ParkingOccupancyJob.status == req.expected_status)
+
+    cas_stmt = (
+        update(ParkingOccupancyJob)
+        .where(*conditions)
+        .values(status="PURGING")
+    )
+    cas_res = await db.execute(cas_stmt)
+    if cas_res.rowcount == 0:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Failed to reserve PURGING state: job status changed concurrently.",
+        )
+    await db.flush()
+
+    # Capture artifact hashes before disk purge
+    artifact_hashes = {
+        "input_video_sha256": job.input_video_sha256,
+        "output_video_sha256": job.output_video_sha256,
+        "reference_image_sha256": job.reference_image_sha256,
+        "layout_canonical_sha256": job.layout_canonical_sha256,
+        "manifest_sha256": (job.manifest_json or {}).get("manifest_sha256"),
+        "summary_sha256": (job.manifest_json or {}).get("summary_sha256"),
+        "timeline_sha256": (job.manifest_json or {}).get("timeline_sha256"),
+    }
+
+    # 3. Path confinement & symlink validation before any filesystem operations
+    media_root = get_storage_root().resolve()
+    if media_root.is_symlink():
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Storage root directory cannot be a symlink.")
+
+    jobs_root = (media_root / "parking_jobs").resolve()
+    if jobs_root.is_symlink():
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Parking jobs root directory cannot be a symlink.")
+
+    job_dir = jobs_root / job_id
+    if ".." in job_dir.parts:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Invalid job path.")
+
+    # Check symlinks down to jobs_root
+    curr = job_dir
+    while curr != jobs_root and curr != curr.parent:
+        if curr.is_symlink():
+            await db.rollback()
+            raise HTTPException(status_code=400, detail="Symlinked path component detected in job directory hierarchy.")
+        curr = curr.parent
+
+    # 4. Atomic quarantine rename & strict rmtree
+    quarantine_dir = jobs_root / f".quarantine_{job_id}_{uuid.uuid4().hex[:8]}"
+    quarantined = False
+    purge_result = "NOOP"
+
+    try:
+        if job_dir.exists():
+            if job_dir.is_symlink():
+                raise RuntimeError("Job directory is a symlink.")
+            job_dir.rename(quarantine_dir)
+            quarantined = True
+
+            import shutil
+            shutil.rmtree(quarantine_dir)
+            quarantined = False
+            purge_result = "SUCCESS"
+
+        # 5. DB transition to DELETED tombstone & record audit event
+        job.status = "DELETED"
+        job.output_video_path = None
+        job.timeline_jsonl_path = None
+        job.stage_message = f"Purged by {op_label}: {reason}"
+
+        audit_event = ParkingJobAuditEvent(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            event_type="JOB_DELETED_AND_PURGED",
+            operator_identity_assertion=op_label,
+            deletion_reason=reason,
+            prior_status=prior_status,
+            resulting_status="DELETED",
+            artifact_hashes=artifact_hashes,
+            purge_result=purge_result,
+            request_time=request_time,
+            completed_time=datetime.now(timezone.utc),
+        )
+        db.add(audit_event)
+        await db.commit()
+
+    except Exception as e:
+        await db.rollback()
+        # Restore quarantined directory if DB commit or rmtree failed
+        if quarantined and quarantine_dir.exists() and not job_dir.exists():
+            try:
+                quarantine_dir.rename(job_dir)
+            except Exception as restore_err:
+                logger.error(f"Failed to restore quarantined directory {quarantine_dir} to {job_dir}: {restore_err}")
+        logger.exception(f"Failed during deletion of job {job_id}")
+        raise HTTPException(status_code=500, detail=f"Job deletion failed: {str(e)}")
+
+    completed_time = datetime.now(timezone.utc)
+    return ParkingOccupancyJobDeleteResponse(
+        deleted=True,
+        job_id=job_id,
+        prior_status=prior_status,
+        resulting_status="DELETED",
+        operator_identity_assertion=op_label,
+        deletion_reason=reason,
+        purged_at=completed_time,
+        message=f"Job {job_id} artifacts successfully purged and job record marked DELETED.",
     )

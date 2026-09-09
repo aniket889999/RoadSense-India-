@@ -414,3 +414,25 @@ class ParkingOccupancyJobCancelResponse(BaseModel):
     status: str
     cancelled: bool
     message: str
+
+
+class ParkingOccupancyJobDeleteRequest(BaseModel):
+    """
+    Fail-closed deletion and retention audit request.
+    Note: local_operator_label is an operator identity assertion, not an authenticated SSO identity.
+    """
+    confirmation_acknowledged: bool = Field(..., description="Explicit confirmation of destructive deletion")
+    local_operator_label: str = Field(..., min_length=1, max_length=128, description="Operator identity assertion")
+    deletion_reason: str = Field(..., min_length=5, description="Meaningful audit reason for job and artifact purge")
+    expected_status: Optional[str] = Field(None, description="Expected terminal status for concurrency CAS protection")
+
+
+class ParkingOccupancyJobDeleteResponse(BaseModel):
+    deleted: bool
+    job_id: str
+    prior_status: str
+    resulting_status: str
+    operator_identity_assertion: str
+    deletion_reason: str
+    purged_at: datetime
+    message: str

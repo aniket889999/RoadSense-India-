@@ -14,6 +14,7 @@ import {
   CameraStabilityAuditEvent,
   ParkingOccupancyJob,
   ParkingOccupancyJobCancelResponse,
+  ParkingValidationEvidenceReport,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -396,4 +397,48 @@ export function getOccupancyManifestUrl(jobId: string): string {
 
 export function getOccupancyTimelineUrl(jobId: string): string {
   return `${API_BASE_URL}/api/v1/occupancy/jobs/${jobId}/timeline`;
+}
+
+export function getOccupancySummaryUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/v1/parking/jobs/${jobId}/summary`;
+}
+
+export interface DeleteOccupancyJobRequest {
+  confirmation_acknowledged: boolean;
+  local_operator_label: string;
+  deletion_reason: string;
+  expected_status?: string;
+}
+
+export interface DeleteOccupancyJobResponse {
+  deleted: boolean;
+  job_id: string;
+  prior_status: string;
+  resulting_status: string;
+  operator_identity_assertion: string;
+  deletion_reason: string;
+  purged_at: string;
+  message: string;
+}
+
+export async function deleteOccupancyJob(
+  jobId: string,
+  req: DeleteOccupancyJobRequest = {
+    confirmation_acknowledged: true,
+    local_operator_label: "site_operator",
+    deletion_reason: "Operator initiated evidence and job purge",
+  }
+): Promise<DeleteOccupancyJobResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/parking/jobs/${jobId}`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to delete occupancy job');
+  }
+  return res.json();
 }

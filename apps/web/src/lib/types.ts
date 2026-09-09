@@ -395,6 +395,7 @@ export interface ParkingOccupancyJob {
   has_annotated_video: boolean;
   has_timeline: boolean;
   has_manifest: boolean;
+  has_summary?: boolean;
   bay_summary?: Record<string, BaySummaryItem> | null;
 
   created_at: string;
@@ -407,4 +408,56 @@ export interface ParkingOccupancyJobCancelResponse {
   status: string;
   cancelled: boolean;
   message: string;
+}
+
+export interface ValidationCheckItem {
+  check_name: string;
+  category: string;
+  expected: any;
+  observed: any;
+  passed: boolean;
+  details?: string;
+}
+
+export interface ParkingValidationEvidenceReport {
+  run_id: string;
+  is_synthetic_fixture: boolean;
+  disclaimer: string;
+  camera_id: string;
+  site_id: string;
+  job_id: string;
+  input_video_sha256: string;
+  reference_image_sha256: string;
+  layout_canonical_sha256: string;
+  stability_assessment_id: string;
+  stability_config_sha256: string;
+  occupancy_config_sha256: string;
+  detector_mode: string;
+  detector_checkpoint_sha256: string;
+  bytetrack_config_sha256: string;
+  bytetrack_frame_rate: number;
+  output_video_sha256: string;
+  timeline_sha256: string;
+  summary_sha256: string;
+  manifest_sha256: string;
+  operational_gate: string;
+  gate_reasons: string[];
+  total_frames: number;
+  processed_frames: number;
+  fps: number;
+  duration_seconds: number;
+  total_bays: number;
+  final_occupied_count: number;
+  final_vacant_count: number;
+  final_unknown_count: number;
+  final_occluded_count: number;
+  total_state_transitions: number;
+  checks: ValidationCheckItem[];
+  passed: boolean;
+  failure_reasons: string[];
+  software_versions: Record<string, string>;
+  git_sha?: string;
+  git_commit_sha?: string;
+  created_at: string;
+  completed_at: string;
 }

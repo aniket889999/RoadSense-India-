@@ -10,7 +10,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -62,14 +62,20 @@ from services.api.app.schemas.parking import (
     StabilityAssessmentCancelResponse,
     StabilityAssessmentResponse,
 )
-from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
+from services.api.app.services.parking_occupancy_job_manager import (
+    ParkingOccupancyJobManager,
+    parking_occupancy_job_manager,
+)
 from services.api.app.services.reference_image_service import (
     ReferenceImageProcessingError,
     ReferenceImageSecurityError,
     process_and_store_upload_file,
     validate_served_file_path,
 )
-from services.api.app.services.stability_job_manager import stability_job_manager
+from services.api.app.services.stability_job_manager import (
+    StabilityAssessmentJobManager,
+    stability_job_manager,
+)
 
 from src.parking.contracts import (
     CalibrationStatus,
@@ -95,9 +101,9 @@ def utc_now() -> datetime:
 
 def get_storage_root() -> Path:
     if hasattr(settings, "MEDIA_ROOT") and settings.MEDIA_ROOT:
-        root = Path(settings.MEDIA_ROOT).resolve()
+        root = Path(settings.MEDIA_ROOT)
     else:
-        root = (REPO_ROOT / "outputs").resolve()
+        root = REPO_ROOT / "outputs"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -318,14 +324,13 @@ async def upload_reference_image(
     operator_label: Optional[str] = Form(None),
     reason: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Upload and normalize a reference frame image for a camera."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
-
-    storage_root = get_storage_root()
 
     # Check if camera has existing layouts
     layout_res = await db.execute(
@@ -442,14 +447,16 @@ async def upload_reference_image(
 
 
 @router.get("/cameras/{camera_id}/reference-image")
-async def get_reference_image(camera_id: str, db: AsyncSession = Depends(get_db)):
+async def get_reference_image(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
+):
     """Serve the stored reference image for display on the ROI canvas."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam or not cam.reference_image_path:
         raise HTTPException(status_code=404, detail="Reference image not found for this camera")
-
-    storage_root = get_storage_root()
     try:
         image_file = validate_served_file_path(cam.reference_image_path, storage_root)
     except ReferenceImageSecurityError as e:
@@ -1371,6 +1378,7 @@ async def create_camera_stability_assessment(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Execute an asynchronous bounded camera stability assessment against the camera's reference image.
@@ -1386,8 +1394,6 @@ async def create_camera_stability_assessment(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Camera has no reference image uploaded. Stability assessment requires a verified reference frame.",
         )
-
-    storage_root = get_storage_root()
     ref_file_path = validate_served_file_path(cam.reference_image_path, storage_root)
     if not ref_file_path.exists():
         raise HTTPException(status_code=404, detail="Reference image file missing from storage.")
@@ -1842,11 +1848,15 @@ def _resolve_safe_parking_artifact(
     artifact_filename: str,
     expected_sha256: Optional[str] = None,
     job_status: Optional[str] = "COMPLETE",
+    storage_root: Optional[Path] = None,
 ) -> Optional[Path]:
     """
-    Safely resolve a parking job artifact path under the configured media root.
-    Strictly rejects lexical traversal, symlink components, and non-confined paths.
-    Verifies stored SHA-256 if expected_sha256 is provided.
+    Resolves and verifies an artifact path with fail-closed security guarantees:
+    - Enforces allowed filename whitelist
+    - Requires job status to be COMPLETE
+    - Validates lexical confinement under media_root/parking_jobs/{job_id}
+    - Rejects any symlinks in path components
+    - Verifies byte-level SHA-256 hash match against database provenance
     """
     import re
     if not job_id or not re.match(r"^[a-f0-9\-]{36}$", job_id):
@@ -1865,12 +1875,16 @@ def _resolve_safe_parking_artifact(
     if job_status != "COMPLETE":
         return None
 
-    media_root = get_storage_root().resolve()
-    if media_root.is_symlink():
+    if not expected_sha256 or len(expected_sha256) != 64:
         return None
 
+    raw_root = storage_root if storage_root is not None else get_storage_root()
+    if raw_root.is_symlink() or os.path.islink(str(raw_root)):
+        return None
+
+    media_root = raw_root.resolve()
     jobs_root = (media_root / "parking_jobs").resolve()
-    if jobs_root.is_symlink():
+    if jobs_root.is_symlink() or os.path.islink(str(jobs_root)):
         return None
 
     candidate = jobs_root / job_id / artifact_filename
@@ -1879,7 +1893,7 @@ def _resolve_safe_parking_artifact(
 
     curr = candidate
     while curr != jobs_root and curr != curr.parent:
-        if curr.is_symlink():
+        if curr.is_symlink() or os.path.islink(str(curr)):
             return None
         curr = curr.parent
 
@@ -1905,21 +1919,22 @@ def _resolve_safe_parking_artifact(
     return resolved
 
 
-def create_staged_upload_file() -> Tuple[Path, int]:
+def create_staged_upload_file(storage_root: Optional[Path] = None) -> Tuple[Path, int]:
     """
     Creates an exclusively locked staged upload file under configured upload_staging root.
     Rejects symlinks in raw path chain, enforces confinement, and uses a neutral staging suffix.
     """
-    media_root = get_storage_root().resolve()
-    if media_root.is_symlink():
-        raise ValueError(f"Symlink found in media root path component: {media_root}")
+    raw_root = storage_root if storage_root is not None else get_storage_root()
+    if raw_root.is_symlink() or os.path.islink(str(raw_root)):
+        raise ValueError(f"Symlink found in media root path component: {raw_root}")
 
-    upload_staging_dir = (media_root / "upload_staging").resolve()
-    if upload_staging_dir.is_symlink():
+    media_root = raw_root.resolve()
+    upload_staging_dir = media_root / "upload_staging"
+    if upload_staging_dir.is_symlink() or os.path.islink(str(upload_staging_dir)):
         raise ValueError(f"Symlink found in upload staging path component: {upload_staging_dir}")
 
     upload_staging_dir.mkdir(parents=True, exist_ok=True)
-    resolved_staging = upload_staging_dir
+    resolved_staging = upload_staging_dir.resolve()
 
     staging_file_name = f"upload_{uuid.uuid4().hex}.upload.tmp"
     staging_file_path = upload_staging_dir / staging_file_name
@@ -1941,10 +1956,10 @@ def create_staged_upload_file() -> Tuple[Path, int]:
     return staging_file_path, fd
 
 
-def _build_occupancy_job_response(job: ParkingOccupancyJob) -> ParkingOccupancyJobResponse:
+def _build_occupancy_job_response(job: ParkingOccupancyJob, storage_root: Optional[Path] = None) -> ParkingOccupancyJobResponse:
     timeline_sha = (job.manifest_json or {}).get("timeline_sha256") or ((job.manifest_json or {}).get("software_versions") or {}).get("timeline_sha256")
-    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
-    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status) if timeline_sha else None
+    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status, storage_root=storage_root)
+    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status, storage_root=storage_root) if timeline_sha else None
     has_video = safe_video is not None
     has_timeline = safe_timeline is not None
     has_manifest = bool(job.manifest_json is not None and job.status == "COMPLETE")
@@ -1995,6 +2010,7 @@ async def submit_parking_occupancy_job(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Submit a video file for gate-controlled parking occupancy evaluation and video annotation.
@@ -2013,7 +2029,7 @@ async def submit_parking_occupancy_job(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
 
     try:
-        temp_video_path, fd = create_staged_upload_file()
+        temp_video_path, fd = create_staged_upload_file(storage_root=storage_root)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create staged upload file: {e}")
 
@@ -2067,26 +2083,28 @@ async def submit_parking_occupancy_job(
         video_path=temp_video_path,
     )
 
-    return _build_occupancy_job_response(job)
+    return _build_occupancy_job_response(job, storage_root=storage_root)
 
 
 @router.get("/parking/jobs/{job_id}", response_model=ParkingOccupancyJobResponse)
 async def get_parking_occupancy_job_detail(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Retrieve status, metrics, and manifest summary of a parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
-    return _build_occupancy_job_response(job)
+    return _build_occupancy_job_response(job, storage_root=storage_root)
 
 
 @router.get("/cameras/{camera_id}/occupancy/jobs", response_model=List[ParkingOccupancyJobResponse])
 async def list_camera_occupancy_jobs(
     camera_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """List historical parking occupancy jobs for a camera."""
     cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
@@ -2099,7 +2117,7 @@ async def list_camera_occupancy_jobs(
         .order_by(desc(ParkingOccupancyJob.created_at))
     )
     jobs = res.scalars().all()
-    return [_build_occupancy_job_response(j) for j in jobs]
+    return [_build_occupancy_job_response(j, storage_root=storage_root) for j in jobs]
 
 
 @router.post("/parking/jobs/{job_id}/cancel", response_model=ParkingOccupancyJobCancelResponse)
@@ -2126,6 +2144,7 @@ async def cancel_parking_occupancy_job(
 async def get_parking_job_annotated_video(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Stream the generated annotated MP4 video with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2143,7 +2162,7 @@ async def get_parking_job_annotated_video(
     if job.manifest_json and job.manifest_json.get("output_video_sha256") != job.output_video_sha256:
         raise HTTPException(status_code=404, detail="Manifest provenance mismatch for annotated video.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Annotated video file not available or failed integrity verification.")
 
@@ -2158,6 +2177,7 @@ async def get_parking_job_annotated_video(
 async def get_parking_job_manifest(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Retrieve the full processing manifest JSON for a COMPLETE parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2171,6 +2191,14 @@ async def get_parking_job_manifest(
     if not job.manifest_json:
         raise HTTPException(status_code=404, detail="Processing manifest not available for this job.")
 
+    manifest_sha = (job.manifest_json or {}).get("manifest_sha256")
+    safe_path = _resolve_safe_parking_artifact(job.id, "processing_manifest.json", manifest_sha, job.status, storage_root=storage_root) if manifest_sha else None
+    if safe_path and safe_path.is_file():
+        return FileResponse(
+            path=safe_path,
+            media_type="application/json",
+            filename=f"processing_manifest_{job_id[:8]}.json",
+        )
     return job.manifest_json
 
 
@@ -2178,6 +2206,7 @@ async def get_parking_job_manifest(
 async def get_parking_job_timeline(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Download the state-transition timeline JSONL ledger with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2193,7 +2222,7 @@ async def get_parking_job_timeline(
     if not timeline_sha or len(timeline_sha) != 64:
         raise HTTPException(status_code=404, detail="Timeline SHA not found in manifest or is invalid.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Timeline ledger file not available or failed integrity verification.")
 
@@ -2208,6 +2237,7 @@ async def get_parking_job_timeline(
 async def get_parking_job_summary(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Download the final occupancy summary JSON for a COMPLETE parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2223,7 +2253,7 @@ async def get_parking_job_summary(
     if not summary_sha or len(summary_sha) != 64:
         raise HTTPException(status_code=404, detail="Summary SHA not found in manifest or is invalid.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Summary JSON file not available or failed integrity verification.")
 
@@ -2239,6 +2269,7 @@ async def delete_parking_occupancy_job(
     job_id: str,
     req: ParkingOccupancyJobDeleteRequest,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Safely delete a parking occupancy job and purge its local artifacts with fail-closed retention controls.
@@ -2338,7 +2369,7 @@ async def delete_parking_occupancy_job(
     }
 
     # 3. Path confinement & symlink validation before any filesystem operations
-    media_root = get_storage_root().resolve()
+    media_root = storage_root.resolve()
     if media_root.is_symlink():
         await db.rollback()
         raise HTTPException(status_code=500, detail="Storage root directory cannot be a symlink.")

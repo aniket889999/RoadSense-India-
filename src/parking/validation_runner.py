@@ -1,13 +1,13 @@
 """End-to-end automated validation runner for Phase 2C stationary parking camera workflow.
 
-Runs in an isolated temporary application environment with temporary database and media root,
-using the public HTTP/API workflow through ASGITransport.
+Runs in a completely isolated temporary application environment with dedicated temporary database,
+dedicated media root, and dedicated FastAPI instance, using the public HTTP/API workflow through ASGITransport.
+Never mutates process-global application, settings, or dependency overrides.
 """
 
 from __future__ import annotations
 
 import asyncio
-import collections
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 import cv2
+import fastapi
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import numpy as np
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -30,31 +32,30 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from services.api.app.core.config import settings
 from services.api.app.db.base import Base
 from services.api.app.db.session import get_db
-from services.api.app.main import app
+from services.api.app.routers.health import router as health_router
+from services.api.app.routers.live import router as live_router
 from services.api.app.routers.parking import (
     get_parking_job_manager,
     get_stability_job_manager,
     get_storage_root,
+    router as parking_router,
 )
+from services.api.app.routers.road_events import router as road_events_router
+from services.api.app.routers.sessions import router as sessions_router
 from services.api.app.services.parking_occupancy_job_manager import ParkingOccupancyJobManager
 from services.api.app.services.stability_job_manager import StabilityAssessmentJobManager
-from src.parking.contracts import (
-    LayoutRevisionStatus,
-    OperationalGate,
-    StabilityDecision,
-)
 from src.parking.occupancy_config import load_parking_occupancy_config
 from src.parking.occupancy_contracts import OccupancyState
 from src.parking.stability_config import load_stability_config
-from src.parking.synthetic_scene_generator import (
-    SyntheticParkingFixture,
-    generate_synthetic_parking_fixture,
-)
+from src.parking.synthetic_scene_generator import generate_synthetic_parking_fixture
 from src.parking.testing_support import DeterministicVehicleDetectorDouble
 from src.parking.validation_evidence import (
     ParkingValidationEvidenceReport,
     ValidationCheckItem,
+    measure_visual_overlay_regions,
+    validate_temporal_timeline_evidence,
 )
+from src.parking.vehicle_tracker import ParkingByteTracker
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,49 @@ def _get_git_commit_sha() -> str:
         return res.stdout.strip()
     except Exception:
         return "UNKNOWN"
+
+
+def create_isolated_parking_app(
+    db_session_factory: Any,
+    media_root: Path,
+    detector_factory: Optional[Any] = None,
+    occupancy_job_manager: Optional[ParkingOccupancyJobManager] = None,
+    stability_job_manager: Optional[StabilityAssessmentJobManager] = None,
+) -> FastAPI:
+    """
+    Constructs a completely isolated, standalone FastAPI application instance with local dependency bindings.
+    Does not touch or mutate process-global services.api.app.main.app or global settings.
+    """
+    isolated_app = FastAPI(
+        title="RoadSense Isolated Validation API",
+        version=settings.VERSION,
+        description="Isolated in-memory/temporary test instance for parking validation.",
+    )
+    isolated_app.include_router(parking_router)
+    isolated_app.include_router(health_router)
+    isolated_app.include_router(sessions_router)
+    isolated_app.include_router(road_events_router)
+    isolated_app.include_router(live_router)
+
+    occ_manager = occupancy_job_manager or ParkingOccupancyJobManager(
+        detector_factory=detector_factory,
+        db_session_factory=db_session_factory,
+        media_root=media_root,
+    )
+    stab_manager = stability_job_manager or StabilityAssessmentJobManager(
+        db_session_factory=db_session_factory,
+    )
+
+    async def get_isolated_db():
+        async with db_session_factory() as session:
+            yield session
+
+    isolated_app.dependency_overrides[get_db] = get_isolated_db
+    isolated_app.dependency_overrides[get_parking_job_manager] = lambda: occ_manager
+    isolated_app.dependency_overrides[get_stability_job_manager] = lambda: stab_manager
+    isolated_app.dependency_overrides[get_storage_root] = lambda: media_root
+
+    return isolated_app
 
 
 async def run_stable_parking_e2e_validation(
@@ -150,43 +194,33 @@ async def run_stable_parking_e2e_validation(
         )
     )
 
-    # 3. Setup isolated managers with injected detector factory
+    # 3. Setup isolated detector and managers
+    det_double: Optional[DeterministicVehicleDetectorDouble] = None
+    if use_synthetic_detector_double:
+        det_double = DeterministicVehicleDetectorDouble(
+            frame_detections=fixture.frame_ground_truth_detections,
+        )
+
     def detector_factory():
-        if use_synthetic_detector_double:
+        if use_synthetic_detector_double and det_double is not None:
+            # Return fresh double with reset counter
             return DeterministicVehicleDetectorDouble(
                 frame_detections=fixture.frame_ground_truth_detections,
-                checkpoint_sha256="0" * 64,
+                checkpoint_sha256=det_double.checkpoint_sha256,
             )
         return None
 
-    isolated_occ_manager = ParkingOccupancyJobManager(
-        detector_factory=detector_factory if use_synthetic_detector_double else None,
+    isolated_app = create_isolated_parking_app(
         db_session_factory=isolated_session_factory,
         media_root=temp_media_root,
+        detector_factory=detector_factory if use_synthetic_detector_double else None,
     )
-    isolated_stab_manager = StabilityAssessmentJobManager(
-        db_session_factory=isolated_session_factory,
-    )
-
-    # Set settings.MEDIA_ROOT for isolated environment
-    saved_media_root = getattr(settings, "MEDIA_ROOT", None)
-    settings.MEDIA_ROOT = str(temp_media_root)
-
-    # Override app dependencies to point to isolated temporary environment
-    async def get_isolated_db():
-        async with isolated_session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = get_isolated_db
-    app.dependency_overrides[get_parking_job_manager] = lambda: isolated_occ_manager
-    app.dependency_overrides[get_stability_job_manager] = lambda: isolated_stab_manager
-    app.dependency_overrides[get_storage_root] = lambda: temp_media_root
 
     stability_cfg = load_stability_config()
     occupancy_cfg = load_parking_occupancy_config()
 
     try:
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=isolated_app)
         async with AsyncClient(transport=transport, base_url="http://test", timeout=60.0) as client:
             # Step 1: Create Site
             res_site = await client.post(
@@ -389,8 +423,8 @@ async def run_stable_parking_e2e_validation(
             res_manifest = await client.get(f"/api/v1/parking/jobs/{job_id}/manifest")
             if res_manifest.status_code != 200:
                 raise RuntimeError(f"Failed to download manifest: {res_manifest.status_code}")
+            manifest_bytes = res_manifest.content
             manifest_json = res_manifest.json()
-            manifest_bytes = json.dumps(manifest_json, sort_keys=True).encode("utf-8")
             manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
 
             # B. Timeline JSONL
@@ -400,7 +434,6 @@ async def run_stable_parking_e2e_validation(
             timeline_content = res_timeline.content
             timeline_sha = hashlib.sha256(timeline_content).hexdigest()
 
-            # Verify timeline SHA matches manifest
             expected_timeline_sha = manifest_json.get("timeline_sha256") or (manifest_json.get("software_versions") or {}).get("timeline_sha256")
             checks.append(
                 ValidationCheckItem(
@@ -454,12 +487,11 @@ async def run_stable_parking_e2e_validation(
 
             # Compute Bay occupancy metrics from summary and final job response
             bay_summary = summary_data.get("bay_summary") or {}
-            final_occ = summary_data.get("occupied_count", 0) or sum(1 for b in bay_summary.values() if b.get("final_state") == OccupancyState.OCCUPIED.value)
-            final_vac = summary_data.get("vacant_count", 0) or sum(1 for b in bay_summary.values() if b.get("final_state") == OccupancyState.VACANT.value)
-            final_unk = summary_data.get("unknown_count", 0) or sum(1 for b in bay_summary.values() if b.get("final_state") == OccupancyState.UNKNOWN.value)
-            final_occ_drop = summary_data.get("occluded_count", 0) or sum(1 for b in bay_summary.values() if b.get("final_state") == OccupancyState.OCCLUDED.value)
+            final_occ = summary_data.get("occupied_count", 0) or sum(1 for b in bay_summary.values() if b.get("current_state") == OccupancyState.OCCUPIED.value or b.get("final_state") == OccupancyState.OCCUPIED.value)
+            final_vac = summary_data.get("vacant_count", 0) or sum(1 for b in bay_summary.values() if b.get("current_state") == OccupancyState.VACANT.value or b.get("final_state") == OccupancyState.VACANT.value)
+            final_unk = summary_data.get("unknown_count", 0) or sum(1 for b in bay_summary.values() if b.get("current_state") == OccupancyState.UNKNOWN.value or b.get("final_state") == OccupancyState.UNKNOWN.value)
+            final_occ_drop = summary_data.get("occluded_count", 0) or sum(1 for b in bay_summary.values() if b.get("current_state") == OccupancyState.OCCLUDED.value or b.get("final_state") == OccupancyState.OCCLUDED.value)
 
-            # Timeline transition count
             timeline_lines = [l for l in timeline_content.decode("utf-8", errors="replace").splitlines() if l.strip()]
             total_transitions = len(timeline_lines)
 
@@ -474,163 +506,91 @@ async def run_stable_parking_e2e_validation(
                 )
             )
 
-            # --- Part B: In-depth Temporal Evidence Validation ---
-            timeline_events = []
-            for line_str in timeline_lines:
-                try:
-                    timeline_events.append(json.loads(line_str))
-                except Exception:
-                    pass
-
-            # 1. Check ordering and chronological consistency
-            timestamps = [e.get("timestamp_seconds", 0.0) for e in timeline_events]
-            is_chronological = all(timestamps[i] <= timestamps[i+1] for i in range(len(timestamps)-1))
-            checks.append(
-                ValidationCheckItem(
-                    check_name="temporal_sequence_and_ordering",
-                    category="temporal_evidence",
-                    expected="chronologically_non_decreasing",
-                    observed=f"{len(timestamps)} timestamps, strictly non-decreasing" if is_chronological else "timestamp order violation",
-                    passed=is_chronological and len(timestamps) > 0,
-                    details=f"First ts: {timestamps[0] if timestamps else 0}s, Last ts: {timestamps[-1] if timestamps else 0}s",
-                )
-            )
-            if not is_chronological:
-                failure_reasons.append("Timeline events are not in non-decreasing chronological order.")
-
-            # 2. Per-bay state transitions and dropout recovery
-            bay_events: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
-            for ev in timeline_events:
-                bay_events[ev.get("bay_id", "")].append(ev)
-
-            has_duplicates = False
-            has_state_chain_error = False
-            for bid, ev_list in bay_events.items():
-                for idx, ev in enumerate(ev_list):
-                    if idx == 0:
-                        if ev.get("previous_state") != OccupancyState.UNKNOWN.value:
-                            has_state_chain_error = True
-                    else:
-                        prev_ev = ev_list[idx - 1]
-                        if ev.get("previous_state") != prev_ev.get("new_state"):
-                            has_state_chain_error = True
-                        if ev.get("new_state") == prev_ev.get("new_state"):
-                            has_duplicates = True
-
-            b1_ev = next((v for k, v in bay_events.items() if k.endswith("_1")), [])
-            b2_ev = next((v for k, v in bay_events.items() if k.endswith("_2")), [])
-            b3_ev = next((v for k, v in bay_events.items() if k.endswith("_3")), [])
-            b4_ev = next((v for k, v in bay_events.items() if k.endswith("_4")), [])
-
-            b1_states = [e.get("new_state") for e in b1_ev]
-            b2_states = [e.get("new_state") for e in b2_ev]
-            b3_states = [e.get("new_state") for e in b3_ev]
-            b4_states = [e.get("new_state") for e in b4_ev]
-
-            b1_valid = (b1_states in (["OCCUPIED", "VACANT"], ["OCCUPIED", "OCCLUDED", "VACANT"])) and (b1_states[-1] == "VACANT")
-            b2_valid = (b2_states == ["VACANT", "OCCUPIED"]) and (b2_states[-1] == "OCCUPIED")
-            b3_valid = (b3_states == ["VACANT"]) and (b3_states[-1] == "VACANT")
-            b4_valid = (b4_states[0] == "OCCUPIED") and ("OCCLUDED" in b4_states) and (b4_states[-1] == "OCCUPIED")
-
-            temporal_transitions_passed = (
-                not has_duplicates
-                and not has_state_chain_error
-                and b1_valid
-                and b2_valid
-                and b3_valid
-                and b4_valid
-            )
-
-            checks.append(
-                ValidationCheckItem(
-                    check_name="temporal_per_bay_transitions_and_dropout_recovery",
-                    category="temporal_evidence",
-                    expected={
-                        "Bay-1": "OCCUPIED -> ... -> VACANT",
-                        "Bay-2": ["VACANT", "OCCUPIED"],
-                        "Bay-3": ["VACANT"],
-                        "Bay-4": "OCCUPIED -> OCCLUDED -> ... -> OCCUPIED",
-                    },
-                    observed={
-                        "Bay-1": b1_states,
-                        "Bay-2": b2_states,
-                        "Bay-3": b3_states,
-                        "Bay-4": b4_states,
-                    },
-                    passed=temporal_transitions_passed,
-                    details=f"No duplicate transitions: {not has_duplicates}, State continuity: {not has_state_chain_error}, Occlusion recovery: {b4_valid}",
-                )
-            )
-            if not temporal_transitions_passed:
-                failure_reasons.append(
-                    f"Temporal state transition mismatch: B1={b1_states}, B2={b2_states}, B3={b3_states}, B4={b4_states}"
-                )
-
-            # 3. Final state agreement with summary JSON
-            final_timeline_states = {
-                bid: ev_list[-1].get("new_state") if ev_list else OccupancyState.UNKNOWN.value
-                for bid, ev_list in bay_events.items()
-            }
-            summary_states = {
-                bid: info.get("current_state") or info.get("final_state")
+            # --- Part B: Production Temporal Evidence Validation ---
+            expected_bay_ids = {sp.get("id") or sp.get("bay_id") for sp in fixture.parking_spaces}
+            summary_final_states = {
+                bid: info.get("current_state") or info.get("final_state") or "UNKNOWN"
                 for bid, info in bay_summary.items()
             }
-            states_agree = (final_timeline_states == summary_states and len(summary_states) == 4)
-            checks.append(
-                ValidationCheckItem(
-                    check_name="temporal_and_summary_final_state_agreement",
-                    category="temporal_evidence",
-                    expected=summary_states,
-                    observed=final_timeline_states,
-                    passed=states_agree,
-                    details=f"Compared {len(summary_states)} bay states between timeline and summary",
-                )
+            temp_passed, temp_checks, temp_failures, _ = validate_temporal_timeline_evidence(
+                timeline_lines=timeline_lines,
+                expected_bays=expected_bay_ids,
+                summary_final_states=summary_final_states,
+                expected_synthetic_pattern=True,
             )
-            if not states_agree:
-                failure_reasons.append(f"Final states in timeline ({final_timeline_states}) do not agree with summary JSON ({summary_states}).")
+            checks.extend(temp_checks)
+            if not temp_passed:
+                failure_reasons.extend(temp_failures)
 
-            # --- Part C: Validate Decoded MP4 Overlay Colors & Regions ---
-            video_color_checks_passed = True
-            color_observations = {}
+            # --- Part C: Quantitative Four-Color Visual Evidence Validation ---
+            # Evaluate on decoded MP4 video frames
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_v_file:
                 tmp_v_file.write(video_content)
                 tmp_v_path = tmp_v_file.name
 
             try:
                 cap_out = cv2.VideoCapture(tmp_v_path)
-                cap_out.set(cv2.CAP_PROP_POS_FRAMES, 5)
-                ret5, frame5 = cap_out.read()
+                cap_src = cv2.VideoCapture(str(fixture.video_path))
 
+                # Frame 15: B1=OCCUPIED (Red), B2=VACANT (Green), B3=VACANT (Green), B4=OCCUPIED (Red)
+                cap_out.set(cv2.CAP_PROP_POS_FRAMES, 15)
+                cap_src.set(cv2.CAP_PROP_POS_FRAMES, 15)
+                ret_out15, frame_out15 = cap_out.read()
+                ret_src15, frame_src15 = cap_src.read()
+
+                # Frame 50: B4 in OCCLUDED state (Amber)
                 cap_out.set(cv2.CAP_PROP_POS_FRAMES, 50)
-                ret50, frame50 = cap_out.read()
+                cap_src.set(cv2.CAP_PROP_POS_FRAMES, 50)
+                ret_out50, frame_out50 = cap_out.read()
+                ret_src50, frame_src50 = cap_src.read()
+
                 cap_out.release()
+                cap_src.release()
 
-                if ret5 and frame5 is not None:
-                    b1_roi = frame5[400:600, 150:350]
-                    b1_mean_bgr = [float(np.mean(b1_roi[:, :, c])) for c in range(3)]
-                    color_observations["bay1_frame5_mean_bgr"] = [round(x, 1) for x in b1_mean_bgr]
-                    b1_red_dominant = b1_mean_bgr[2] > b1_mean_bgr[0]
+                # Build pixel polygons
+                W, H = fixture.width, fixture.height
+                polys_px = {}
+                for sp in fixture.parking_spaces:
+                    sp_id = sp.get("id") or sp.get("bay_id")
+                    coords = []
+                    for p in sp.get("polygon_normalized", []):
+                        if isinstance(p, dict):
+                            coords.append([int(p["x"] * W), int(p["y"] * H)])
+                        else:
+                            coords.append([int(p[0] * W), int(p[1] * H)])
+                    polys_px[sp_id] = np.array(coords, dtype=np.int32)
 
-                    b2_roi = frame5[400:600, 600:800]
-                    b2_mean_bgr = [float(np.mean(b2_roi[:, :, c])) for c in range(3)]
-                    color_observations["bay2_frame5_mean_bgr"] = [round(x, 1) for x in b2_mean_bgr]
-                    b2_green_dominant = b2_mean_bgr[1] > b2_mean_bgr[0]
+                b1_id = next((b for b in polys_px.keys() if b.endswith("_1") or b.endswith("B1") or b == "B1"), "bay_1")
+                b2_id = next((b for b in polys_px.keys() if b.endswith("_2") or b.endswith("B2") or b == "B2"), "bay_2")
+                b3_id = next((b for b in polys_px.keys() if b.endswith("_3") or b.endswith("B3") or b == "B3"), "bay_3")
+                b4_id = next((b for b in polys_px.keys() if b.endswith("_4") or b.endswith("B4") or b == "B4"), "bay_4")
 
-                    b3_roi = frame5[400:600, 1050:1250]
-                    b3_mean_bgr = [float(np.mean(b3_roi[:, :, c])) for c in range(3)]
-                    color_observations["bay3_frame5_mean_bgr"] = [round(x, 1) for x in b3_mean_bgr]
-                    b3_green_dominant = b3_mean_bgr[1] > b3_mean_bgr[0]
+                if ret_out15 and ret_src15:
+                    states_15 = {b1_id: "OCCUPIED", b2_id: "VACANT", b3_id: "VACANT", b4_id: "OCCUPIED"}
+                    vis_ok15, vis_checks15, vis_fails15, vis_data15 = measure_visual_overlay_regions(
+                        rendered_bgr=frame_out15,
+                        source_bgr=frame_src15,
+                        bay_polygons_px=polys_px,
+                        bay_states=states_15,
+                        is_decoded_mp4=True,
+                    )
+                    checks.extend(vis_checks15)
+                    if not vis_ok15:
+                        failure_reasons.extend(vis_fails15)
 
-                    if not (b1_red_dominant and b2_green_dominant and b3_green_dominant):
-                        video_color_checks_passed = False
-
-                if ret50 and frame50 is not None:
-                    b4_roi = frame50[400:600, 1500:1700]
-                    b4_mean_bgr = [float(np.mean(b4_roi[:, :, c])) for c in range(3)]
-                    color_observations["bay4_frame50_occluded_bgr"] = [round(x, 1) for x in b4_mean_bgr]
-                    b4_amber_dominant = (b4_mean_bgr[2] > b4_mean_bgr[0]) and (b4_mean_bgr[1] > b4_mean_bgr[0])
-                    if not b4_amber_dominant:
-                        video_color_checks_passed = False
+                if ret_out50 and ret_src50:
+                    states_50 = {b4_id: "OCCLUDED"}
+                    b4_poly = {b4_id: polys_px[b4_id]}
+                    vis_ok50, vis_checks50, vis_fails50, vis_data50 = measure_visual_overlay_regions(
+                        rendered_bgr=frame_out50,
+                        source_bgr=frame_src50,
+                        bay_polygons_px=b4_poly,
+                        bay_states=states_50,
+                        is_decoded_mp4=True,
+                    )
+                    checks.extend(vis_checks50)
+                    if not vis_ok50:
+                        failure_reasons.extend(vis_fails50)
 
             finally:
                 if os.path.exists(tmp_v_path):
@@ -639,29 +599,23 @@ async def run_stable_parking_e2e_validation(
                     except Exception:
                         pass
 
-            checks.append(
-                ValidationCheckItem(
-                    check_name="overlay_color_and_visual_dominance",
-                    category="visual_rendering",
-                    expected="Red OCCUPIED (R>B), Green VACANT (G>B), Amber OCCLUDED (R>B & G>B)",
-                    observed=color_observations,
-                    passed=video_color_checks_passed,
-                    details=f"Observed channel metrics: {json.dumps(color_observations)}",
-                )
-            )
-            if not video_color_checks_passed:
-                failure_reasons.append("Decoded MP4 frames failed color dominance checks for occupied/vacant/occluded bays.")
-
             software_versions = {
                 "opencv": cv2.__version__,
                 "numpy": np.__version__,
                 "python": sys.version.split()[0],
                 "platform": platform.platform(),
-                "fastapi": "0.115.0",
+                "fastapi": getattr(fastapi, "__version__", "0.115.0"),
             }
 
             git_sha = _get_git_commit_sha()
             all_passed = all(c.passed for c in checks) and (len(failure_reasons) == 0)
+
+            # Provenance from manifest and config
+            det_checkpoint_sha = manifest_json.get("detector_checkpoint_sha256") or (
+                det_double.checkpoint_sha256 if det_double else "local_model"
+            )
+            tracker_inst = ParkingByteTracker(fps=int(fixture.fps))
+            bytetrack_cfg_sha = (manifest_json.get("software_versions") or {}).get("bytetrack_config_sha") or tracker_inst.config_sha256
 
             report = ParkingValidationEvidenceReport(
                 run_id=run_id,
@@ -677,8 +631,8 @@ async def run_stable_parking_e2e_validation(
                 stability_config_sha256=stability_cfg.config_sha256,
                 occupancy_config_sha256=occupancy_cfg.config_sha256,
                 detector_mode="DETERMINISTIC_SYNTHETIC_DOUBLE" if use_synthetic_detector_double else "LOCAL_YOLO",
-                detector_checkpoint_sha256="0" * 64 if use_synthetic_detector_double else "local_model",
-                bytetrack_config_sha256=occupancy_cfg.config_sha256,
+                detector_checkpoint_sha256=det_checkpoint_sha,
+                bytetrack_config_sha256=bytetrack_cfg_sha,
                 bytetrack_frame_rate=fixture.fps,
                 output_video_sha256=out_video_sha,
                 timeline_sha256=timeline_sha,
@@ -711,10 +665,6 @@ async def run_stable_parking_e2e_validation(
             return report
 
     finally:
-        # Reset dependency overrides and MEDIA_ROOT so no globals or production routes are altered
-        if saved_media_root is not None:
-            settings.MEDIA_ROOT = saved_media_root
-        app.dependency_overrides.clear()
         await isolated_engine.dispose()
         if cleanup_temp and work_dir and work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)

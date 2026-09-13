@@ -37,6 +37,15 @@ from services.api.app.schemas.parking import (
     LayoutInvalidateRequest,
     AuditEventResponse,
     LayoutRevisionResponse,
+    HazardAssociationCreateRequest,
+    HazardAssociationReviewRequest,
+    HazardAssociationLifecycleRequest,
+    HazardAssociationResponse,
+    HazardAuditEventResponse,
+    PavementInspectionRecordCreateRequest,
+    PavementInspectionRecordResponse,
+    BayCapacityDecisionResponse,
+    CapacitySnapshotResponse,
 )
 
 __all__ = [
@@ -69,4 +78,13 @@ __all__ = [
     "LayoutInvalidateRequest",
     "AuditEventResponse",
     "LayoutRevisionResponse",
+    "HazardAssociationCreateRequest",
+    "HazardAssociationReviewRequest",
+    "HazardAssociationLifecycleRequest",
+    "HazardAssociationResponse",
+    "HazardAuditEventResponse",
+    "PavementInspectionRecordCreateRequest",
+    "PavementInspectionRecordResponse",
+    "BayCapacityDecisionResponse",
+    "CapacitySnapshotResponse",
 ]

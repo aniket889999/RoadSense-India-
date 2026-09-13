@@ -213,6 +213,8 @@ class Camera(Base):
     layout_revisions: Mapped[List[ParkingLayoutRevision]] = relationship("ParkingLayoutRevision", back_populates="camera", cascade="all, delete-orphan")
     stability_assessments: Mapped[List["CameraStabilityAssessment"]] = relationship("CameraStabilityAssessment", back_populates="camera", cascade="all, delete-orphan")
     occupancy_jobs: Mapped[List["ParkingOccupancyJob"]] = relationship("ParkingOccupancyJob", back_populates="camera", cascade="all, delete-orphan")
+    hazard_associations: Mapped[List["ParkingHazardAssociation"]] = relationship("ParkingHazardAssociation", back_populates="camera", cascade="all, delete-orphan")
+    pavement_inspections: Mapped[List["PavementInspectionRecord"]] = relationship("PavementInspectionRecord", back_populates="camera", cascade="all, delete-orphan")
 
 
 class ParkingLayoutRevision(Base):
@@ -268,6 +270,7 @@ class ParkingSpace(Base):
     # Relationships
     layout_revision: Mapped[ParkingLayoutRevision] = relationship("ParkingLayoutRevision", back_populates="parking_spaces")
     approach_zone: Mapped[Optional[ApproachZone]] = relationship("ApproachZone", back_populates="parking_space", uselist=False, cascade="all, delete-orphan")
+    hazard_associations: Mapped[List["ParkingHazardAssociation"]] = relationship("ParkingHazardAssociation", back_populates="parking_space", cascade="all, delete-orphan")
 
 
 class ApproachZone(Base):
@@ -444,3 +447,75 @@ class ParkingJobAuditEvent(Base):
 
     # Relationships
     job: Mapped[ParkingOccupancyJob] = relationship("ParkingOccupancyJob", back_populates="audit_events")
+
+
+# ============================================================================
+# Phase 3A: Safe Usable Capacity & Hazard Association Entities
+# ============================================================================
+
+class ParkingHazardAssociation(Base):
+    """Audited association of a human-reviewed surface hazard to a parking bay or approach zone."""
+    __tablename__ = "parking_hazard_associations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    parking_space_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_spaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(32), default="BAY", nullable=False)  # BAY, APPROACH_ZONE
+    road_event_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("road_events.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    hazard_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), default="UNREVIEWED", nullable=False, index=True)  # UNREVIEWED, CONFIRMED, REJECTED, NEEDS_REVIEW
+    lifecycle_state: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False, index=True)  # ACTIVE, MITIGATED, RESOLVED, EXPIRED, SUPERSEDED
+    severity_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # Qualitative: LOW, MEDIUM, HIGH
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="operator")
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="hazard_associations")
+    parking_space: Mapped[ParkingSpace] = relationship("ParkingSpace", back_populates="hazard_associations")
+    road_event: Mapped[Optional[RoadEvent]] = relationship("RoadEvent")
+    audit_events: Mapped[List["ParkingHazardAuditEvent"]] = relationship("ParkingHazardAuditEvent", back_populates="association", cascade="all, delete-orphan")
+
+
+class ParkingHazardAuditEvent(Base):
+    """Append-only audit trail for hazard association review and lifecycle transitions."""
+    __tablename__ = "parking_hazard_audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    association_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_hazard_associations.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)  # CREATED, REVIEWED, LIFECYCLE_TRANSITION, RESOLVED, MUTATED
+    operator_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    prior_review_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    new_review_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    prior_lifecycle_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    new_lifecycle_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    explicit_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    association: Mapped[ParkingHazardAssociation] = relationship("ParkingHazardAssociation", back_populates="audit_events")
+
+
+class PavementInspectionRecord(Base):
+    """Audit record establishing pavement surface inspection provenance and freshness for a camera."""
+    __tablename__ = "pavement_inspection_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
+    camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("drive_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    inspected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    inspector_label: Mapped[str] = mapped_column(String(128), nullable=False, default="inspector")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    # Relationships
+    camera: Mapped[Camera] = relationship("Camera", back_populates="pavement_inspections")
+    session: Mapped[Optional[DriveSession]] = relationship("DriveSession")

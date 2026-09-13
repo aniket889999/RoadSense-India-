@@ -381,53 +381,6 @@ def evaluate_bay_capacity(
             pavement_inspection_fresh=False,
         )
 
-    # Rule 1: A blocked operational gate produces INFERENCE_BLOCKED and no capacity claim
-    is_gate_blocked = (
-        gate == OperationalGate.BLOCKED or
-        (isinstance(gate, str) and str(gate).upper() == "BLOCKED")
-    )
-    if is_gate_blocked:
-        reasons.append(REASON_GATE_BLOCKED)
-        for gr in gate_reasons:
-            if gr not in reasons:
-                reasons.append(gr)
-        return BayCapacityDecision(
-            bay_id=bay.bay_id,
-            operator_label=bay.operator_label,
-            space_type=bay.space_type,
-            capacity_state=CapacityState.INFERENCE_BLOCKED,
-            is_usable=False,
-            reason_codes=reasons,
-            evidence_ids=evidence_ids,
-            policy_config_sha256=policy_config_sha256,
-            evaluated_at=eval_iso,
-            raw_occupancy_state=str(bay.occupancy_state),
-            has_active_bay_hazard=False,
-            has_active_approach_hazard=False,
-            has_unverified_hazard=False,
-            pavement_inspection_fresh=False,
-        )
-
-    # Layout verification check
-    if config.require_verified_layout and (not layout_verified or not layout_canonical_sha256):
-        reasons.append(REASON_LAYOUT_NOT_VERIFIED)
-        return BayCapacityDecision(
-            bay_id=bay.bay_id,
-            operator_label=bay.operator_label,
-            space_type=bay.space_type,
-            capacity_state=CapacityState.UNKNOWN,
-            is_usable=False,
-            reason_codes=reasons,
-            evidence_ids=evidence_ids,
-            policy_config_sha256=policy_config_sha256,
-            evaluated_at=eval_iso,
-            raw_occupancy_state=str(bay.occupancy_state),
-            has_active_bay_hazard=False,
-            has_active_approach_hazard=False,
-            has_unverified_hazard=False,
-            pavement_inspection_fresh=False,
-        )
-
     # Audit & categorize hazards associated with this bay
     bay_hazards = [
         h for h in hazards
@@ -460,6 +413,53 @@ def evaluate_bay_capacity(
             has_unverified_hazard = True
             if REASON_UNVERIFIED_HAZARD_IGNORED not in reasons:
                 reasons.append(REASON_UNVERIFIED_HAZARD_IGNORED)
+
+    # Rule 1: A blocked operational gate produces INFERENCE_BLOCKED and no capacity claim
+    is_gate_blocked = (
+        gate == OperationalGate.BLOCKED or
+        (isinstance(gate, str) and str(gate).upper() == "BLOCKED")
+    )
+    if is_gate_blocked:
+        reasons.append(REASON_GATE_BLOCKED)
+        for gr in gate_reasons:
+            if gr not in reasons:
+                reasons.append(gr)
+        return BayCapacityDecision(
+            bay_id=bay.bay_id,
+            operator_label=bay.operator_label,
+            space_type=bay.space_type,
+            capacity_state=CapacityState.INFERENCE_BLOCKED,
+            is_usable=False,
+            reason_codes=reasons,
+            evidence_ids=evidence_ids,
+            policy_config_sha256=policy_config_sha256,
+            evaluated_at=eval_iso,
+            raw_occupancy_state=str(bay.occupancy_state),
+            has_active_bay_hazard=has_active_bay_hazard,
+            has_active_approach_hazard=has_active_approach_hazard,
+            has_unverified_hazard=has_unverified_hazard,
+            pavement_inspection_fresh=False,
+        )
+
+    # Layout verification check
+    if config.require_verified_layout and (not layout_verified or not layout_canonical_sha256):
+        reasons.append(REASON_LAYOUT_NOT_VERIFIED)
+        return BayCapacityDecision(
+            bay_id=bay.bay_id,
+            operator_label=bay.operator_label,
+            space_type=bay.space_type,
+            capacity_state=CapacityState.UNKNOWN,
+            is_usable=False,
+            reason_codes=reasons,
+            evidence_ids=evidence_ids,
+            policy_config_sha256=policy_config_sha256,
+            evaluated_at=eval_iso,
+            raw_occupancy_state=str(bay.occupancy_state),
+            has_active_bay_hazard=has_active_bay_hazard,
+            has_active_approach_hazard=has_active_approach_hazard,
+            has_unverified_hazard=has_unverified_hazard,
+            pavement_inspection_fresh=False,
+        )
 
     # Evaluate Occupancy Evidence Freshness
     raw_occ = str(bay.occupancy_state).upper()

@@ -31,6 +31,23 @@ from src.parking.layout_validation import (
     validate_parking_layout,
 )
 
+from src.parking.capacity_policy import (
+    BayCapacityDecision,
+    BayOccupancyEvidenceInput,
+    CapacityPolicyConfig,
+    CapacitySnapshot,
+    CapacityState,
+    HazardAssociationInput,
+    HazardLifecycleState,
+    HazardReviewState,
+    HazardTarget,
+    OperationalGate,
+    PavementInspectionEvidence,
+    compute_snapshot_sha256,
+    evaluate_bay_capacity,
+    evaluate_safe_usable_capacity,
+)
+
 __all__ = [
     "CalibrationStatus",
     "LayoutRevisionStatus",
@@ -54,4 +71,18 @@ __all__ = [
     "serialize_canonical_layout",
     "deserialize_canonical_layout",
     "compute_canonical_layout_sha256",
+    "CapacityState",
+    "OperationalGate",
+    "HazardTarget",
+    "HazardReviewState",
+    "HazardLifecycleState",
+    "CapacityPolicyConfig",
+    "HazardAssociationInput",
+    "PavementInspectionEvidence",
+    "BayOccupancyEvidenceInput",
+    "BayCapacityDecision",
+    "CapacitySnapshot",
+    "compute_snapshot_sha256",
+    "evaluate_bay_capacity",
+    "evaluate_safe_usable_capacity",
 ]

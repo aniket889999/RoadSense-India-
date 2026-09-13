@@ -436,3 +436,172 @@ class ParkingOccupancyJobDeleteResponse(BaseModel):
     deletion_reason: str
     purged_at: datetime
     message: str
+
+
+# ============================================================================
+# Phase 3A: Safe Usable Capacity & Hazard Association Schemas
+# ============================================================================
+
+HazardTargetLiteral = Literal["BAY", "APPROACH_ZONE"]
+HazardReviewStateLiteral = Literal["UNREVIEWED", "CONFIRMED", "REJECTED", "NEEDS_REVIEW"]
+HazardLifecycleStateLiteral = Literal["ACTIVE", "MITIGATED", "RESOLVED", "EXPIRED", "SUPERSEDED"]
+CapacityStateLiteral = Literal[
+    "OCCUPIED",
+    "USABLE_AVAILABLE",
+    "HAZARD_BLOCKED",
+    "APPROACH_BLOCKED",
+    "VACANT_UNASSESSED",
+    "OCCLUDED",
+    "UNKNOWN",
+    "INFERENCE_BLOCKED",
+]
+
+
+class HazardAssociationCreateRequest(BaseModel):
+    parking_space_id: str = Field(..., min_length=1, max_length=64)
+    target_type: HazardTargetLiteral = Field(default="BAY")
+    hazard_label: str = Field(..., min_length=1, max_length=128)
+    road_event_id: Optional[str] = Field(None, max_length=64)
+    severity_label: Optional[str] = Field(None, max_length=64)
+    notes: Optional[str] = None
+    created_by: str = Field(default="operator", min_length=1, max_length=128)
+
+    @field_validator("parking_space_id")
+    @classmethod
+    def validate_space_id(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "parking_space_id")
+
+    @field_validator("hazard_label")
+    @classmethod
+    def validate_hazard_label(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "hazard_label")
+
+
+class HazardAssociationReviewRequest(BaseModel):
+    review_state: HazardReviewStateLiteral
+    reviewer_identity: str = Field(..., min_length=1, max_length=128)
+    explicit_reason: str = Field(..., min_length=3)
+    notes: Optional[str] = None
+    expected_version: Optional[int] = None
+
+    @field_validator("reviewer_identity")
+    @classmethod
+    def validate_reviewer(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "reviewer_identity")
+
+    @field_validator("explicit_reason")
+    @classmethod
+    def validate_reason(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "explicit_reason")
+
+
+class HazardAssociationLifecycleRequest(BaseModel):
+    lifecycle_state: HazardLifecycleStateLiteral
+    operator_identity: str = Field(..., min_length=1, max_length=128)
+    explicit_reason: str = Field(..., min_length=3)
+    notes: Optional[str] = None
+    expected_version: Optional[int] = None
+
+    @field_validator("operator_identity")
+    @classmethod
+    def validate_operator(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "operator_identity")
+
+    @field_validator("explicit_reason")
+    @classmethod
+    def validate_reason(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "explicit_reason")
+
+
+class HazardAssociationResponse(BaseModel):
+    id: str
+    camera_id: str
+    parking_space_id: str
+    target_type: str
+    road_event_id: Optional[str] = None
+    hazard_label: str
+    review_state: str
+    lifecycle_state: str
+    severity_label: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: str
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class HazardAuditEventResponse(BaseModel):
+    id: str
+    association_id: str
+    event_type: str
+    operator_identity: str
+    prior_review_state: Optional[str] = None
+    new_review_state: Optional[str] = None
+    prior_lifecycle_state: Optional[str] = None
+    new_lifecycle_state: Optional[str] = None
+    explicit_reason: str
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class PavementInspectionRecordCreateRequest(BaseModel):
+    session_id: Optional[str] = Field(None, max_length=64)
+    inspected_at: Optional[datetime] = None
+    inspector_label: str = Field(default="inspector", min_length=1, max_length=128)
+    notes: Optional[str] = None
+
+    @field_validator("inspector_label")
+    @classmethod
+    def validate_inspector(cls, v: str) -> str:
+        return _strip_and_require_nonblank(v, "inspector_label")
+
+
+class PavementInspectionRecordResponse(BaseModel):
+    id: str
+    camera_id: str
+    session_id: Optional[str] = None
+    inspected_at: datetime
+    inspector_label: str
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class BayCapacityDecisionResponse(BaseModel):
+    bay_id: str
+    operator_label: str
+    space_type: str
+    capacity_state: str
+    is_usable: bool
+    reason_codes: List[str]
+    raw_occupancy_state: str
+    has_active_bay_hazard: bool
+    has_active_approach_hazard: bool
+    has_unverified_hazard: bool
+    pavement_inspection_fresh: bool
+    inspection_age_seconds: Optional[float] = None
+    evidence_ids: Dict[str, Any]
+
+
+class CapacitySnapshotResponse(BaseModel):
+    camera_id: str
+    site_id: str
+    layout_revision_id: Optional[str] = None
+    layout_canonical_sha256: Optional[str] = None
+    policy_config_sha256: str
+    operational_gate: str
+    gate_reasons: List[str]
+    evaluated_at: str
+    total_bays: int
+    physical_vacant_count: int
+    usable_available_count: int
+    occupied_count: int
+    hazard_blocked_count: int
+    approach_blocked_count: int
+    vacant_unassessed_count: int
+    unknown_count: int
+    occluded_count: int
+    inference_blocked_count: int
+    snapshot_sha256: str
+    decisions: Dict[str, BayCapacityDecisionResponse]

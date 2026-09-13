@@ -10,7 +10,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -27,20 +27,31 @@ from services.api.app.models.entities import (
     CameraStabilityAssessment,
     CameraStabilityAuditEvent,
     LayoutAuditEvent,
+    ParkingHazardAssociation,
+    ParkingHazardAuditEvent,
     ParkingJobAuditEvent,
     ParkingLayoutRevision,
     ParkingOccupancyJob,
     ParkingSpace,
+    PavementInspectionRecord,
+    RoadEvent,
     Site,
 )
 from services.api.app.schemas.parking import (
     AcknowledgeStabilityRequest,
     AuditEventResponse,
+    BayCapacityDecisionResponse,
     CameraCreateRequest,
     CameraInvalidateCalibrationRequest,
     CameraOperationalGateResponse,
     CameraResponse,
     CameraStabilityAuditResponse,
+    CapacitySnapshotResponse,
+    HazardAssociationCreateRequest,
+    HazardAssociationLifecycleRequest,
+    HazardAssociationResponse,
+    HazardAssociationReviewRequest,
+    HazardAuditEventResponse,
     LayoutCreateRequest,
     LayoutInvalidateRequest,
     LayoutRevisionResponse,
@@ -54,6 +65,8 @@ from services.api.app.schemas.parking import (
     ParkingOccupancyJobDeleteResponse,
     ParkingOccupancyJobResponse,
     ParkingSpaceSchema,
+    PavementInspectionRecordCreateRequest,
+    PavementInspectionRecordResponse,
     ApproachZoneSchema,
     PointSchema,
     SampleMeasurementSchema,
@@ -62,14 +75,31 @@ from services.api.app.schemas.parking import (
     StabilityAssessmentCancelResponse,
     StabilityAssessmentResponse,
 )
-from services.api.app.services.parking_occupancy_job_manager import parking_occupancy_job_manager
+from src.parking.capacity_policy import (
+    BayOccupancyEvidenceInput,
+    CapacityPolicyConfig,
+    HazardAssociationInput,
+    HazardLifecycleState,
+    HazardReviewState,
+    HazardTarget,
+    OperationalGate as PolicyOperationalGate,
+    PavementInspectionEvidence,
+    evaluate_safe_usable_capacity,
+)
+from services.api.app.services.parking_occupancy_job_manager import (
+    ParkingOccupancyJobManager,
+    parking_occupancy_job_manager,
+)
 from services.api.app.services.reference_image_service import (
     ReferenceImageProcessingError,
     ReferenceImageSecurityError,
     process_and_store_upload_file,
     validate_served_file_path,
 )
-from services.api.app.services.stability_job_manager import stability_job_manager
+from services.api.app.services.stability_job_manager import (
+    StabilityAssessmentJobManager,
+    stability_job_manager,
+)
 
 from src.parking.contracts import (
     CalibrationStatus,
@@ -95,9 +125,9 @@ def utc_now() -> datetime:
 
 def get_storage_root() -> Path:
     if hasattr(settings, "MEDIA_ROOT") and settings.MEDIA_ROOT:
-        root = Path(settings.MEDIA_ROOT).resolve()
+        root = Path(settings.MEDIA_ROOT)
     else:
-        root = (REPO_ROOT / "outputs").resolve()
+        root = REPO_ROOT / "outputs"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -318,14 +348,13 @@ async def upload_reference_image(
     operator_label: Optional[str] = Form(None),
     reason: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Upload and normalize a reference frame image for a camera."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
-
-    storage_root = get_storage_root()
 
     # Check if camera has existing layouts
     layout_res = await db.execute(
@@ -442,14 +471,16 @@ async def upload_reference_image(
 
 
 @router.get("/cameras/{camera_id}/reference-image")
-async def get_reference_image(camera_id: str, db: AsyncSession = Depends(get_db)):
+async def get_reference_image(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
+):
     """Serve the stored reference image for display on the ROI canvas."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalar_one_or_none()
     if not cam or not cam.reference_image_path:
         raise HTTPException(status_code=404, detail="Reference image not found for this camera")
-
-    storage_root = get_storage_root()
     try:
         image_file = validate_served_file_path(cam.reference_image_path, storage_root)
     except ReferenceImageSecurityError as e:
@@ -1371,6 +1402,7 @@ async def create_camera_stability_assessment(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Execute an asynchronous bounded camera stability assessment against the camera's reference image.
@@ -1386,8 +1418,6 @@ async def create_camera_stability_assessment(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Camera has no reference image uploaded. Stability assessment requires a verified reference frame.",
         )
-
-    storage_root = get_storage_root()
     ref_file_path = validate_served_file_path(cam.reference_image_path, storage_root)
     if not ref_file_path.exists():
         raise HTTPException(status_code=404, detail="Reference image file missing from storage.")
@@ -1842,11 +1872,15 @@ def _resolve_safe_parking_artifact(
     artifact_filename: str,
     expected_sha256: Optional[str] = None,
     job_status: Optional[str] = "COMPLETE",
+    storage_root: Optional[Path] = None,
 ) -> Optional[Path]:
     """
-    Safely resolve a parking job artifact path under the configured media root.
-    Strictly rejects lexical traversal, symlink components, and non-confined paths.
-    Verifies stored SHA-256 if expected_sha256 is provided.
+    Resolves and verifies an artifact path with fail-closed security guarantees:
+    - Enforces allowed filename whitelist
+    - Requires job status to be COMPLETE
+    - Validates lexical confinement under media_root/parking_jobs/{job_id}
+    - Rejects any symlinks in path components
+    - Verifies byte-level SHA-256 hash match against database provenance
     """
     import re
     if not job_id or not re.match(r"^[a-f0-9\-]{36}$", job_id):
@@ -1865,12 +1899,16 @@ def _resolve_safe_parking_artifact(
     if job_status != "COMPLETE":
         return None
 
-    media_root = get_storage_root().resolve()
-    if media_root.is_symlink():
+    if not expected_sha256 or len(expected_sha256) != 64:
         return None
 
+    raw_root = storage_root if storage_root is not None else get_storage_root()
+    if raw_root.is_symlink() or os.path.islink(str(raw_root)):
+        return None
+
+    media_root = raw_root.resolve()
     jobs_root = (media_root / "parking_jobs").resolve()
-    if jobs_root.is_symlink():
+    if jobs_root.is_symlink() or os.path.islink(str(jobs_root)):
         return None
 
     candidate = jobs_root / job_id / artifact_filename
@@ -1879,7 +1917,7 @@ def _resolve_safe_parking_artifact(
 
     curr = candidate
     while curr != jobs_root and curr != curr.parent:
-        if curr.is_symlink():
+        if curr.is_symlink() or os.path.islink(str(curr)):
             return None
         curr = curr.parent
 
@@ -1905,21 +1943,22 @@ def _resolve_safe_parking_artifact(
     return resolved
 
 
-def create_staged_upload_file() -> Tuple[Path, int]:
+def create_staged_upload_file(storage_root: Optional[Path] = None) -> Tuple[Path, int]:
     """
     Creates an exclusively locked staged upload file under configured upload_staging root.
     Rejects symlinks in raw path chain, enforces confinement, and uses a neutral staging suffix.
     """
-    media_root = get_storage_root().resolve()
-    if media_root.is_symlink():
-        raise ValueError(f"Symlink found in media root path component: {media_root}")
+    raw_root = storage_root if storage_root is not None else get_storage_root()
+    if raw_root.is_symlink() or os.path.islink(str(raw_root)):
+        raise ValueError(f"Symlink found in media root path component: {raw_root}")
 
-    upload_staging_dir = (media_root / "upload_staging").resolve()
-    if upload_staging_dir.is_symlink():
+    media_root = raw_root.resolve()
+    upload_staging_dir = media_root / "upload_staging"
+    if upload_staging_dir.is_symlink() or os.path.islink(str(upload_staging_dir)):
         raise ValueError(f"Symlink found in upload staging path component: {upload_staging_dir}")
 
     upload_staging_dir.mkdir(parents=True, exist_ok=True)
-    resolved_staging = upload_staging_dir
+    resolved_staging = upload_staging_dir.resolve()
 
     staging_file_name = f"upload_{uuid.uuid4().hex}.upload.tmp"
     staging_file_path = upload_staging_dir / staging_file_name
@@ -1941,10 +1980,10 @@ def create_staged_upload_file() -> Tuple[Path, int]:
     return staging_file_path, fd
 
 
-def _build_occupancy_job_response(job: ParkingOccupancyJob) -> ParkingOccupancyJobResponse:
+def _build_occupancy_job_response(job: ParkingOccupancyJob, storage_root: Optional[Path] = None) -> ParkingOccupancyJobResponse:
     timeline_sha = (job.manifest_json or {}).get("timeline_sha256") or ((job.manifest_json or {}).get("software_versions") or {}).get("timeline_sha256")
-    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
-    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status) if timeline_sha else None
+    safe_video = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status, storage_root=storage_root)
+    safe_timeline = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status, storage_root=storage_root) if timeline_sha else None
     has_video = safe_video is not None
     has_timeline = safe_timeline is not None
     has_manifest = bool(job.manifest_json is not None and job.status == "COMPLETE")
@@ -1995,6 +2034,7 @@ async def submit_parking_occupancy_job(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     manager: ParkingOccupancyJobManager = Depends(get_parking_job_manager),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Submit a video file for gate-controlled parking occupancy evaluation and video annotation.
@@ -2013,7 +2053,7 @@ async def submit_parking_occupancy_job(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
 
     try:
-        temp_video_path, fd = create_staged_upload_file()
+        temp_video_path, fd = create_staged_upload_file(storage_root=storage_root)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create staged upload file: {e}")
 
@@ -2067,26 +2107,28 @@ async def submit_parking_occupancy_job(
         video_path=temp_video_path,
     )
 
-    return _build_occupancy_job_response(job)
+    return _build_occupancy_job_response(job, storage_root=storage_root)
 
 
 @router.get("/parking/jobs/{job_id}", response_model=ParkingOccupancyJobResponse)
 async def get_parking_occupancy_job_detail(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Retrieve status, metrics, and manifest summary of a parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Parking occupancy job not found")
-    return _build_occupancy_job_response(job)
+    return _build_occupancy_job_response(job, storage_root=storage_root)
 
 
 @router.get("/cameras/{camera_id}/occupancy/jobs", response_model=List[ParkingOccupancyJobResponse])
 async def list_camera_occupancy_jobs(
     camera_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """List historical parking occupancy jobs for a camera."""
     cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
@@ -2099,7 +2141,7 @@ async def list_camera_occupancy_jobs(
         .order_by(desc(ParkingOccupancyJob.created_at))
     )
     jobs = res.scalars().all()
-    return [_build_occupancy_job_response(j) for j in jobs]
+    return [_build_occupancy_job_response(j, storage_root=storage_root) for j in jobs]
 
 
 @router.post("/parking/jobs/{job_id}/cancel", response_model=ParkingOccupancyJobCancelResponse)
@@ -2126,6 +2168,7 @@ async def cancel_parking_occupancy_job(
 async def get_parking_job_annotated_video(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Stream the generated annotated MP4 video with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2143,7 +2186,7 @@ async def get_parking_job_annotated_video(
     if job.manifest_json and job.manifest_json.get("output_video_sha256") != job.output_video_sha256:
         raise HTTPException(status_code=404, detail="Manifest provenance mismatch for annotated video.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "annotated.mp4", job.output_video_sha256, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Annotated video file not available or failed integrity verification.")
 
@@ -2158,6 +2201,7 @@ async def get_parking_job_annotated_video(
 async def get_parking_job_manifest(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Retrieve the full processing manifest JSON for a COMPLETE parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2171,6 +2215,14 @@ async def get_parking_job_manifest(
     if not job.manifest_json:
         raise HTTPException(status_code=404, detail="Processing manifest not available for this job.")
 
+    manifest_sha = (job.manifest_json or {}).get("manifest_sha256")
+    safe_path = _resolve_safe_parking_artifact(job.id, "processing_manifest.json", manifest_sha, job.status, storage_root=storage_root) if manifest_sha else None
+    if safe_path and safe_path.is_file():
+        return FileResponse(
+            path=safe_path,
+            media_type="application/json",
+            filename=f"processing_manifest_{job_id[:8]}.json",
+        )
     return job.manifest_json
 
 
@@ -2178,6 +2230,7 @@ async def get_parking_job_manifest(
 async def get_parking_job_timeline(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Download the state-transition timeline JSONL ledger with strict authorization."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2193,7 +2246,7 @@ async def get_parking_job_timeline(
     if not timeline_sha or len(timeline_sha) != 64:
         raise HTTPException(status_code=404, detail="Timeline SHA not found in manifest or is invalid.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "occupancy_timeline.jsonl", timeline_sha, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Timeline ledger file not available or failed integrity verification.")
 
@@ -2208,6 +2261,7 @@ async def get_parking_job_timeline(
 async def get_parking_job_summary(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """Download the final occupancy summary JSON for a COMPLETE parking occupancy job."""
     res = await db.execute(select(ParkingOccupancyJob).where(ParkingOccupancyJob.id == job_id))
@@ -2223,7 +2277,7 @@ async def get_parking_job_summary(
     if not summary_sha or len(summary_sha) != 64:
         raise HTTPException(status_code=404, detail="Summary SHA not found in manifest or is invalid.")
 
-    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status)
+    safe_path = _resolve_safe_parking_artifact(job.id, "parking_summary.json", summary_sha, job.status, storage_root=storage_root)
     if not safe_path:
         raise HTTPException(status_code=404, detail="Summary JSON file not available or failed integrity verification.")
 
@@ -2239,6 +2293,7 @@ async def delete_parking_occupancy_job(
     job_id: str,
     req: ParkingOccupancyJobDeleteRequest,
     db: AsyncSession = Depends(get_db),
+    storage_root: Path = Depends(get_storage_root),
 ):
     """
     Safely delete a parking occupancy job and purge its local artifacts with fail-closed retention controls.
@@ -2338,7 +2393,7 @@ async def delete_parking_occupancy_job(
     }
 
     # 3. Path confinement & symlink validation before any filesystem operations
-    media_root = get_storage_root().resolve()
+    media_root = storage_root.resolve()
     if media_root.is_symlink():
         await db.rollback()
         raise HTTPException(status_code=500, detail="Storage root directory cannot be a symlink.")
@@ -2421,4 +2476,527 @@ async def delete_parking_occupancy_job(
         deletion_reason=reason,
         purged_at=completed_time,
         message=f"Job {job_id} artifacts successfully purged and job record marked DELETED.",
+    )
+
+
+# ============================================================================
+# Phase 3A: Safe Usable Capacity & Hazard Association Endpoints
+# ============================================================================
+
+@router.post(
+    "/cameras/{camera_id}/hazards/associations",
+    response_model=HazardAssociationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_hazard_association(
+    camera_id: str,
+    payload: HazardAssociationCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a manual or linked hazard association for a parking bay or approach zone."""
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found.")
+
+    # Validate that parking_space_id exists and belongs to this camera's layout
+    space_res = await db.execute(
+        select(ParkingSpace)
+        .join(ParkingLayoutRevision, ParkingSpace.layout_revision_id == ParkingLayoutRevision.id)
+        .where(ParkingSpace.id == payload.parking_space_id)
+        .where(ParkingLayoutRevision.camera_id == camera_id)
+    )
+    space = space_res.scalar_one_or_none()
+    if not space:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parking space '{payload.parking_space_id}' does not exist on camera '{camera_id}'.",
+        )
+
+    # Optional road event verification
+    if payload.road_event_id:
+        re_res = await db.execute(select(RoadEvent).where(RoadEvent.id == payload.road_event_id))
+        if not re_res.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Referenced road event '{payload.road_event_id}' not found.",
+            )
+
+    assoc = ParkingHazardAssociation(
+        camera_id=camera_id,
+        parking_space_id=payload.parking_space_id,
+        target_type=payload.target_type,
+        road_event_id=payload.road_event_id,
+        hazard_label=payload.hazard_label,
+        review_state="UNREVIEWED",
+        lifecycle_state="ACTIVE",
+        severity_label=payload.severity_label,
+        notes=payload.notes,
+        created_by=payload.created_by,
+        version=1,
+    )
+    db.add(assoc)
+    await db.flush()
+
+    # Append-only audit trail
+    audit = ParkingHazardAuditEvent(
+        association_id=assoc.id,
+        event_type="CREATED",
+        operator_identity=payload.created_by,
+        prior_review_state=None,
+        new_review_state="UNREVIEWED",
+        prior_lifecycle_state=None,
+        new_lifecycle_state="ACTIVE",
+        explicit_reason="Initial hazard association created",
+        notes=payload.notes,
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(assoc)
+    return assoc
+
+
+@router.get(
+    "/cameras/{camera_id}/hazards/associations",
+    response_model=List[HazardAssociationResponse],
+)
+async def list_hazard_associations(
+    camera_id: str,
+    review_state: Optional[str] = None,
+    lifecycle_state: Optional[str] = None,
+    target_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all hazard associations for a given camera with optional status filters."""
+    query = select(ParkingHazardAssociation).where(ParkingHazardAssociation.camera_id == camera_id)
+    if review_state:
+        query = query.where(ParkingHazardAssociation.review_state == review_state.upper())
+    if lifecycle_state:
+        query = query.where(ParkingHazardAssociation.lifecycle_state == lifecycle_state.upper())
+    if target_type:
+        query = query.where(ParkingHazardAssociation.target_type == target_type.upper())
+    query = query.order_by(desc(ParkingHazardAssociation.created_at))
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get(
+    "/hazards/associations/{association_id}",
+    response_model=HazardAssociationResponse,
+)
+async def get_hazard_association(
+    association_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve details of a single hazard association."""
+    res = await db.execute(select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id))
+    assoc = res.scalar_one_or_none()
+    if not assoc:
+        raise HTTPException(status_code=404, detail="Hazard association not found.")
+    return assoc
+
+
+@router.post(
+    "/hazards/associations/{association_id}/review",
+    response_model=HazardAssociationResponse,
+)
+async def review_hazard_association(
+    association_id: str,
+    payload: HazardAssociationReviewRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Guarded human review action on a candidate hazard association.
+    Enforces optimistic concurrency control and records immutable audit log.
+    """
+    res = await db.execute(select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id))
+    assoc = res.scalar_one_or_none()
+    if not assoc:
+        raise HTTPException(status_code=404, detail="Hazard association not found.")
+
+    if payload.expected_version is not None and assoc.version != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
+        )
+
+    prior_review_state = assoc.review_state
+    assoc.review_state = payload.review_state
+    assoc.reviewed_by = payload.reviewer_identity
+    assoc.reviewed_at = utc_now()
+    if payload.notes:
+        assoc.notes = payload.notes
+    assoc.version += 1
+
+    audit = ParkingHazardAuditEvent(
+        association_id=assoc.id,
+        event_type="REVIEWED",
+        operator_identity=payload.reviewer_identity,
+        prior_review_state=prior_review_state,
+        new_review_state=payload.review_state,
+        prior_lifecycle_state=assoc.lifecycle_state,
+        new_lifecycle_state=assoc.lifecycle_state,
+        explicit_reason=payload.explicit_reason,
+        notes=payload.notes,
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(assoc)
+    return assoc
+
+
+@router.post(
+    "/hazards/associations/{association_id}/lifecycle",
+    response_model=HazardAssociationResponse,
+)
+async def transition_hazard_lifecycle(
+    association_id: str,
+    payload: HazardAssociationLifecycleRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Guarded lifecycle transition (ACTIVE, MITIGATED, RESOLVED, EXPIRED, SUPERSEDED).
+    Enforces optimistic concurrency control and records immutable audit log.
+    """
+    res = await db.execute(select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id))
+    assoc = res.scalar_one_or_none()
+    if not assoc:
+        raise HTTPException(status_code=404, detail="Hazard association not found.")
+
+    if payload.expected_version is not None and assoc.version != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
+        )
+
+    prior_lifecycle_state = assoc.lifecycle_state
+    assoc.lifecycle_state = payload.lifecycle_state
+    if payload.notes:
+        assoc.notes = payload.notes
+    assoc.version += 1
+
+    audit = ParkingHazardAuditEvent(
+        association_id=assoc.id,
+        event_type="LIFECYCLE_TRANSITION",
+        operator_identity=payload.operator_identity,
+        prior_review_state=assoc.review_state,
+        new_review_state=assoc.review_state,
+        prior_lifecycle_state=prior_lifecycle_state,
+        new_lifecycle_state=payload.lifecycle_state,
+        explicit_reason=payload.explicit_reason,
+        notes=payload.notes,
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(assoc)
+    return assoc
+
+
+@router.get(
+    "/cameras/{camera_id}/hazards/audit-events",
+    response_model=List[HazardAuditEventResponse],
+)
+async def list_hazard_audit_events(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List append-only audit events for all hazard associations on a camera."""
+    query = (
+        select(ParkingHazardAuditEvent)
+        .join(ParkingHazardAssociation, ParkingHazardAuditEvent.association_id == ParkingHazardAssociation.id)
+        .where(ParkingHazardAssociation.camera_id == camera_id)
+        .order_by(desc(ParkingHazardAuditEvent.created_at))
+    )
+    res = await db.execute(query)
+    return res.scalars().all()
+
+
+@router.post(
+    "/cameras/{camera_id}/inspection/record",
+    response_model=PavementInspectionRecordResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_pavement_inspection(
+    camera_id: str,
+    payload: PavementInspectionRecordCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record a mobile pavement surface inspection event establishing freshness."""
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    if not cam_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found.")
+
+    rec = PavementInspectionRecord(
+        camera_id=camera_id,
+        session_id=payload.session_id,
+        inspected_at=payload.inspected_at or utc_now(),
+        inspector_label=payload.inspector_label,
+        notes=payload.notes,
+    )
+    db.add(rec)
+    await db.commit()
+    await db.refresh(rec)
+    return rec
+
+
+@router.get(
+    "/cameras/{camera_id}/inspection/records",
+    response_model=List[PavementInspectionRecordResponse],
+)
+async def list_pavement_inspections(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List pavement inspection records for a given camera, newest first."""
+    res = await db.execute(
+        select(PavementInspectionRecord)
+        .where(PavementInspectionRecord.camera_id == camera_id)
+        .order_by(desc(PavementInspectionRecord.inspected_at))
+    )
+    return res.scalars().all()
+
+
+@router.get(
+    "/cameras/{camera_id}/capacity/snapshot",
+    response_model=CapacitySnapshotResponse,
+)
+async def get_camera_capacity_snapshot(
+    camera_id: str,
+    db: AsyncSession = Depends(get_db),
+    stab_manager: StabilityAssessmentJobManager = Depends(get_stability_job_manager),
+):
+    """
+    Compute and return current Safe Usable Capacity snapshot for a camera.
+    Fuses fixed occupancy, camera stability gate, human-reviewed hazards, and pavement inspection freshness.
+    """
+    cam_res = await db.execute(select(Camera).where(Camera.id == camera_id))
+    cam = cam_res.scalar_one_or_none()
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found.")
+
+    # 1. Active verified layout
+    layout_res = await db.execute(
+        select(ParkingLayoutRevision)
+        .options(selectinload(ParkingLayoutRevision.parking_spaces))
+        .where(ParkingLayoutRevision.camera_id == camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
+    )
+    verified_layout = layout_res.scalar_one_or_none()
+    current_layout_sha = verified_layout.canonical_sha256 if verified_layout else None
+
+    # Spaces to evaluate: verified layout spaces, or fallback to latest layout spaces
+    spaces: List[ParkingSpace] = []
+    if verified_layout:
+        spaces = verified_layout.parking_spaces
+    else:
+        latest_layout_res = await db.execute(
+            select(ParkingLayoutRevision)
+            .options(selectinload(ParkingLayoutRevision.parking_spaces))
+            .where(ParkingLayoutRevision.camera_id == camera_id)
+            .order_by(desc(ParkingLayoutRevision.revision_number))
+        )
+        latest_layout = latest_layout_res.scalars().first()
+        if latest_layout:
+            spaces = latest_layout.parking_spaces
+
+    # 2. Evaluate operational stability gate
+    assess_res = await db.execute(
+        select(CameraStabilityAssessment)
+        .where(CameraStabilityAssessment.camera_id == camera_id)
+        .where(CameraStabilityAssessment.status == "COMPLETE")
+        .order_by(desc(CameraStabilityAssessment.created_at))
+    )
+    latest_assessment = assess_res.scalars().first()
+
+    now = utc_now()
+    if not latest_assessment:
+        gate_enum, gate_reasons = evaluate_operational_gate(
+            decision=None,
+            assessment_reference_sha=None,
+            current_reference_sha=cam.reference_image_sha256,
+            assessment_layout_sha=None,
+            current_layout_sha=current_layout_sha,
+        )
+    else:
+        decision_enum = None
+        try:
+            decision_enum = StabilityDecision(latest_assessment.aggregate_decision)
+        except Exception:
+            pass
+        max_age = (latest_assessment.thresholds_snapshot or {}).get(
+            "max_assessment_age_seconds", stab_manager.config.thresholds.max_assessment_age_seconds
+        )
+        assess_at = latest_assessment.created_at
+        if assess_at and assess_at.tzinfo is None:
+            assess_at = assess_at.replace(tzinfo=timezone.utc)
+        gate_enum, gate_reasons = evaluate_operational_gate(
+            decision=decision_enum,
+            assessment_reference_sha=latest_assessment.reference_image_sha256,
+            current_reference_sha=cam.reference_image_sha256,
+            assessment_layout_sha=latest_assessment.layout_canonical_sha256,
+            current_layout_sha=current_layout_sha,
+            assessment_timestamp=assess_at,
+            current_timestamp=now,
+            max_age_seconds=max_age,
+        )
+
+    # 3. Latest completed occupancy job
+    job_res = await db.execute(
+        select(ParkingOccupancyJob)
+        .where(ParkingOccupancyJob.camera_id == camera_id)
+        .where(ParkingOccupancyJob.status == "COMPLETE")
+        .order_by(desc(ParkingOccupancyJob.completed_at))
+    )
+    latest_job = job_res.scalars().first()
+
+    job_evidence_age: Optional[float] = None
+    bay_summary: Dict[str, Any] = {}
+    if latest_job and latest_job.completed_at:
+        job_comp = latest_job.completed_at
+        if job_comp.tzinfo is None:
+            job_comp = job_comp.replace(tzinfo=timezone.utc)
+        job_evidence_age = (now - job_comp).total_seconds()
+        bay_summary = latest_job.bay_summary_json or {}
+
+    # 4. Build BayOccupancyEvidenceInput per space
+    bay_inputs: List[BayOccupancyEvidenceInput] = []
+    for sp in spaces:
+        sp_data = bay_summary.get(sp.operator_label)
+        if sp_data and isinstance(sp_data, dict):
+            occ_state = sp_data.get("final_state", "UNKNOWN")
+            conf = float(sp_data.get("final_confidence", 1.0))
+        else:
+            occ_state = "UNKNOWN"
+            conf = 0.0
+
+        bay_inputs.append(
+            BayOccupancyEvidenceInput(
+                bay_id=sp.id,
+                operator_label=sp.operator_label,
+                space_type=sp.space_type,
+                occupancy_state=occ_state,
+                evidence_age_seconds=job_evidence_age,
+                confidence=conf,
+                provenance_sha256=latest_job.input_video_sha256 if latest_job else None,
+                job_id=latest_job.id if latest_job else None,
+            )
+        )
+
+    # 5. Pavement inspection evidence
+    insp_res = await db.execute(
+        select(PavementInspectionRecord)
+        .where(PavementInspectionRecord.camera_id == camera_id)
+        .order_by(desc(PavementInspectionRecord.inspected_at))
+    )
+    latest_insp = insp_res.scalars().first()
+    insp_evidence: Optional[PavementInspectionEvidence] = None
+    if latest_insp:
+        insp_at = latest_insp.inspected_at
+        if insp_at and insp_at.tzinfo is None:
+            insp_at = insp_at.replace(tzinfo=timezone.utc)
+        insp_age = (now - insp_at).total_seconds()
+        insp_evidence = PavementInspectionEvidence(
+            session_id=latest_insp.session_id,
+            inspection_timestamp=insp_at,
+            freshness_age_seconds=insp_age,
+            is_fresh=None,
+            inspection_notes=latest_insp.notes,
+        )
+
+    # 6. Active/reviewed hazard associations
+    haz_res = await db.execute(
+        select(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.camera_id == camera_id)
+    )
+    db_hazards = haz_res.scalars().all()
+    hazard_inputs: List[HazardAssociationInput] = []
+    for h in db_hazards:
+        try:
+            target_enum = HazardTarget(h.target_type)
+        except Exception:
+            target_enum = HazardTarget.BAY
+        try:
+            rev_enum = HazardReviewState(h.review_state)
+        except Exception:
+            rev_enum = HazardReviewState.UNREVIEWED
+        try:
+            life_enum = HazardLifecycleState(h.lifecycle_state)
+        except Exception:
+            life_enum = HazardLifecycleState.ACTIVE
+
+        hazard_inputs.append(
+            HazardAssociationInput(
+                association_id=h.id,
+                hazard_id=h.road_event_id or h.id,
+                target_type=target_enum,
+                target_id=h.parking_space_id,
+                review_state=rev_enum,
+                lifecycle_state=life_enum,
+                severity_label=h.severity_label,
+                notes=h.notes,
+                created_at=h.created_at,
+                reviewed_at=h.reviewed_at,
+                reviewed_by=h.reviewed_by,
+            )
+        )
+
+    # 7. Evaluate Safe Usable Capacity snapshot
+    config = CapacityPolicyConfig()
+    snapshot = evaluate_safe_usable_capacity(
+        camera_id=camera_id,
+        site_id=cam.site_id,
+        bays=bay_inputs,
+        gate=PolicyOperationalGate(gate_enum.value),
+        gate_reasons=gate_reasons,
+        layout_verified=bool(verified_layout),
+        layout_revision_id=verified_layout.id if verified_layout else None,
+        layout_canonical_sha256=current_layout_sha,
+        hazards=hazard_inputs,
+        inspection=insp_evidence,
+        config=config,
+        reference_time=now,
+    )
+
+    # Convert decisions for response schema
+    current_insp_age = round(insp_age, 1) if (latest_insp and insp_age is not None) else None
+    decision_responses: Dict[str, BayCapacityDecisionResponse] = {}
+    for bay_id, d in snapshot.decisions.items():
+        decision_responses[bay_id] = BayCapacityDecisionResponse(
+            bay_id=d.bay_id,
+            operator_label=d.operator_label,
+            space_type=d.space_type,
+            capacity_state=d.capacity_state.value,
+            is_usable=d.is_usable,
+            reason_codes=d.reason_codes,
+            raw_occupancy_state=d.raw_occupancy_state,
+            has_active_bay_hazard=d.has_active_bay_hazard,
+            has_active_approach_hazard=d.has_active_approach_hazard,
+            has_unverified_hazard=d.has_unverified_hazard,
+            pavement_inspection_fresh=d.pavement_inspection_fresh,
+            inspection_age_seconds=current_insp_age,
+            evidence_ids=d.evidence_ids,
+        )
+
+    return CapacitySnapshotResponse(
+        camera_id=snapshot.camera_id,
+        site_id=snapshot.site_id,
+        layout_revision_id=snapshot.layout_revision_id,
+        layout_canonical_sha256=snapshot.layout_canonical_sha256,
+        policy_config_sha256=snapshot.policy_config_sha256,
+        operational_gate=snapshot.operational_gate.value,
+        gate_reasons=snapshot.gate_reasons,
+        evaluated_at=snapshot.evaluated_at,
+        total_bays=snapshot.total_bays,
+        physical_vacant_count=snapshot.physical_vacant_count,
+        usable_available_count=snapshot.usable_available_count,
+        occupied_count=snapshot.occupied_count,
+        hazard_blocked_count=snapshot.hazard_blocked_count,
+        approach_blocked_count=snapshot.approach_blocked_count,
+        vacant_unassessed_count=snapshot.vacant_unassessed_count,
+        unknown_count=snapshot.unknown_count,
+        occluded_count=snapshot.occluded_count,
+        inference_blocked_count=snapshot.inference_blocked_count,
+        snapshot_sha256=snapshot.snapshot_sha256,
+        decisions=decision_responses,
     )

@@ -442,3 +442,139 @@ export async function deleteOccupancyJob(
   }
   return res.json();
 }
+
+// ============================================================================
+// Safe Usable Capacity & Hazard Association API (Phase 3A)
+// ============================================================================
+
+import {
+  CapacitySnapshot,
+  HazardAssociation,
+  HazardAuditEvent,
+  PavementInspectionRecord,
+} from './types';
+
+export async function listHazardAssociations(
+  cameraId: string,
+  filters?: { review_state?: string; lifecycle_state?: string; target_type?: string }
+): Promise<HazardAssociation[]> {
+  const params = new URLSearchParams();
+  if (filters?.review_state) params.set('review_state', filters.review_state);
+  if (filters?.lifecycle_state) params.set('lifecycle_state', filters.lifecycle_state);
+  if (filters?.target_type) params.set('target_type', filters.target_type);
+
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/hazards/associations${query}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list hazard associations');
+  }
+  return res.json();
+}
+
+export async function createHazardAssociation(
+  cameraId: string,
+  data: {
+    parking_space_id: string;
+    target_type: 'BAY' | 'APPROACH_ZONE';
+    hazard_label: string;
+    road_event_id?: string;
+    severity_label?: string;
+    notes?: string;
+    created_by?: string;
+  }
+): Promise<HazardAssociation> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/hazards/associations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to create hazard association');
+  }
+  return res.json();
+}
+
+export async function reviewHazardAssociation(
+  associationId: string,
+  data: {
+    review_state: 'CONFIRMED' | 'REJECTED' | 'NEEDS_REVIEW';
+    reviewer_identity: string;
+    explicit_reason: string;
+    notes?: string;
+    expected_version?: number;
+  }
+): Promise<HazardAssociation> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/hazards/associations/${associationId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to review hazard association');
+  }
+  return res.json();
+}
+
+export async function transitionHazardLifecycle(
+  associationId: string,
+  data: {
+    lifecycle_state: 'ACTIVE' | 'MITIGATED' | 'RESOLVED' | 'EXPIRED' | 'SUPERSEDED';
+    operator_identity: string;
+    explicit_reason: string;
+    notes?: string;
+    expected_version?: number;
+  }
+): Promise<HazardAssociation> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/hazards/associations/${associationId}/lifecycle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to transition hazard lifecycle');
+  }
+  return res.json();
+}
+
+export async function recordPavementInspection(
+  cameraId: string,
+  data: {
+    session_id?: string;
+    inspected_at?: string;
+    inspector_label?: string;
+    notes?: string;
+  }
+): Promise<PavementInspectionRecord> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/inspection/record`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to record pavement inspection');
+  }
+  return res.json();
+}
+
+export async function getCameraCapacitySnapshot(cameraId: string): Promise<CapacitySnapshot> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/capacity/snapshot`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to get camera capacity snapshot');
+  }
+  return res.json();
+}
+
+export async function listHazardAuditEvents(cameraId: string): Promise<HazardAuditEvent[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/cameras/${cameraId}/hazards/audit-events`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Failed to list hazard audit events');
+  }
+  return res.json();
+}

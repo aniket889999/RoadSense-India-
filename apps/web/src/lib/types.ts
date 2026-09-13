@@ -461,3 +461,103 @@ export interface ParkingValidationEvidenceReport {
   created_at: string;
   completed_at: string;
 }
+
+// ============================================================================
+// Safe Usable Capacity & Hazard Association (Phase 3A)
+// ============================================================================
+
+export type CapacityState =
+  | 'OCCUPIED'
+  | 'USABLE_AVAILABLE'
+  | 'HAZARD_BLOCKED'
+  | 'APPROACH_BLOCKED'
+  | 'VACANT_UNASSESSED'
+  | 'OCCLUDED'
+  | 'UNKNOWN'
+  | 'INFERENCE_BLOCKED';
+
+export type HazardTarget = 'BAY' | 'APPROACH_ZONE';
+export type HazardReviewState = 'UNREVIEWED' | 'CONFIRMED' | 'REJECTED' | 'NEEDS_REVIEW';
+export type HazardLifecycleState = 'ACTIVE' | 'MITIGATED' | 'RESOLVED' | 'EXPIRED' | 'SUPERSEDED';
+
+export interface HazardAssociation {
+  id: string;
+  camera_id: string;
+  parking_space_id: string;
+  target_type: HazardTarget;
+  road_event_id?: string | null;
+  hazard_label: string;
+  review_state: HazardReviewState;
+  lifecycle_state: HazardLifecycleState;
+  severity_label?: string | null;
+  notes?: string | null;
+  created_by: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HazardAuditEvent {
+  id: string;
+  association_id: string;
+  event_type: string;
+  operator_identity: string;
+  prior_review_state?: string | null;
+  new_review_state?: string | null;
+  prior_lifecycle_state?: string | null;
+  new_lifecycle_state?: string | null;
+  explicit_reason: string;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface PavementInspectionRecord {
+  id: string;
+  camera_id: string;
+  session_id?: string | null;
+  inspected_at: string;
+  inspector_label: string;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface BayCapacityDecisionItem {
+  bay_id: string;
+  operator_label: string;
+  space_type: SpaceType;
+  capacity_state: CapacityState;
+  is_usable: boolean;
+  reason_codes: string[];
+  raw_occupancy_state: string;
+  has_active_bay_hazard: boolean;
+  has_active_approach_hazard: boolean;
+  has_unverified_hazard: boolean;
+  pavement_inspection_fresh: boolean;
+  inspection_age_seconds?: number | null;
+  evidence_ids: Record<string, any>;
+}
+
+export interface CapacitySnapshot {
+  camera_id: string;
+  site_id: string;
+  layout_revision_id?: string | null;
+  layout_canonical_sha256?: string | null;
+  policy_config_sha256: string;
+  operational_gate: string;
+  gate_reasons: string[];
+  evaluated_at: string;
+  total_bays: number;
+  physical_vacant_count: number;
+  usable_available_count: number;
+  occupied_count: number;
+  hazard_blocked_count: number;
+  approach_blocked_count: number;
+  vacant_unassessed_count: number;
+  unknown_count: number;
+  occluded_count: number;
+  inference_blocked_count: number;
+  snapshot_sha256: string;
+  decisions: Record<string, BayCapacityDecisionItem>;
+}

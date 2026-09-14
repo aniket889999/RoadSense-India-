@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -117,6 +117,19 @@ from src.parking.stability_engine import evaluate_video_camera_stability
 
 
 _VALID_OCCUPANCY_STATES = frozenset({"VACANT", "OCCUPIED", "OCCLUDED", "UNKNOWN"})
+_HAZARD_REVIEW_TRANSITIONS = {
+    "UNREVIEWED": frozenset({"CONFIRMED", "REJECTED", "NEEDS_REVIEW"}),
+    "NEEDS_REVIEW": frozenset({"CONFIRMED", "REJECTED"}),
+    "CONFIRMED": frozenset({"NEEDS_REVIEW"}),
+    "REJECTED": frozenset({"NEEDS_REVIEW"}),
+}
+_HAZARD_LIFECYCLE_TRANSITIONS = {
+    "ACTIVE": frozenset({"MITIGATED", "RESOLVED", "EXPIRED", "SUPERSEDED"}),
+    "MITIGATED": frozenset({"ACTIVE", "RESOLVED", "EXPIRED", "SUPERSEDED"}),
+    "RESOLVED": frozenset({"ACTIVE"}),
+    "EXPIRED": frozenset({"ACTIVE", "SUPERSEDED"}),
+    "SUPERSEDED": frozenset(),
+}
 
 
 def _read_bay_occupancy_summary(
@@ -2648,19 +2661,51 @@ async def review_hazard_association(
     if not assoc:
         raise HTTPException(status_code=404, detail="Hazard association not found.")
 
-    if payload.expected_version is not None and assoc.version != payload.expected_version:
+    if assoc.version != payload.expected_version:
         raise HTTPException(
             status_code=409,
             detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
         )
 
     prior_review_state = assoc.review_state
-    assoc.review_state = payload.review_state
-    assoc.reviewed_by = payload.reviewer_identity
-    assoc.reviewed_at = utc_now()
-    if payload.notes:
-        assoc.notes = payload.notes
-    assoc.version += 1
+    if payload.review_state not in _HAZARD_REVIEW_TRANSITIONS.get(prior_review_state, frozenset()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Review transition {prior_review_state} -> {payload.review_state} is not permitted.",
+        )
+
+    reviewed_at = utc_now()
+    update_values = {
+        "review_state": payload.review_state,
+        "reviewed_by": payload.reviewer_identity,
+        "reviewed_at": reviewed_at,
+        "version": payload.expected_version + 1,
+        "updated_at": reviewed_at,
+    }
+    if payload.notes is not None:
+        update_values["notes"] = payload.notes
+
+    cas_result = await db.execute(
+        update(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .where(ParkingHazardAssociation.version == payload.expected_version)
+        .where(ParkingHazardAssociation.review_state == prior_review_state)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount != 1:
+        await db.rollback()
+        current = (
+            await db.execute(
+                select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Hazard association not found.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {current.version}.",
+        )
 
     audit = ParkingHazardAuditEvent(
         association_id=assoc.id,
@@ -2675,8 +2720,12 @@ async def review_hazard_association(
     )
     db.add(audit)
     await db.commit()
-    await db.refresh(assoc)
-    return assoc
+    refreshed = await db.execute(
+        select(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.post(
@@ -2697,17 +2746,54 @@ async def transition_hazard_lifecycle(
     if not assoc:
         raise HTTPException(status_code=404, detail="Hazard association not found.")
 
-    if payload.expected_version is not None and assoc.version != payload.expected_version:
+    if assoc.version != payload.expected_version:
         raise HTTPException(
             status_code=409,
             detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
         )
 
     prior_lifecycle_state = assoc.lifecycle_state
-    assoc.lifecycle_state = payload.lifecycle_state
-    if payload.notes:
-        assoc.notes = payload.notes
-    assoc.version += 1
+    if payload.lifecycle_state not in _HAZARD_LIFECYCLE_TRANSITIONS.get(
+        prior_lifecycle_state, frozenset()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Lifecycle transition {prior_lifecycle_state} -> "
+                f"{payload.lifecycle_state} is not permitted."
+            ),
+        )
+
+    transitioned_at = utc_now()
+    update_values = {
+        "lifecycle_state": payload.lifecycle_state,
+        "version": payload.expected_version + 1,
+        "updated_at": transitioned_at,
+    }
+    if payload.notes is not None:
+        update_values["notes"] = payload.notes
+
+    cas_result = await db.execute(
+        update(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .where(ParkingHazardAssociation.version == payload.expected_version)
+        .where(ParkingHazardAssociation.lifecycle_state == prior_lifecycle_state)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount != 1:
+        await db.rollback()
+        current = (
+            await db.execute(
+                select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Hazard association not found.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {current.version}.",
+        )
 
     audit = ParkingHazardAuditEvent(
         association_id=assoc.id,
@@ -2722,8 +2808,12 @@ async def transition_hazard_lifecycle(
     )
     db.add(audit)
     await db.commit()
-    await db.refresh(assoc)
-    return assoc
+    refreshed = await db.execute(
+        select(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.get(

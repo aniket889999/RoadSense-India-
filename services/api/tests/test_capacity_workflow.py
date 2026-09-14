@@ -185,6 +185,30 @@ async def test_hazard_association_lifecycle_and_audit(client):
     assert "REVIEWED" in event_types
     assert "LIFECYCLE_TRANSITION" in event_types
 
+    # Version is mandatory: writes without a compare-and-swap token are rejected.
+    missing_version = await client.post(
+        f"/api/v1/hazards/associations/{assoc_id}/review",
+        json={
+            "review_state": "NEEDS_REVIEW",
+            "reviewer_identity": "qa_supervisor",
+            "explicit_reason": "Re-open for a second field inspection",
+        },
+    )
+    assert missing_version.status_code == 422
+
+    # Lifecycle state machines reject no-op/unsupported transitions.
+    invalid_transition = await client.post(
+        f"/api/v1/hazards/associations/{assoc_id}/lifecycle",
+        json={
+            "lifecycle_state": "MITIGATED",
+            "operator_identity": "field_maintenance",
+            "explicit_reason": "Attempted duplicate transition",
+            "expected_version": 3,
+        },
+    )
+    assert invalid_transition.status_code == 409
+    assert "not permitted" in invalid_transition.json()["detail"]
+
 
 @pytest.mark.anyio
 async def test_pavement_inspection_and_capacity_snapshot(client):

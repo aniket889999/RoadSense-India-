@@ -482,7 +482,7 @@ class HazardAssociationReviewRequest(BaseModel):
     reviewer_identity: str = Field(..., min_length=1, max_length=128)
     explicit_reason: str = Field(..., min_length=3)
     notes: Optional[str] = None
-    expected_version: Optional[int] = None
+    expected_version: int = Field(..., ge=1)
 
     @field_validator("reviewer_identity")
     @classmethod
@@ -500,7 +500,7 @@ class HazardAssociationLifecycleRequest(BaseModel):
     operator_identity: str = Field(..., min_length=1, max_length=128)
     explicit_reason: str = Field(..., min_length=3)
     notes: Optional[str] = None
-    expected_version: Optional[int] = None
+    expected_version: int = Field(..., ge=1)
 
     @field_validator("operator_identity")
     @classmethod

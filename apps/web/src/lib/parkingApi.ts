@@ -503,7 +503,7 @@ export async function reviewHazardAssociation(
     reviewer_identity: string;
     explicit_reason: string;
     notes?: string;
-    expected_version?: number;
+    expected_version: number;
   }
 ): Promise<HazardAssociation> {
   const res = await fetch(`${API_BASE_URL}/api/v1/hazards/associations/${associationId}/review`, {
@@ -525,7 +525,7 @@ export async function transitionHazardLifecycle(
     operator_identity: string;
     explicit_reason: string;
     notes?: string;
-    expected_version?: number;
+    expected_version: number;
   }
 ): Promise<HazardAssociation> {
   const res = await fetch(`${API_BASE_URL}/api/v1/hazards/associations/${associationId}/lifecycle`, {

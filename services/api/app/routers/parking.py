@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import math
 import os
 import tempfile
 import uuid
@@ -113,6 +114,38 @@ from src.parking.contracts import (
 from src.parking.layout_serialization import compute_canonical_layout_sha256
 from src.parking.layout_validation import validate_parking_layout
 from src.parking.stability_engine import evaluate_video_camera_stability
+
+
+_VALID_OCCUPANCY_STATES = frozenset({"VACANT", "OCCUPIED", "OCCLUDED", "UNKNOWN"})
+
+
+def _read_bay_occupancy_summary(
+    bay_summary: object,
+    bay_id: str,
+) -> Tuple[str, float]:
+    """Translate persisted occupancy output into fail-closed capacity evidence."""
+    if not isinstance(bay_summary, dict):
+        return "UNKNOWN", 0.0
+
+    persisted = bay_summary.get(bay_id)
+    if not isinstance(persisted, dict):
+        return "UNKNOWN", 0.0
+
+    state_value = persisted.get("current_state")
+    if not isinstance(state_value, str):
+        return "UNKNOWN", 0.0
+    state = state_value.strip().upper()
+    if state not in _VALID_OCCUPANCY_STATES:
+        return "UNKNOWN", 0.0
+
+    confidence_value = persisted.get("confidence")
+    if isinstance(confidence_value, bool) or not isinstance(confidence_value, (int, float)):
+        return "UNKNOWN", 0.0
+    confidence = float(confidence_value)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return "UNKNOWN", 0.0
+
+    return state, confidence
 
 logger = logging.getLogger(__name__)
 
@@ -2862,13 +2895,7 @@ async def get_camera_capacity_snapshot(
     # 4. Build BayOccupancyEvidenceInput per space
     bay_inputs: List[BayOccupancyEvidenceInput] = []
     for sp in spaces:
-        sp_data = bay_summary.get(sp.operator_label)
-        if sp_data and isinstance(sp_data, dict):
-            occ_state = sp_data.get("final_state", "UNKNOWN")
-            conf = float(sp_data.get("final_confidence", 1.0))
-        else:
-            occ_state = "UNKNOWN"
-            conf = 0.0
+        occ_state, conf = _read_bay_occupancy_summary(bay_summary, sp.id)
 
         bay_inputs.append(
             BayOccupancyEvidenceInput(

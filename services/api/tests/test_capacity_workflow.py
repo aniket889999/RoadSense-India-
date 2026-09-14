@@ -1,6 +1,16 @@
 import io
+from datetime import datetime, timezone
+
 import pytest
 from PIL import Image
+from sqlalchemy import select
+
+from services.api.app.models.entities import (
+    Camera,
+    CameraStabilityAssessment,
+    ParkingLayoutRevision,
+    ParkingOccupancyJob,
+)
 
 
 def _create_synthetic_image_bytes(width: int = 640, height: int = 480) -> bytes:
@@ -222,6 +232,71 @@ async def test_pavement_inspection_and_capacity_snapshot(client):
         # Gate defaults to BLOCKED until stability assessment passes -> INFERENCE_BLOCKED
         assert decision["capacity_state"] == "INFERENCE_BLOCKED"
         assert "GATE_BLOCKED" in decision["reason_codes"]
+
+
+@pytest.mark.anyio
+async def test_capacity_snapshot_reads_completed_job_summary_by_bay_id(client, db_session):
+    """The persisted occupancy contract uses bay IDs and current_state/confidence."""
+    camera_id, spaces = await _setup_camera_with_verified_layout(client)
+
+    camera = (
+        await db_session.execute(select(Camera).where(Camera.id == camera_id))
+    ).scalar_one()
+    layout = (
+        await db_session.execute(
+            select(ParkingLayoutRevision)
+            .where(ParkingLayoutRevision.camera_id == camera_id)
+            .where(ParkingLayoutRevision.status == "VERIFIED")
+        )
+    ).scalar_one()
+    now = datetime.now(timezone.utc)
+
+    db_session.add(
+        CameraStabilityAssessment(
+            camera_id=camera_id,
+            layout_revision_id=layout.id,
+            layout_canonical_sha256=layout.canonical_sha256,
+            status="COMPLETE",
+            reference_image_sha256=camera.reference_image_sha256,
+            aggregate_decision="STABLE",
+            operational_gate="ALLOWED",
+            thresholds_snapshot={"max_assessment_age_seconds": 3600},
+            created_at=now,
+            completed_at=now,
+        )
+    )
+    db_session.add(
+        ParkingOccupancyJob(
+            camera_id=camera_id,
+            site_id=camera.site_id,
+            layout_revision_id=layout.id,
+            status="COMPLETE",
+            gate_decision="ALLOWED",
+            input_video_sha256="a" * 64,
+            completed_at=now,
+            bay_summary_json={
+                spaces[0]["id"]: {"current_state": "VACANT", "confidence": 0.94},
+                spaces[1]["id"]: {"current_state": "OCCUPIED", "confidence": 0.91},
+            },
+        )
+    )
+    await db_session.commit()
+
+    inspection = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={"inspector_label": "capacity_regression_inspector"},
+    )
+    assert inspection.status_code == 201, inspection.text
+
+    response = await client.get(f"/api/v1/cameras/{camera_id}/capacity/snapshot")
+    assert response.status_code == 200, response.text
+    snapshot = response.json()
+
+    assert snapshot["operational_gate"] == "ALLOWED"
+    assert snapshot["decisions"][spaces[0]["id"]]["capacity_state"] == "USABLE_AVAILABLE"
+    assert snapshot["decisions"][spaces[1]["id"]]["capacity_state"] == "OCCUPIED"
+    assert snapshot["usable_available_count"] == 1
+    assert snapshot["occupied_count"] == 1
 
 
 @pytest.mark.anyio

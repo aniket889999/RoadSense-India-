@@ -266,7 +266,7 @@ export function ParkingOccupancyPanel({
   };
 
   // Reviewer actions
-  const handleReviewHazard = async (assocId: string, reviewState: 'CONFIRMED' | 'REJECTED' | 'NEEDS_REVIEW', expectedVersion?: number) => {
+  const handleReviewHazard = async (assocId: string, reviewState: 'CONFIRMED' | 'REJECTED' | 'NEEDS_REVIEW', expectedVersion: number) => {
     try {
       await reviewHazardAssociation(assocId, {
         review_state: reviewState,
@@ -281,7 +281,7 @@ export function ParkingOccupancyPanel({
     }
   };
 
-  const handleLifecycleHazard = async (assocId: string, lifecycleState: 'ACTIVE' | 'MITIGATED' | 'RESOLVED', expectedVersion?: number) => {
+  const handleLifecycleHazard = async (assocId: string, lifecycleState: 'ACTIVE' | 'MITIGATED' | 'RESOLVED', expectedVersion: number) => {
     try {
       await transitionHazardLifecycle(assocId, {
         lifecycle_state: lifecycleState,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import math
 import os
 import tempfile
 import uuid
@@ -14,7 +15,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,6 +27,7 @@ from services.api.app.models.entities import (
     Camera,
     CameraStabilityAssessment,
     CameraStabilityAuditEvent,
+    DriveSession,
     LayoutAuditEvent,
     ParkingHazardAssociation,
     ParkingHazardAuditEvent,
@@ -113,6 +115,51 @@ from src.parking.contracts import (
 from src.parking.layout_serialization import compute_canonical_layout_sha256
 from src.parking.layout_validation import validate_parking_layout
 from src.parking.stability_engine import evaluate_video_camera_stability
+
+
+_VALID_OCCUPANCY_STATES = frozenset({"VACANT", "OCCUPIED", "OCCLUDED", "UNKNOWN"})
+_HAZARD_REVIEW_TRANSITIONS = {
+    "UNREVIEWED": frozenset({"CONFIRMED", "REJECTED", "NEEDS_REVIEW"}),
+    "NEEDS_REVIEW": frozenset({"CONFIRMED", "REJECTED"}),
+    "CONFIRMED": frozenset({"NEEDS_REVIEW"}),
+    "REJECTED": frozenset({"NEEDS_REVIEW"}),
+}
+_HAZARD_LIFECYCLE_TRANSITIONS = {
+    "ACTIVE": frozenset({"MITIGATED", "RESOLVED", "EXPIRED", "SUPERSEDED"}),
+    "MITIGATED": frozenset({"ACTIVE", "RESOLVED", "EXPIRED", "SUPERSEDED"}),
+    "RESOLVED": frozenset({"ACTIVE"}),
+    "EXPIRED": frozenset({"ACTIVE", "SUPERSEDED"}),
+    "SUPERSEDED": frozenset(),
+}
+
+
+def _read_bay_occupancy_summary(
+    bay_summary: object,
+    bay_id: str,
+) -> Tuple[str, float]:
+    """Translate persisted occupancy output into fail-closed capacity evidence."""
+    if not isinstance(bay_summary, dict):
+        return "UNKNOWN", 0.0
+
+    persisted = bay_summary.get(bay_id)
+    if not isinstance(persisted, dict):
+        return "UNKNOWN", 0.0
+
+    state_value = persisted.get("current_state")
+    if not isinstance(state_value, str):
+        return "UNKNOWN", 0.0
+    state = state_value.strip().upper()
+    if state not in _VALID_OCCUPANCY_STATES:
+        return "UNKNOWN", 0.0
+
+    confidence_value = persisted.get("confidence")
+    if isinstance(confidence_value, bool) or not isinstance(confidence_value, (int, float)):
+        return "UNKNOWN", 0.0
+    confidence = float(confidence_value)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return "UNKNOWN", 0.0
+
+    return state, confidence
 
 logger = logging.getLogger(__name__)
 
@@ -2505,13 +2552,33 @@ async def create_hazard_association(
         .join(ParkingLayoutRevision, ParkingSpace.layout_revision_id == ParkingLayoutRevision.id)
         .where(ParkingSpace.id == payload.parking_space_id)
         .where(ParkingLayoutRevision.camera_id == camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
     )
     space = space_res.scalar_one_or_none()
     if not space:
         raise HTTPException(
             status_code=400,
-            detail=f"Parking space '{payload.parking_space_id}' does not exist on camera '{camera_id}'.",
+            detail=(
+                f"Parking space '{payload.parking_space_id}' is not part of the active "
+                f"verified layout for camera '{camera_id}'."
+            ),
         )
+
+    approach_zone_id: Optional[str] = None
+    if payload.target_type == "APPROACH_ZONE":
+        zone_query = select(ApproachZone).where(ApproachZone.parking_space_id == space.id)
+        if payload.approach_zone_id is not None:
+            zone_query = zone_query.where(ApproachZone.id == payload.approach_zone_id)
+        zone = (await db.execute(zone_query)).scalar_one_or_none()
+        if zone is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "APPROACH_ZONE hazards require an approach zone belonging to the "
+                    "selected bay in the active verified layout."
+                ),
+            )
+        approach_zone_id = zone.id
 
     # Optional road event verification
     if payload.road_event_id:
@@ -2525,6 +2592,7 @@ async def create_hazard_association(
     assoc = ParkingHazardAssociation(
         camera_id=camera_id,
         parking_space_id=payload.parking_space_id,
+        approach_zone_id=approach_zone_id,
         target_type=payload.target_type,
         road_event_id=payload.road_event_id,
         hazard_label=payload.hazard_label,
@@ -2615,19 +2683,51 @@ async def review_hazard_association(
     if not assoc:
         raise HTTPException(status_code=404, detail="Hazard association not found.")
 
-    if payload.expected_version is not None and assoc.version != payload.expected_version:
+    if assoc.version != payload.expected_version:
         raise HTTPException(
             status_code=409,
             detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
         )
 
     prior_review_state = assoc.review_state
-    assoc.review_state = payload.review_state
-    assoc.reviewed_by = payload.reviewer_identity
-    assoc.reviewed_at = utc_now()
-    if payload.notes:
-        assoc.notes = payload.notes
-    assoc.version += 1
+    if payload.review_state not in _HAZARD_REVIEW_TRANSITIONS.get(prior_review_state, frozenset()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Review transition {prior_review_state} -> {payload.review_state} is not permitted.",
+        )
+
+    reviewed_at = utc_now()
+    update_values = {
+        "review_state": payload.review_state,
+        "reviewed_by": payload.reviewer_identity,
+        "reviewed_at": reviewed_at,
+        "version": payload.expected_version + 1,
+        "updated_at": reviewed_at,
+    }
+    if payload.notes is not None:
+        update_values["notes"] = payload.notes
+
+    cas_result = await db.execute(
+        update(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .where(ParkingHazardAssociation.version == payload.expected_version)
+        .where(ParkingHazardAssociation.review_state == prior_review_state)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount != 1:
+        await db.rollback()
+        current = (
+            await db.execute(
+                select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Hazard association not found.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {current.version}.",
+        )
 
     audit = ParkingHazardAuditEvent(
         association_id=assoc.id,
@@ -2642,8 +2742,12 @@ async def review_hazard_association(
     )
     db.add(audit)
     await db.commit()
-    await db.refresh(assoc)
-    return assoc
+    refreshed = await db.execute(
+        select(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.post(
@@ -2664,17 +2768,54 @@ async def transition_hazard_lifecycle(
     if not assoc:
         raise HTTPException(status_code=404, detail="Hazard association not found.")
 
-    if payload.expected_version is not None and assoc.version != payload.expected_version:
+    if assoc.version != payload.expected_version:
         raise HTTPException(
             status_code=409,
             detail=f"Version mismatch: expected {payload.expected_version}, but current version is {assoc.version}.",
         )
 
     prior_lifecycle_state = assoc.lifecycle_state
-    assoc.lifecycle_state = payload.lifecycle_state
-    if payload.notes:
-        assoc.notes = payload.notes
-    assoc.version += 1
+    if payload.lifecycle_state not in _HAZARD_LIFECYCLE_TRANSITIONS.get(
+        prior_lifecycle_state, frozenset()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Lifecycle transition {prior_lifecycle_state} -> "
+                f"{payload.lifecycle_state} is not permitted."
+            ),
+        )
+
+    transitioned_at = utc_now()
+    update_values = {
+        "lifecycle_state": payload.lifecycle_state,
+        "version": payload.expected_version + 1,
+        "updated_at": transitioned_at,
+    }
+    if payload.notes is not None:
+        update_values["notes"] = payload.notes
+
+    cas_result = await db.execute(
+        update(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .where(ParkingHazardAssociation.version == payload.expected_version)
+        .where(ParkingHazardAssociation.lifecycle_state == prior_lifecycle_state)
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    if cas_result.rowcount != 1:
+        await db.rollback()
+        current = (
+            await db.execute(
+                select(ParkingHazardAssociation).where(ParkingHazardAssociation.id == association_id)
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Hazard association not found.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Version mismatch: expected {payload.expected_version}, but current version is {current.version}.",
+        )
 
     audit = ParkingHazardAuditEvent(
         association_id=assoc.id,
@@ -2689,8 +2830,12 @@ async def transition_hazard_lifecycle(
     )
     db.add(audit)
     await db.commit()
-    await db.refresh(assoc)
-    return assoc
+    refreshed = await db.execute(
+        select(ParkingHazardAssociation)
+        .where(ParkingHazardAssociation.id == association_id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.get(
@@ -2727,10 +2872,27 @@ async def record_pavement_inspection(
     if not cam_res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found.")
 
+    if payload.session_id is not None:
+        session_res = await db.execute(
+            select(DriveSession).where(DriveSession.id == payload.session_id)
+        )
+        if session_res.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Referenced drive session '{payload.session_id}' not found.",
+            )
+
+    inspected_at = payload.inspected_at or utc_now()
+    if inspected_at > utc_now():
+        raise HTTPException(
+            status_code=400,
+            detail="inspected_at cannot be in the future.",
+        )
+
     rec = PavementInspectionRecord(
         camera_id=camera_id,
         session_id=payload.session_id,
-        inspected_at=payload.inspected_at or utc_now(),
+        inspected_at=inspected_at,
         inspector_label=payload.inspector_label,
         notes=payload.notes,
     )
@@ -2862,13 +3024,7 @@ async def get_camera_capacity_snapshot(
     # 4. Build BayOccupancyEvidenceInput per space
     bay_inputs: List[BayOccupancyEvidenceInput] = []
     for sp in spaces:
-        sp_data = bay_summary.get(sp.operator_label)
-        if sp_data and isinstance(sp_data, dict):
-            occ_state = sp_data.get("final_state", "UNKNOWN")
-            conf = float(sp_data.get("final_confidence", 1.0))
-        else:
-            occ_state = "UNKNOWN"
-            conf = 0.0
+        occ_state, conf = _read_bay_occupancy_summary(bay_summary, sp.id)
 
         bay_inputs.append(
             BayOccupancyEvidenceInput(
@@ -2907,6 +3063,7 @@ async def get_camera_capacity_snapshot(
     # 6. Active/reviewed hazard associations
     haz_res = await db.execute(
         select(ParkingHazardAssociation)
+        .options(selectinload(ParkingHazardAssociation.approach_zone))
         .where(ParkingHazardAssociation.camera_id == camera_id)
     )
     db_hazards = haz_res.scalars().all()
@@ -2930,7 +3087,12 @@ async def get_camera_capacity_snapshot(
                 association_id=h.id,
                 hazard_id=h.road_event_id or h.id,
                 target_type=target_enum,
-                target_id=h.parking_space_id,
+                target_id=(
+                    h.approach_zone_id
+                    if target_enum == HazardTarget.APPROACH_ZONE
+                    else h.parking_space_id
+                ),
+                affected_bay_id=h.parking_space_id,
                 review_state=rev_enum,
                 lifecycle_state=life_enum,
                 severity_label=h.severity_label,

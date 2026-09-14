@@ -277,3 +277,15 @@ The RoadSense SiteOps research initiative will advance to prototype implementati
 - [ ] **Gating Criterion 2 (Pipeline Defect Remediation):** Media pipeline correctness findings (H.264 streaming, fail-closed inspection, bounded memory queues) are fully resolved and passing automated unit tests.
 - [ ] **Gating Criterion 3 (Controlled Dataset Consent):** Facility permission, camera mounting consent, and privacy masking approvals are formally executed for the test campus.
 - [ ] **Gating Criterion 4 (Metric Defensibility):** Research evaluation metrics (Safe Usable Capacity, False-Safe Rate, Maintenance Opportunity Score) demonstrate mathematical consistency across simulated edge-case test matrices.
+
+---
+
+## 12. Implemented Safe Usable Capacity Boundary
+
+The current Phase 3A implementation reports a conservative, operator-facing capacity snapshot. It does not claim that a visually empty bay is safe merely because no vehicle was detected.
+
+An individual bay is counted as `USABLE_AVAILABLE` only when all required evidence agrees: the camera stability gate is `ALLOWED`, the layout is verified, the occupancy observation is fresh and `VACANT`, the pavement inspection is fresh, and no active human-confirmed bay or approach-zone hazard blocks access. Missing or malformed evidence fails closed to an explicit non-usable state.
+
+Hazard creation is not equivalent to hazard confirmation. Automated detections and operator-entered candidates begin as `UNREVIEWED`; only an atomic, versioned human review can make an association `CONFIRMED`. Lifecycle changes are also versioned and audited. Approach-zone hazards reference the configured zone itself as well as its owning bay, preventing a label from being silently attached to unrelated geometry.
+
+The metric is therefore an evidence-fusion output for facility operations, not a structural pavement certification, navigation guarantee, emergency directive, or substitute for an on-site safety inspection. It does not infer pothole depth, fabricate GPS coordinates, identify people or vehicles, or perform cross-camera re-identification.

@@ -1,6 +1,17 @@
 import io
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from PIL import Image
+from sqlalchemy import select
+
+from services.api.app.models.entities import (
+    Camera,
+    CameraStabilityAssessment,
+    ApproachZone,
+    ParkingLayoutRevision,
+    ParkingOccupancyJob,
+)
 
 
 def _create_synthetic_image_bytes(width: int = 640, height: int = 480) -> bytes:
@@ -175,6 +186,30 @@ async def test_hazard_association_lifecycle_and_audit(client):
     assert "REVIEWED" in event_types
     assert "LIFECYCLE_TRANSITION" in event_types
 
+    # Version is mandatory: writes without a compare-and-swap token are rejected.
+    missing_version = await client.post(
+        f"/api/v1/hazards/associations/{assoc_id}/review",
+        json={
+            "review_state": "NEEDS_REVIEW",
+            "reviewer_identity": "qa_supervisor",
+            "explicit_reason": "Re-open for a second field inspection",
+        },
+    )
+    assert missing_version.status_code == 422
+
+    # Lifecycle state machines reject no-op/unsupported transitions.
+    invalid_transition = await client.post(
+        f"/api/v1/hazards/associations/{assoc_id}/lifecycle",
+        json={
+            "lifecycle_state": "MITIGATED",
+            "operator_identity": "field_maintenance",
+            "explicit_reason": "Attempted duplicate transition",
+            "expected_version": 3,
+        },
+    )
+    assert invalid_transition.status_code == 409
+    assert "not permitted" in invalid_transition.json()["detail"]
+
 
 @pytest.mark.anyio
 async def test_pavement_inspection_and_capacity_snapshot(client):
@@ -188,14 +223,13 @@ async def test_pavement_inspection_and_capacity_snapshot(client):
 
     # 1. Record pavement inspection
     insp_payload = {
-        "session_id": "SURVEY-2026-09-13-001",
         "inspector_label": "lead_inspector_aniket",
         "notes": "Visual pavement scan confirmed asphalt surface intact",
     }
     insp_resp = await client.post(f"/api/v1/cameras/{camera_id}/inspection/record", json=insp_payload)
     assert insp_resp.status_code == 201, insp_resp.text
     insp_data = insp_resp.json()
-    assert insp_data["session_id"] == insp_payload["session_id"]
+    assert insp_data["session_id"] is None
     assert insp_data["inspector_label"] == insp_payload["inspector_label"]
 
     # 2. List pavement inspections
@@ -222,6 +256,143 @@ async def test_pavement_inspection_and_capacity_snapshot(client):
         # Gate defaults to BLOCKED until stability assessment passes -> INFERENCE_BLOCKED
         assert decision["capacity_state"] == "INFERENCE_BLOCKED"
         assert "GATE_BLOCKED" in decision["reason_codes"]
+
+
+@pytest.mark.anyio
+async def test_capacity_snapshot_reads_completed_job_summary_by_bay_id(client, db_session):
+    """The persisted occupancy contract uses bay IDs and current_state/confidence."""
+    camera_id, spaces = await _setup_camera_with_verified_layout(client)
+
+    camera = (
+        await db_session.execute(select(Camera).where(Camera.id == camera_id))
+    ).scalar_one()
+    layout = (
+        await db_session.execute(
+            select(ParkingLayoutRevision)
+            .where(ParkingLayoutRevision.camera_id == camera_id)
+            .where(ParkingLayoutRevision.status == "VERIFIED")
+        )
+    ).scalar_one()
+    now = datetime.now(timezone.utc)
+
+    db_session.add(
+        CameraStabilityAssessment(
+            camera_id=camera_id,
+            layout_revision_id=layout.id,
+            layout_canonical_sha256=layout.canonical_sha256,
+            status="COMPLETE",
+            reference_image_sha256=camera.reference_image_sha256,
+            aggregate_decision="STABLE",
+            operational_gate="ALLOWED",
+            thresholds_snapshot={"max_assessment_age_seconds": 3600},
+            created_at=now,
+            completed_at=now,
+        )
+    )
+    db_session.add(
+        ParkingOccupancyJob(
+            camera_id=camera_id,
+            site_id=camera.site_id,
+            layout_revision_id=layout.id,
+            status="COMPLETE",
+            gate_decision="ALLOWED",
+            input_video_sha256="a" * 64,
+            completed_at=now,
+            bay_summary_json={
+                spaces[0]["id"]: {"current_state": "VACANT", "confidence": 0.94},
+                spaces[1]["id"]: {"current_state": "OCCUPIED", "confidence": 0.91},
+            },
+        )
+    )
+    await db_session.commit()
+
+    inspection = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={"inspector_label": "capacity_regression_inspector"},
+    )
+    assert inspection.status_code == 201, inspection.text
+
+    response = await client.get(f"/api/v1/cameras/{camera_id}/capacity/snapshot")
+    assert response.status_code == 200, response.text
+    snapshot = response.json()
+
+    assert snapshot["operational_gate"] == "ALLOWED"
+    assert snapshot["decisions"][spaces[0]["id"]]["capacity_state"] == "USABLE_AVAILABLE"
+    assert snapshot["decisions"][spaces[1]["id"]]["capacity_state"] == "OCCUPIED"
+    assert snapshot["usable_available_count"] == 1
+    assert snapshot["occupied_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_approach_hazard_uses_real_zone_reference(client, db_session):
+    camera_id, spaces = await _setup_camera_with_verified_layout(client)
+    zone = (
+        await db_session.execute(
+            select(ApproachZone).where(ApproachZone.parking_space_id == spaces[0]["id"])
+        )
+    ).scalar_one()
+
+    response = await client.post(
+        f"/api/v1/cameras/{camera_id}/hazards/associations",
+        json={
+            "parking_space_id": spaces[0]["id"],
+            "approach_zone_id": zone.id,
+            "target_type": "APPROACH_ZONE",
+            "hazard_label": "Debris obstructing bay approach",
+            "created_by": "field_operator",
+        },
+    )
+    assert response.status_code == 201, response.text
+    association = response.json()
+    assert association["parking_space_id"] == spaces[0]["id"]
+    assert association["approach_zone_id"] == zone.id
+    assert association["target_type"] == "APPROACH_ZONE"
+
+    wrong_bay = await client.post(
+        f"/api/v1/cameras/{camera_id}/hazards/associations",
+        json={
+            "parking_space_id": spaces[1]["id"],
+            "approach_zone_id": zone.id,
+            "target_type": "APPROACH_ZONE",
+            "hazard_label": "Mismatched target",
+            "created_by": "field_operator",
+        },
+    )
+    assert wrong_bay.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_inspection_rejects_invalid_session_and_future_timestamp(client):
+    camera_id, _ = await _setup_camera_with_verified_layout(client)
+
+    missing_session = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "session_id": "missing-drive-session",
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert missing_session.status_code == 400
+    assert "not found" in missing_session.json()["detail"]
+
+    future_inspection = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "inspected_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert future_inspection.status_code == 400
+    assert "future" in future_inspection.json()["detail"]
+
+    naive_timestamp = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "inspected_at": "2026-09-14T12:00:00",
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert naive_timestamp.status_code == 422
 
 
 @pytest.mark.anyio

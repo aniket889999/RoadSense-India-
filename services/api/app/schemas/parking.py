@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _strip_and_require_nonblank(v: Any, field_name: str) -> str:
@@ -459,6 +459,7 @@ CapacityStateLiteral = Literal[
 
 class HazardAssociationCreateRequest(BaseModel):
     parking_space_id: str = Field(..., min_length=1, max_length=64)
+    approach_zone_id: Optional[str] = Field(None, min_length=1, max_length=64)
     target_type: HazardTargetLiteral = Field(default="BAY")
     hazard_label: str = Field(..., min_length=1, max_length=128)
     road_event_id: Optional[str] = Field(None, max_length=64)
@@ -476,13 +477,19 @@ class HazardAssociationCreateRequest(BaseModel):
     def validate_hazard_label(cls, v: str) -> str:
         return _strip_and_require_nonblank(v, "hazard_label")
 
+    @model_validator(mode="after")
+    def validate_target_reference(self):
+        if self.target_type == "BAY" and self.approach_zone_id is not None:
+            raise ValueError("approach_zone_id must be omitted for BAY hazards.")
+        return self
+
 
 class HazardAssociationReviewRequest(BaseModel):
     review_state: HazardReviewStateLiteral
     reviewer_identity: str = Field(..., min_length=1, max_length=128)
     explicit_reason: str = Field(..., min_length=3)
     notes: Optional[str] = None
-    expected_version: Optional[int] = None
+    expected_version: int = Field(..., ge=1)
 
     @field_validator("reviewer_identity")
     @classmethod
@@ -500,7 +507,7 @@ class HazardAssociationLifecycleRequest(BaseModel):
     operator_identity: str = Field(..., min_length=1, max_length=128)
     explicit_reason: str = Field(..., min_length=3)
     notes: Optional[str] = None
-    expected_version: Optional[int] = None
+    expected_version: int = Field(..., ge=1)
 
     @field_validator("operator_identity")
     @classmethod
@@ -517,6 +524,7 @@ class HazardAssociationResponse(BaseModel):
     id: str
     camera_id: str
     parking_space_id: str
+    approach_zone_id: Optional[str] = None
     target_type: str
     road_event_id: Optional[str] = None
     hazard_label: str
@@ -556,6 +564,13 @@ class PavementInspectionRecordCreateRequest(BaseModel):
     @classmethod
     def validate_inspector(cls, v: str) -> str:
         return _strip_and_require_nonblank(v, "inspector_label")
+
+    @field_validator("inspected_at")
+    @classmethod
+    def validate_inspection_timezone(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None and (v.tzinfo is None or v.utcoffset() is None):
+            raise ValueError("inspected_at must include an explicit timezone offset.")
+        return v
 
 
 class PavementInspectionRecordResponse(BaseModel):

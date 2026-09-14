@@ -263,5 +263,14 @@ To ensure geometric validity and prevent erroneous spatial assumptions:
 
 ## 7. Current System State & Pipeline Defect Acknowledgement
 
-> **Engineering Status Disclosure:**
-> The RoadSense media processing and tracking pipeline is currently under active development. While the architecture, database schema, API contracts, and user interface foundations are established, **the underlying media pipeline has known correctness findings under active remediation** (specifically: streaming H.264 pipe synchronization, strict fail-closed media inspection, bounded upload memory buffers, and ByteTrack deterministic frame association). These findings are explicitly acknowledged as open engineering work and are **not** described as production-resolved.
+> **Engineering Status Disclosure (updated 2026-09-14):**
+> The bounded OpenCV/FFmpeg pipeline, session-local ByteTrack lifecycle, camera-stability gate, annotated occupancy workflow, synthetic stable-camera validation harness, and Phase 3A safe-capacity policy are implemented and covered by automated tests. This remains a controlled research/operations prototype, not a certified traffic-safety system. Field accuracy, site-specific calibration, privacy controls, and operational acceptance must be validated before deployment.
+
+### 7.1 Implemented Phase 3A Evidence Contract
+
+- The physical occupancy adapter reads the persisted per-bay contract by immutable parking-space ID using `current_state` and `confidence`. Missing, malformed, non-finite, or out-of-range evidence becomes `UNKNOWN`.
+- A hazard associated with a bay stores its bay foreign key. A hazard associated with an approach zone stores both the owning bay foreign key and a real `approach_zones.id` foreign key; it cannot be attached to a zone belonging to another bay or an inactive layout.
+- Human review and lifecycle actions require an exact positive version and execute as atomic database compare-and-swap updates. A stale concurrent action returns `409` and emits no audit event.
+- Pavement inspections may reference only an existing local drive session. Supplied timestamps must be timezone-aware and cannot be in the future.
+- Only `CONFIRMED` and `ACTIVE` hazard associations can block usable capacity. Unreviewed model suggestions remain visible evidence but do not independently alter the official count.
+- The canonical API contract is generated from FastAPI and tracked at `docs/api/openapi.json`; a regression test prevents endpoint/schema drift.

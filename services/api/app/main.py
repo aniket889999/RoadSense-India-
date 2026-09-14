@@ -116,7 +116,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Operations API for RoadSense India Dashcam Pothole Review & Field Inspections",
+    description=(
+        "Local operations API for RoadSense India dashcam review, fixed-camera "
+        "parking occupancy, human-reviewed pavement hazards, and fail-closed "
+        "safe usable capacity."
+    ),
     lifespan=lifespan,
 )
 

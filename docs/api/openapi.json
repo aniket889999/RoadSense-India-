@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "RoadSense India Operations API",
-    "description": "Operations API for RoadSense India Dashcam Pothole Review & Field Inspections",
+    "description": "Local operations API for RoadSense India dashcam review, fixed-camera parking occupancy, human-reviewed pavement hazards, and fail-closed safe usable capacity.",
     "version": "1.0.0"
   },
   "paths": {
@@ -56,7 +56,7 @@
           "Health & Observability"
         ],
         "summary": "Health System",
-        "description": "Detailed system telemetry: hardware acceleration, storage, and model provenance.",
+        "description": "Detailed system telemetry: hardware acceleration, storage, model provenance, and media capabilities.",
         "operationId": "health_system_health_system_get",
         "responses": {
           "200": {
@@ -645,10 +645,2092 @@
           }
         }
       }
+    },
+    "/api/v1/sites": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Sites",
+        "description": "List all configured facility sites.",
+        "operationId": "list_sites_api_v1_sites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SiteResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Sites Api V1 Sites Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Create Site",
+        "description": "Create a new facility site.",
+        "operationId": "create_site_api_v1_sites_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{site_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Site",
+        "description": "Get site details by ID.",
+        "operationId": "get_site_api_v1_sites__site_id__get",
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{site_id}/cameras": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Create Camera",
+        "description": "Create a new camera under a facility site.",
+        "operationId": "create_camera_api_v1_sites__site_id__cameras_post",
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CameraCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Site Cameras",
+        "description": "List all cameras associated with a site.",
+        "operationId": "list_site_cameras_api_v1_sites__site_id__cameras_get",
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Site Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CameraResponse"
+                  },
+                  "title": "Response List Site Cameras Api V1 Sites  Site Id  Cameras Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Camera",
+        "description": "Get camera details by ID.",
+        "operationId": "get_camera_api_v1_cameras__camera_id__get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/reference-image": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Upload Reference Image",
+        "description": "Upload and normalize a reference frame image for a camera.",
+        "operationId": "upload_reference_image_api_v1_cameras__camera_id__reference_image_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_reference_image_api_v1_cameras__camera_id__reference_image_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Reference Image",
+        "description": "Serve the stored reference image for display on the ROI canvas.",
+        "operationId": "get_reference_image_api_v1_cameras__camera_id__reference_image_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/invalidate-calibration": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Invalidate Camera Calibration",
+        "description": "Explicitly invalidate a camera's geometric calibration.\nInvalidates any active verified layout revision for occupancy use and records an audit event.",
+        "operationId": "invalidate_camera_calibration_api_v1_cameras__camera_id__invalidate_calibration_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CameraInvalidateCalibrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/layouts": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Create Draft Layout",
+        "description": "Create a new draft parking layout revision for a camera.",
+        "operationId": "create_draft_layout_api_v1_cameras__camera_id__layouts_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Camera Layouts",
+        "description": "List all layout revisions for a camera.",
+        "operationId": "list_camera_layouts_api_v1_cameras__camera_id__layouts_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LayoutRevisionResponse"
+                  },
+                  "title": "Response List Camera Layouts Api V1 Cameras  Camera Id  Layouts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/layouts/{layout_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Layout",
+        "description": "Get full details of a parking layout revision.",
+        "operationId": "get_layout_api_v1_layouts__layout_id__get",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Update Layout",
+        "description": "Update a parking layout revision.\nIf the layout is DRAFT, updates in place.\nIf VERIFIED, PENDING_REVIEW, SUPERSEDED, or INVALIDATED, creates a new DRAFT revision to preserve immutability.",
+        "operationId": "update_layout_api_v1_layouts__layout_id__put",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/layouts/{layout_id}/validate": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Validate Layout Endpoint",
+        "description": "Run geometry and topological validation on a layout revision.",
+        "operationId": "validate_layout_endpoint_api_v1_layouts__layout_id__validate_post",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutValidationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/layouts/{layout_id}/submit": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Submit Layout For Review",
+        "description": "Submit a DRAFT layout revision for human verification (DRAFT -> PENDING_REVIEW).",
+        "operationId": "submit_layout_for_review_api_v1_layouts__layout_id__submit_post",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutSubmitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/layouts/{layout_id}/verify": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Verify Layout",
+        "description": "Explicitly verify and activate a parking layout revision (PENDING_REVIEW -> VERIFIED).\nRequires local operator identity assertion and explicit confirmation checkbox.\nComputes deterministic canonical fingerprint and marks prior VERIFIED revisions as SUPERSEDED.",
+        "operationId": "verify_layout_api_v1_layouts__layout_id__verify_post",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/layouts/{layout_id}/invalidate": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Invalidate Layout",
+        "description": "Explicitly invalidate a VERIFIED layout revision (VERIFIED -> INVALIDATED).\nRecords reason and audit log.",
+        "operationId": "invalidate_layout_api_v1_layouts__layout_id__invalidate_post",
+        "parameters": [
+          {
+            "name": "layout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Layout Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutInvalidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/stability/assess": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Create Camera Stability Assessment",
+        "description": "Execute an asynchronous bounded camera stability assessment against the camera's reference image.\nAccepts multipart video upload only, returns HTTP 202 with job progress tracking.",
+        "operationId": "create_camera_stability_assessment_api_v1_cameras__camera_id__stability_assess_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_camera_stability_assessment_api_v1_cameras__camera_id__stability_assess_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StabilityAssessmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stability/assessments/{assessment_id}/cancel": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Cancel Stability Assessment",
+        "description": "Safely cancel an in-progress or queued stability assessment.",
+        "operationId": "cancel_stability_assessment_api_v1_stability_assessments__assessment_id__cancel_post",
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StabilityAssessmentCancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/stability/gate": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Camera Operational Gate",
+        "description": "Retrieve the current fail-closed operational inference gate for a camera.\nInference is ALLOWED only if a fresh STABLE assessment matches both reference and layout SHAs.",
+        "operationId": "get_camera_operational_gate_api_v1_cameras__camera_id__stability_gate_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraOperationalGateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/stability/assessments": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Camera Stability Assessments",
+        "description": "List historical camera stability assessments ordered by creation time.",
+        "operationId": "list_camera_stability_assessments_api_v1_cameras__camera_id__stability_assessments_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StabilityAssessmentResponse"
+                  },
+                  "title": "Response List Camera Stability Assessments Api V1 Cameras  Camera Id  Stability Assessments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stability/assessments/{assessment_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Stability Assessment Detail",
+        "description": "Retrieve full stability assessment report including per-sample measurements.",
+        "operationId": "get_stability_assessment_detail_api_v1_stability_assessments__assessment_id__get",
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StabilityAssessmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stability/assessments/{assessment_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Acknowledge Stability Assessment",
+        "description": "Operator acknowledgement of a stability assessment outcome.\nAppends an immutable audit event and optionally triggers audited calibration invalidation for UNSTABLE assessments.",
+        "operationId": "acknowledge_stability_assessment_api_v1_stability_assessments__assessment_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeStabilityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CameraStabilityAuditResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/stability/audit-events": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Camera Stability Audit Events",
+        "description": "List append-only camera stability audit and acknowledgement events.",
+        "operationId": "list_camera_stability_audit_events_api_v1_cameras__camera_id__stability_audit_events_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CameraStabilityAuditResponse"
+                  },
+                  "title": "Response List Camera Stability Audit Events Api V1 Cameras  Camera Id  Stability Audit Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/occupancy/jobs": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Submit Parking Occupancy Job",
+        "description": "Submit a video file for gate-controlled parking occupancy evaluation and video annotation.\nEnforces fail-closed camera stability gate: returns HTTP 202; background job will set\nBLOCKED_BY_STABILITY_GATE if camera is not calibrated with an active verified layout and fresh STABLE assessment.",
+        "operationId": "submit_parking_occupancy_job_api_v1_cameras__camera_id__occupancy_jobs_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_submit_parking_occupancy_job_api_v1_cameras__camera_id__occupancy_jobs_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParkingOccupancyJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Camera Occupancy Jobs",
+        "description": "List historical parking occupancy jobs for a camera.",
+        "operationId": "list_camera_occupancy_jobs_api_v1_cameras__camera_id__occupancy_jobs_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ParkingOccupancyJobResponse"
+                  },
+                  "title": "Response List Camera Occupancy Jobs Api V1 Cameras  Camera Id  Occupancy Jobs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Parking Occupancy Job Detail",
+        "description": "Retrieve status, metrics, and manifest summary of a parking occupancy job.",
+        "operationId": "get_parking_occupancy_job_detail_api_v1_parking_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParkingOccupancyJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Delete Parking Occupancy Job",
+        "description": "Safely delete a parking occupancy job and purge its local artifacts with fail-closed retention controls.\n\nRequirements:\n- confirmation_acknowledged must be true\n- non-blank local_operator_label assertion\n- meaningful deletion_reason (>= 5 chars)\n- Terminal states only: COMPLETE, FAILED, CANCELLED, BLOCKED_BY_STABILITY_GATE\n- Guarded DB CAS to PURGING\n- Confined filesystem validation (no traversal or symlinks)\n- Atomic quarantine rename before purge; restored on DB commit failure\n- Minimal DELETED tombstone & append-only ParkingJobAuditEvent recorded in DB",
+        "operationId": "delete_parking_occupancy_job_api_v1_parking_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParkingOccupancyJobDeleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParkingOccupancyJobDeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Cancel Parking Occupancy Job",
+        "description": "Cancel an active or queued parking occupancy job atomically through manager CAS.",
+        "operationId": "cancel_parking_occupancy_job_api_v1_parking_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParkingOccupancyJobCancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}/video": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Parking Job Annotated Video",
+        "description": "Stream the generated annotated MP4 video with strict authorization.",
+        "operationId": "get_parking_job_annotated_video_api_v1_parking_jobs__job_id__video_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}/manifest": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Parking Job Manifest",
+        "description": "Retrieve the full processing manifest JSON for a COMPLETE parking occupancy job.",
+        "operationId": "get_parking_job_manifest_api_v1_parking_jobs__job_id__manifest_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}/timeline": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Parking Job Timeline",
+        "description": "Download the state-transition timeline JSONL ledger with strict authorization.",
+        "operationId": "get_parking_job_timeline_api_v1_parking_jobs__job_id__timeline_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parking/jobs/{job_id}/summary": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Parking Job Summary",
+        "description": "Download the final occupancy summary JSON for a COMPLETE parking occupancy job.",
+        "operationId": "get_parking_job_summary_api_v1_parking_jobs__job_id__summary_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/hazards/associations": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Create Hazard Association",
+        "description": "Create a manual or linked hazard association for a parking bay or approach zone.",
+        "operationId": "create_hazard_association_api_v1_cameras__camera_id__hazards_associations_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HazardAssociationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HazardAssociationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Hazard Associations",
+        "description": "List all hazard associations for a given camera with optional status filters.",
+        "operationId": "list_hazard_associations_api_v1_cameras__camera_id__hazards_associations_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          },
+          {
+            "name": "review_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Review State"
+            }
+          },
+          {
+            "name": "lifecycle_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lifecycle State"
+            }
+          },
+          {
+            "name": "target_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HazardAssociationResponse"
+                  },
+                  "title": "Response List Hazard Associations Api V1 Cameras  Camera Id  Hazards Associations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hazards/associations/{association_id}": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Hazard Association",
+        "description": "Retrieve details of a single hazard association.",
+        "operationId": "get_hazard_association_api_v1_hazards_associations__association_id__get",
+        "parameters": [
+          {
+            "name": "association_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Association Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HazardAssociationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hazards/associations/{association_id}/review": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Review Hazard Association",
+        "description": "Guarded human review action on a candidate hazard association.\nEnforces optimistic concurrency control and records immutable audit log.",
+        "operationId": "review_hazard_association_api_v1_hazards_associations__association_id__review_post",
+        "parameters": [
+          {
+            "name": "association_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Association Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HazardAssociationReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HazardAssociationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hazards/associations/{association_id}/lifecycle": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Transition Hazard Lifecycle",
+        "description": "Guarded lifecycle transition (ACTIVE, MITIGATED, RESOLVED, EXPIRED, SUPERSEDED).\nEnforces optimistic concurrency control and records immutable audit log.",
+        "operationId": "transition_hazard_lifecycle_api_v1_hazards_associations__association_id__lifecycle_post",
+        "parameters": [
+          {
+            "name": "association_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Association Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HazardAssociationLifecycleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HazardAssociationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/hazards/audit-events": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Hazard Audit Events",
+        "description": "List append-only audit events for all hazard associations on a camera.",
+        "operationId": "list_hazard_audit_events_api_v1_cameras__camera_id__hazards_audit_events_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HazardAuditEventResponse"
+                  },
+                  "title": "Response List Hazard Audit Events Api V1 Cameras  Camera Id  Hazards Audit Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/inspection/record": {
+      "post": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Record Pavement Inspection",
+        "description": "Record a mobile pavement surface inspection event establishing freshness.",
+        "operationId": "record_pavement_inspection_api_v1_cameras__camera_id__inspection_record_post",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PavementInspectionRecordCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PavementInspectionRecordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/inspection/records": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "List Pavement Inspections",
+        "description": "List pavement inspection records for a given camera, newest first.",
+        "operationId": "list_pavement_inspections_api_v1_cameras__camera_id__inspection_records_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PavementInspectionRecordResponse"
+                  },
+                  "title": "Response List Pavement Inspections Api V1 Cameras  Camera Id  Inspection Records Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cameras/{camera_id}/capacity/snapshot": {
+      "get": {
+        "tags": [
+          "parking"
+        ],
+        "summary": "Get Camera Capacity Snapshot",
+        "description": "Compute and return current Safe Usable Capacity snapshot for a camera.\nFuses fixed occupancy, camera stability gate, human-reviewed hazards, and pavement inspection freshness.",
+        "operationId": "get_camera_capacity_snapshot_api_v1_cameras__camera_id__capacity_snapshot_get",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Camera Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacitySnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AcknowledgeStabilityRequest": {
+        "properties": {
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "trigger_calibration_invalidation": {
+            "type": "boolean",
+            "title": "Trigger Calibration Invalidation",
+            "default": false
+          },
+          "confirm_invalidation": {
+            "type": "boolean",
+            "title": "Confirm Invalidation",
+            "default": false
+          },
+          "invalidation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidation Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_operator_label"
+        ],
+        "title": "AcknowledgeStabilityRequest"
+      },
+      "ApproachZoneSchema": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "parking_space_id": {
+            "type": "string",
+            "title": "Parking Space Id"
+          },
+          "polygon_normalized": {
+            "items": {
+              "$ref": "#/components/schemas/PointSchema"
+            },
+            "type": "array",
+            "minItems": 3,
+            "title": "Polygon Normalized"
+          }
+        },
+        "type": "object",
+        "required": [
+          "parking_space_id",
+          "polygon_normalized"
+        ],
+        "title": "ApproachZoneSchema"
+      },
       "ArtifactResponse": {
         "properties": {
           "id": {
@@ -693,6 +2775,225 @@
         ],
         "title": "ArtifactResponse"
       },
+      "AuditEventResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "layout_revision_id": {
+            "type": "string",
+            "title": "Layout Revision Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "prior_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Status"
+          },
+          "new_status": {
+            "type": "string",
+            "title": "New Status"
+          },
+          "local_operator_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Operator Label"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "layout_revision_id",
+          "event_type",
+          "new_status",
+          "created_at"
+        ],
+        "title": "AuditEventResponse"
+      },
+      "BayCapacityDecisionResponse": {
+        "properties": {
+          "bay_id": {
+            "type": "string",
+            "title": "Bay Id"
+          },
+          "operator_label": {
+            "type": "string",
+            "title": "Operator Label"
+          },
+          "space_type": {
+            "type": "string",
+            "title": "Space Type"
+          },
+          "capacity_state": {
+            "type": "string",
+            "title": "Capacity State"
+          },
+          "is_usable": {
+            "type": "boolean",
+            "title": "Is Usable"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "raw_occupancy_state": {
+            "type": "string",
+            "title": "Raw Occupancy State"
+          },
+          "has_active_bay_hazard": {
+            "type": "boolean",
+            "title": "Has Active Bay Hazard"
+          },
+          "has_active_approach_hazard": {
+            "type": "boolean",
+            "title": "Has Active Approach Hazard"
+          },
+          "has_unverified_hazard": {
+            "type": "boolean",
+            "title": "Has Unverified Hazard"
+          },
+          "pavement_inspection_fresh": {
+            "type": "boolean",
+            "title": "Pavement Inspection Fresh"
+          },
+          "inspection_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inspection Age Seconds"
+          },
+          "evidence_ids": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bay_id",
+          "operator_label",
+          "space_type",
+          "capacity_state",
+          "is_usable",
+          "reason_codes",
+          "raw_occupancy_state",
+          "has_active_bay_hazard",
+          "has_active_approach_hazard",
+          "has_unverified_hazard",
+          "pavement_inspection_fresh",
+          "evidence_ids"
+        ],
+        "title": "BayCapacityDecisionResponse"
+      },
+      "Body_create_camera_stability_assessment_api_v1_cameras__camera_id__stability_assess_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_create_camera_stability_assessment_api_v1_cameras__camera_id__stability_assess_post"
+      },
+      "Body_submit_parking_occupancy_job_api_v1_cameras__camera_id__occupancy_jobs_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_submit_parking_occupancy_job_api_v1_cameras__camera_id__occupancy_jobs_post"
+      },
+      "Body_upload_reference_image_api_v1_cameras__camera_id__reference_image_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "confirm_replacement": {
+            "type": "boolean",
+            "title": "Confirm Replacement",
+            "default": false
+          },
+          "operator_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Label"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_reference_image_api_v1_cameras__camera_id__reference_image_post"
+      },
       "Body_upload_session_api_v1_sessions_upload_post": {
         "properties": {
           "file": {
@@ -707,6 +3008,546 @@
         ],
         "title": "Body_upload_session_api_v1_sessions_upload_post"
       },
+      "CameraCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "camera_position_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Position Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CameraCreateRequest"
+      },
+      "CameraInvalidateCalibrationRequest": {
+        "properties": {
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label"
+          },
+          "invalidation_reason": {
+            "type": "string",
+            "minLength": 3,
+            "title": "Invalidation Reason"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_operator_label",
+          "invalidation_reason"
+        ],
+        "title": "CameraInvalidateCalibrationRequest"
+      },
+      "CameraOperationalGateResponse": {
+        "properties": {
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "operational_gate": {
+            "type": "string",
+            "enum": [
+              "ALLOWED",
+              "BLOCKED"
+            ],
+            "title": "Operational Gate"
+          },
+          "gate_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gate Reasons"
+          },
+          "aggregate_decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "STABLE",
+                  "UNSTABLE",
+                  "INSUFFICIENT_EVIDENCE",
+                  "ERROR"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate Decision"
+          },
+          "assessment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Id"
+          },
+          "reference_image_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Image Sha256"
+          },
+          "layout_canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Canonical Sha256"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "is_fresh": {
+            "type": "boolean",
+            "title": "Is Fresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "camera_id",
+          "operational_gate",
+          "gate_reasons"
+        ],
+        "title": "CameraOperationalGateResponse"
+      },
+      "CameraResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "site_id": {
+            "type": "string",
+            "title": "Site Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "reference_image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Image Path"
+          },
+          "reference_image_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Image Sha256"
+          },
+          "reference_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Width"
+          },
+          "reference_height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Height"
+          },
+          "calibration_status": {
+            "type": "string",
+            "enum": [
+              "NOT_CONFIGURED",
+              "PENDING_REVIEW",
+              "VERIFIED",
+              "INVALIDATED"
+            ],
+            "title": "Calibration Status"
+          },
+          "camera_position_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Position Description"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "active_verified_layout_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Verified Layout Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "site_id",
+          "name",
+          "calibration_status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CameraResponse"
+      },
+      "CameraStabilityAuditResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "operator_identity": {
+            "type": "string",
+            "title": "Operator Identity"
+          },
+          "explicit_reason": {
+            "type": "string",
+            "title": "Explicit Reason"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "previous_gate_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Gate State"
+          },
+          "resulting_gate_state": {
+            "type": "string",
+            "title": "Resulting Gate State"
+          },
+          "previous_calibration_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Calibration Status"
+          },
+          "resulting_calibration_status": {
+            "type": "string",
+            "title": "Resulting Calibration Status"
+          },
+          "assessment_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Sha256"
+          },
+          "config_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Sha256"
+          },
+          "reference_image_sha256": {
+            "type": "string",
+            "title": "Reference Image Sha256"
+          },
+          "layout_canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Canonical Sha256"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "assessment_id",
+          "camera_id",
+          "event_type",
+          "operator_identity",
+          "explicit_reason",
+          "resulting_gate_state",
+          "resulting_calibration_status",
+          "reference_image_sha256",
+          "created_at"
+        ],
+        "title": "CameraStabilityAuditResponse"
+      },
+      "CapacitySnapshotResponse": {
+        "properties": {
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "site_id": {
+            "type": "string",
+            "title": "Site Id"
+          },
+          "layout_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Revision Id"
+          },
+          "layout_canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Canonical Sha256"
+          },
+          "policy_config_sha256": {
+            "type": "string",
+            "title": "Policy Config Sha256"
+          },
+          "operational_gate": {
+            "type": "string",
+            "title": "Operational Gate"
+          },
+          "gate_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gate Reasons"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "title": "Evaluated At"
+          },
+          "total_bays": {
+            "type": "integer",
+            "title": "Total Bays"
+          },
+          "physical_vacant_count": {
+            "type": "integer",
+            "title": "Physical Vacant Count"
+          },
+          "usable_available_count": {
+            "type": "integer",
+            "title": "Usable Available Count"
+          },
+          "occupied_count": {
+            "type": "integer",
+            "title": "Occupied Count"
+          },
+          "hazard_blocked_count": {
+            "type": "integer",
+            "title": "Hazard Blocked Count"
+          },
+          "approach_blocked_count": {
+            "type": "integer",
+            "title": "Approach Blocked Count"
+          },
+          "vacant_unassessed_count": {
+            "type": "integer",
+            "title": "Vacant Unassessed Count"
+          },
+          "unknown_count": {
+            "type": "integer",
+            "title": "Unknown Count"
+          },
+          "occluded_count": {
+            "type": "integer",
+            "title": "Occluded Count"
+          },
+          "inference_blocked_count": {
+            "type": "integer",
+            "title": "Inference Blocked Count"
+          },
+          "snapshot_sha256": {
+            "type": "string",
+            "title": "Snapshot Sha256"
+          },
+          "decisions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BayCapacityDecisionResponse"
+            },
+            "type": "object",
+            "title": "Decisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "camera_id",
+          "site_id",
+          "policy_config_sha256",
+          "operational_gate",
+          "gate_reasons",
+          "evaluated_at",
+          "total_bays",
+          "physical_vacant_count",
+          "usable_available_count",
+          "occupied_count",
+          "hazard_blocked_count",
+          "approach_blocked_count",
+          "vacant_unassessed_count",
+          "unknown_count",
+          "occluded_count",
+          "inference_blocked_count",
+          "snapshot_sha256",
+          "decisions"
+        ],
+        "title": "CapacitySnapshotResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -719,6 +3560,417 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HazardAssociationCreateRequest": {
+        "properties": {
+          "parking_space_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Parking Space Id"
+          },
+          "approach_zone_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Zone Id"
+          },
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "BAY",
+              "APPROACH_ZONE"
+            ],
+            "title": "Target Type",
+            "default": "BAY"
+          },
+          "hazard_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Hazard Label"
+          },
+          "road_event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Road Event Id"
+          },
+          "severity_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity Label"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "created_by": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Created By",
+            "default": "operator"
+          }
+        },
+        "type": "object",
+        "required": [
+          "parking_space_id",
+          "hazard_label"
+        ],
+        "title": "HazardAssociationCreateRequest"
+      },
+      "HazardAssociationLifecycleRequest": {
+        "properties": {
+          "lifecycle_state": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "MITIGATED",
+              "RESOLVED",
+              "EXPIRED",
+              "SUPERSEDED"
+            ],
+            "title": "Lifecycle State"
+          },
+          "operator_identity": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operator Identity"
+          },
+          "explicit_reason": {
+            "type": "string",
+            "minLength": 3,
+            "title": "Explicit Reason"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lifecycle_state",
+          "operator_identity",
+          "explicit_reason",
+          "expected_version"
+        ],
+        "title": "HazardAssociationLifecycleRequest"
+      },
+      "HazardAssociationResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "parking_space_id": {
+            "type": "string",
+            "title": "Parking Space Id"
+          },
+          "approach_zone_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Zone Id"
+          },
+          "target_type": {
+            "type": "string",
+            "title": "Target Type"
+          },
+          "road_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Road Event Id"
+          },
+          "hazard_label": {
+            "type": "string",
+            "title": "Hazard Label"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "title": "Lifecycle State"
+          },
+          "severity_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity Label"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "camera_id",
+          "parking_space_id",
+          "target_type",
+          "hazard_label",
+          "review_state",
+          "lifecycle_state",
+          "created_by",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "HazardAssociationResponse"
+      },
+      "HazardAssociationReviewRequest": {
+        "properties": {
+          "review_state": {
+            "type": "string",
+            "enum": [
+              "UNREVIEWED",
+              "CONFIRMED",
+              "REJECTED",
+              "NEEDS_REVIEW"
+            ],
+            "title": "Review State"
+          },
+          "reviewer_identity": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reviewer Identity"
+          },
+          "explicit_reason": {
+            "type": "string",
+            "minLength": 3,
+            "title": "Explicit Reason"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_state",
+          "reviewer_identity",
+          "explicit_reason",
+          "expected_version"
+        ],
+        "title": "HazardAssociationReviewRequest"
+      },
+      "HazardAuditEventResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "association_id": {
+            "type": "string",
+            "title": "Association Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "operator_identity": {
+            "type": "string",
+            "title": "Operator Identity"
+          },
+          "prior_review_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Review State"
+          },
+          "new_review_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Review State"
+          },
+          "prior_lifecycle_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Lifecycle State"
+          },
+          "new_lifecycle_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Lifecycle State"
+          },
+          "explicit_reason": {
+            "type": "string",
+            "title": "Explicit Reason"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "association_id",
+          "event_type",
+          "operator_identity",
+          "explicit_reason",
+          "created_at"
+        ],
+        "title": "HazardAuditEventResponse"
       },
       "HealthResponse": {
         "properties": {
@@ -748,6 +4000,375 @@
           "version"
         ],
         "title": "HealthResponse"
+      },
+      "LayoutCreateRequest": {
+        "properties": {
+          "parking_spaces": {
+            "items": {
+              "$ref": "#/components/schemas/ParkingSpaceSchema"
+            },
+            "type": "array",
+            "title": "Parking Spaces"
+          },
+          "approach_zones": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ApproachZoneSchema"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Zones"
+          }
+        },
+        "type": "object",
+        "title": "LayoutCreateRequest"
+      },
+      "LayoutInvalidateRequest": {
+        "properties": {
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label"
+          },
+          "invalidation_reason": {
+            "type": "string",
+            "minLength": 3,
+            "title": "Invalidation Reason"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_operator_label",
+          "invalidation_reason"
+        ],
+        "title": "LayoutInvalidateRequest"
+      },
+      "LayoutRevisionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "revision_number": {
+            "type": "integer",
+            "title": "Revision Number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PENDING_REVIEW",
+              "VERIFIED",
+              "SUPERSEDED",
+              "INVALIDATED"
+            ],
+            "title": "Status"
+          },
+          "canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Sha256"
+          },
+          "reference_image_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Image Sha256"
+          },
+          "reference_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Width"
+          },
+          "reference_height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Height"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "invalidated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidated At"
+          },
+          "invalidation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidation Reason"
+          },
+          "parking_spaces": {
+            "items": {
+              "$ref": "#/components/schemas/ParkingSpaceSchema"
+            },
+            "type": "array",
+            "title": "Parking Spaces"
+          },
+          "approach_zones": {
+            "items": {
+              "$ref": "#/components/schemas/ApproachZoneSchema"
+            },
+            "type": "array",
+            "title": "Approach Zones"
+          },
+          "audit_events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEventResponse"
+            },
+            "type": "array",
+            "title": "Audit Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "camera_id",
+          "revision_number",
+          "status",
+          "created_at"
+        ],
+        "title": "LayoutRevisionResponse"
+      },
+      "LayoutSubmitRequest": {
+        "properties": {
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label",
+            "description": "Non-blank local operator assertion"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_operator_label"
+        ],
+        "title": "LayoutSubmitRequest"
+      },
+      "LayoutUpdateRequest": {
+        "properties": {
+          "parking_spaces": {
+            "items": {
+              "$ref": "#/components/schemas/ParkingSpaceSchema"
+            },
+            "type": "array",
+            "title": "Parking Spaces"
+          },
+          "approach_zones": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ApproachZoneSchema"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Zones"
+          }
+        },
+        "type": "object",
+        "title": "LayoutUpdateRequest"
+      },
+      "LayoutValidationErrorDict": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id"
+          },
+          "space_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "message"
+        ],
+        "title": "LayoutValidationErrorDict"
+      },
+      "LayoutValidationResponse": {
+        "properties": {
+          "is_valid": {
+            "type": "boolean",
+            "title": "Is Valid"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/LayoutValidationErrorDict"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "spaces_count": {
+            "type": "integer",
+            "title": "Spaces Count"
+          },
+          "approach_zones_count": {
+            "type": "integer",
+            "title": "Approach Zones Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_valid",
+          "spaces_count",
+          "approach_zones_count"
+        ],
+        "title": "LayoutValidationResponse"
+      },
+      "LayoutVerifyRequest": {
+        "properties": {
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label",
+            "description": "Local operator identifier"
+          },
+          "confirmation_acknowledged": {
+            "type": "boolean",
+            "title": "Confirmation Acknowledged",
+            "description": "Explicit acknowledgement of manual polygon verification"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "local_operator_label",
+          "confirmation_acknowledged"
+        ],
+        "title": "LayoutVerifyRequest"
       },
       "LiveOfferRequest": {
         "properties": {
@@ -811,6 +4432,603 @@
           "message"
         ],
         "title": "LiveOfferResponse"
+      },
+      "ParkingOccupancyJobCancelResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "cancelled": {
+            "type": "boolean",
+            "title": "Cancelled"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "cancelled",
+          "message"
+        ],
+        "title": "ParkingOccupancyJobCancelResponse"
+      },
+      "ParkingOccupancyJobDeleteRequest": {
+        "properties": {
+          "confirmation_acknowledged": {
+            "type": "boolean",
+            "title": "Confirmation Acknowledged",
+            "description": "Explicit confirmation of destructive deletion"
+          },
+          "local_operator_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Local Operator Label",
+            "description": "Operator identity assertion"
+          },
+          "deletion_reason": {
+            "type": "string",
+            "minLength": 5,
+            "title": "Deletion Reason",
+            "description": "Meaningful audit reason for job and artifact purge"
+          },
+          "expected_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Status",
+            "description": "Expected terminal status for concurrency CAS protection"
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirmation_acknowledged",
+          "local_operator_label",
+          "deletion_reason"
+        ],
+        "title": "ParkingOccupancyJobDeleteRequest",
+        "description": "Fail-closed deletion and retention audit request.\nNote: local_operator_label is an operator identity assertion, not an authenticated SSO identity."
+      },
+      "ParkingOccupancyJobDeleteResponse": {
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "prior_status": {
+            "type": "string",
+            "title": "Prior Status"
+          },
+          "resulting_status": {
+            "type": "string",
+            "title": "Resulting Status"
+          },
+          "operator_identity_assertion": {
+            "type": "string",
+            "title": "Operator Identity Assertion"
+          },
+          "deletion_reason": {
+            "type": "string",
+            "title": "Deletion Reason"
+          },
+          "purged_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Purged At"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted",
+          "job_id",
+          "prior_status",
+          "resulting_status",
+          "operator_identity_assertion",
+          "deletion_reason",
+          "purged_at",
+          "message"
+        ],
+        "title": "ParkingOccupancyJobDeleteResponse"
+      },
+      "ParkingOccupancyJobResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "site_id": {
+            "type": "string",
+            "title": "Site Id"
+          },
+          "layout_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Revision Id"
+          },
+          "stability_assessment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stability Assessment Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "progress_pct": {
+            "type": "number",
+            "title": "Progress Pct"
+          },
+          "stage_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Message"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "gate_decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Decision"
+          },
+          "gate_reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Reasons"
+          },
+          "input_video_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Video Sha256"
+          },
+          "output_video_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Video Sha256"
+          },
+          "reference_image_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Image Sha256"
+          },
+          "layout_canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Canonical Sha256"
+          },
+          "detector_checkpoint_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detector Checkpoint Sha256"
+          },
+          "occupancy_config_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupancy Config Sha256"
+          },
+          "total_frames": {
+            "type": "integer",
+            "title": "Total Frames",
+            "default": 0
+          },
+          "processed_frames": {
+            "type": "integer",
+            "title": "Processed Frames",
+            "default": 0
+          },
+          "fps": {
+            "type": "number",
+            "title": "Fps",
+            "default": 0.0
+          },
+          "duration_seconds": {
+            "type": "number",
+            "title": "Duration Seconds",
+            "default": 0.0
+          },
+          "video_width": {
+            "type": "integer",
+            "title": "Video Width",
+            "default": 0
+          },
+          "video_height": {
+            "type": "integer",
+            "title": "Video Height",
+            "default": 0
+          },
+          "total_bays": {
+            "type": "integer",
+            "title": "Total Bays",
+            "default": 0
+          },
+          "final_occupied_count": {
+            "type": "integer",
+            "title": "Final Occupied Count",
+            "default": 0
+          },
+          "final_vacant_count": {
+            "type": "integer",
+            "title": "Final Vacant Count",
+            "default": 0
+          },
+          "final_unknown_count": {
+            "type": "integer",
+            "title": "Final Unknown Count",
+            "default": 0
+          },
+          "final_occluded_count": {
+            "type": "integer",
+            "title": "Final Occluded Count",
+            "default": 0
+          },
+          "total_state_transitions": {
+            "type": "integer",
+            "title": "Total State Transitions",
+            "default": 0
+          },
+          "has_annotated_video": {
+            "type": "boolean",
+            "title": "Has Annotated Video",
+            "default": false
+          },
+          "has_timeline": {
+            "type": "boolean",
+            "title": "Has Timeline",
+            "default": false
+          },
+          "has_manifest": {
+            "type": "boolean",
+            "title": "Has Manifest",
+            "default": false
+          },
+          "bay_summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bay Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "camera_id",
+          "site_id",
+          "status",
+          "progress_pct",
+          "created_at"
+        ],
+        "title": "ParkingOccupancyJobResponse"
+      },
+      "ParkingSpaceSchema": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "operator_label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Operator Label"
+          },
+          "space_type": {
+            "type": "string",
+            "enum": [
+              "STANDARD",
+              "ACCESSIBLE",
+              "EV_CHARGING",
+              "LOADING",
+              "EMERGENCY",
+              "OTHER"
+            ],
+            "title": "Space Type",
+            "default": "STANDARD"
+          },
+          "polygon_normalized": {
+            "items": {
+              "$ref": "#/components/schemas/PointSchema"
+            },
+            "type": "array",
+            "minItems": 3,
+            "title": "Polygon Normalized"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "operator_label",
+          "polygon_normalized"
+        ],
+        "title": "ParkingSpaceSchema"
+      },
+      "PavementInspectionRecordCreateRequest": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "inspected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inspected At"
+          },
+          "inspector_label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Inspector Label",
+            "default": "inspector"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "title": "PavementInspectionRecordCreateRequest"
+      },
+      "PavementInspectionRecordResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "inspected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Inspected At"
+          },
+          "inspector_label": {
+            "type": "string",
+            "title": "Inspector Label"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "camera_id",
+          "inspected_at",
+          "inspector_label",
+          "created_at"
+        ],
+        "title": "PavementInspectionRecordResponse"
+      },
+      "PointSchema": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "X",
+            "description": "Normalized X coordinate in [0.0, 1.0]"
+          },
+          "y": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Y",
+            "description": "Normalized Y coordinate in [0.0, 1.0]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "PointSchema"
       },
       "RawDetectionResponse": {
         "properties": {
@@ -1127,6 +5345,107 @@
         ],
         "title": "RoadEventReviewRequest"
       },
+      "SampleMeasurementSchema": {
+        "properties": {
+          "sample_index": {
+            "type": "integer",
+            "title": "Sample Index"
+          },
+          "timestamp_seconds": {
+            "type": "number",
+            "title": "Timestamp Seconds"
+          },
+          "frame_index": {
+            "type": "integer",
+            "title": "Frame Index"
+          },
+          "matched_features": {
+            "type": "integer",
+            "title": "Matched Features"
+          },
+          "inlier_count": {
+            "type": "integer",
+            "title": "Inlier Count"
+          },
+          "inlier_ratio": {
+            "type": "number",
+            "title": "Inlier Ratio"
+          },
+          "translation_px_x": {
+            "type": "number",
+            "title": "Translation Px X"
+          },
+          "translation_px_y": {
+            "type": "number",
+            "title": "Translation Px Y"
+          },
+          "translation_magnitude_px": {
+            "type": "number",
+            "title": "Translation Magnitude Px"
+          },
+          "translation_normalized": {
+            "type": "number",
+            "title": "Translation Normalized"
+          },
+          "scale_factor": {
+            "type": "number",
+            "title": "Scale Factor"
+          },
+          "scale_change": {
+            "type": "number",
+            "title": "Scale Change"
+          },
+          "rotation_degrees": {
+            "type": "number",
+            "title": "Rotation Degrees"
+          },
+          "perspective_distortion": {
+            "type": "number",
+            "title": "Perspective Distortion"
+          },
+          "reprojection_error": {
+            "type": "number",
+            "title": "Reprojection Error"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "STABLE",
+              "UNSTABLE",
+              "INSUFFICIENT_EVIDENCE",
+              "ERROR"
+            ],
+            "title": "Decision"
+          },
+          "rejection_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejection Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sample_index",
+          "timestamp_seconds",
+          "frame_index",
+          "matched_features",
+          "inlier_count",
+          "inlier_ratio",
+          "translation_px_x",
+          "translation_px_y",
+          "translation_magnitude_px",
+          "translation_normalized",
+          "scale_factor",
+          "scale_change",
+          "rotation_degrees",
+          "perspective_distortion",
+          "reprojection_error",
+          "decision"
+        ],
+        "title": "SampleMeasurementSchema"
+      },
       "SessionDeleteRequest": {
         "properties": {
           "delete_source_media": {
@@ -1399,6 +5718,407 @@
         ],
         "title": "SessionResponse"
       },
+      "SiteCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Timezone",
+            "default": "UTC"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SiteCreateRequest"
+      },
+      "SiteResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "cameras_count": {
+            "type": "integer",
+            "title": "Cameras Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "timezone",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SiteResponse"
+      },
+      "StabilityAssessmentCancelResponse": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "cancelled": {
+            "type": "boolean",
+            "title": "Cancelled"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "status",
+          "cancelled",
+          "message"
+        ],
+        "title": "StabilityAssessmentCancelResponse"
+      },
+      "StabilityAssessmentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "camera_id": {
+            "type": "string",
+            "title": "Camera Id"
+          },
+          "layout_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Revision Id"
+          },
+          "layout_canonical_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Canonical Sha256"
+          },
+          "reference_image_sha256": {
+            "type": "string",
+            "title": "Reference Image Sha256"
+          },
+          "video_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Sha256"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "VALIDATING",
+              "ANALYZING",
+              "COMPLETE",
+              "FAILED",
+              "CANCELLED"
+            ],
+            "title": "Status",
+            "default": "COMPLETE"
+          },
+          "progress_pct": {
+            "type": "number",
+            "title": "Progress Pct",
+            "default": 100.0
+          },
+          "stage_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Message"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "config_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Version"
+          },
+          "config_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Sha256"
+          },
+          "algorithm_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Algorithm Version"
+          },
+          "opencv_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opencv Version"
+          },
+          "thresholds_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thresholds Snapshot"
+          },
+          "sample_measurements": {
+            "items": {
+              "$ref": "#/components/schemas/SampleMeasurementSchema"
+            },
+            "type": "array",
+            "title": "Sample Measurements"
+          },
+          "aggregate_decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "STABLE",
+                  "UNSTABLE",
+                  "INSUFFICIENT_EVIDENCE",
+                  "ERROR"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate Decision"
+          },
+          "operational_gate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ALLOWED",
+                  "BLOCKED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operational Gate"
+          },
+          "gate_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gate Reasons"
+          },
+          "summary_metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary Metrics"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "operator_acknowledged_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Acknowledged At"
+          },
+          "operator_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Label"
+          },
+          "operator_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "camera_id",
+          "reference_image_sha256",
+          "created_at"
+        ],
+        "title": "StabilityAssessmentResponse"
+      },
       "SystemHealthResponse": {
         "properties": {
           "status": {
@@ -1455,6 +6175,22 @@
           "cuda_available": {
             "type": "boolean",
             "title": "Cuda Available"
+          },
+          "ffmpeg_available": {
+            "type": "boolean",
+            "title": "Ffmpeg Available",
+            "default": true
+          },
+          "ffmpeg_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ffmpeg Version"
           },
           "active_jobs": {
             "type": "integer",

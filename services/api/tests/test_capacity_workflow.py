@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from PIL import Image
@@ -8,6 +8,7 @@ from sqlalchemy import select
 from services.api.app.models.entities import (
     Camera,
     CameraStabilityAssessment,
+    ApproachZone,
     ParkingLayoutRevision,
     ParkingOccupancyJob,
 )
@@ -222,14 +223,13 @@ async def test_pavement_inspection_and_capacity_snapshot(client):
 
     # 1. Record pavement inspection
     insp_payload = {
-        "session_id": "SURVEY-2026-09-13-001",
         "inspector_label": "lead_inspector_aniket",
         "notes": "Visual pavement scan confirmed asphalt surface intact",
     }
     insp_resp = await client.post(f"/api/v1/cameras/{camera_id}/inspection/record", json=insp_payload)
     assert insp_resp.status_code == 201, insp_resp.text
     insp_data = insp_resp.json()
-    assert insp_data["session_id"] == insp_payload["session_id"]
+    assert insp_data["session_id"] is None
     assert insp_data["inspector_label"] == insp_payload["inspector_label"]
 
     # 2. List pavement inspections
@@ -321,6 +321,78 @@ async def test_capacity_snapshot_reads_completed_job_summary_by_bay_id(client, d
     assert snapshot["decisions"][spaces[1]["id"]]["capacity_state"] == "OCCUPIED"
     assert snapshot["usable_available_count"] == 1
     assert snapshot["occupied_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_approach_hazard_uses_real_zone_reference(client, db_session):
+    camera_id, spaces = await _setup_camera_with_verified_layout(client)
+    zone = (
+        await db_session.execute(
+            select(ApproachZone).where(ApproachZone.parking_space_id == spaces[0]["id"])
+        )
+    ).scalar_one()
+
+    response = await client.post(
+        f"/api/v1/cameras/{camera_id}/hazards/associations",
+        json={
+            "parking_space_id": spaces[0]["id"],
+            "approach_zone_id": zone.id,
+            "target_type": "APPROACH_ZONE",
+            "hazard_label": "Debris obstructing bay approach",
+            "created_by": "field_operator",
+        },
+    )
+    assert response.status_code == 201, response.text
+    association = response.json()
+    assert association["parking_space_id"] == spaces[0]["id"]
+    assert association["approach_zone_id"] == zone.id
+    assert association["target_type"] == "APPROACH_ZONE"
+
+    wrong_bay = await client.post(
+        f"/api/v1/cameras/{camera_id}/hazards/associations",
+        json={
+            "parking_space_id": spaces[1]["id"],
+            "approach_zone_id": zone.id,
+            "target_type": "APPROACH_ZONE",
+            "hazard_label": "Mismatched target",
+            "created_by": "field_operator",
+        },
+    )
+    assert wrong_bay.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_inspection_rejects_invalid_session_and_future_timestamp(client):
+    camera_id, _ = await _setup_camera_with_verified_layout(client)
+
+    missing_session = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "session_id": "missing-drive-session",
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert missing_session.status_code == 400
+    assert "not found" in missing_session.json()["detail"]
+
+    future_inspection = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "inspected_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert future_inspection.status_code == 400
+    assert "future" in future_inspection.json()["detail"]
+
+    naive_timestamp = await client.post(
+        f"/api/v1/cameras/{camera_id}/inspection/record",
+        json={
+            "inspected_at": "2026-09-14T12:00:00",
+            "inspector_label": "field_inspector",
+        },
+    )
+    assert naive_timestamp.status_code == 422
 
 
 @pytest.mark.anyio

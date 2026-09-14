@@ -476,6 +476,7 @@ export async function createHazardAssociation(
   cameraId: string,
   data: {
     parking_space_id: string;
+    approach_zone_id?: string;
     target_type: 'BAY' | 'APPROACH_ZONE';
     hazard_label: string;
     road_event_id?: string;

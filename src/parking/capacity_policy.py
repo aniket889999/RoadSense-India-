@@ -106,6 +106,7 @@ class HazardAssociationInput:
     target_id: str
     review_state: Union[HazardReviewState, str]
     lifecycle_state: Union[HazardLifecycleState, str]
+    affected_bay_id: Optional[str] = None
     severity_label: Optional[str] = None  # Qualitative tag (e.g. LOW/MED/HIGH); NO fabricated depth
     evidence_id: Optional[str] = None
     created_at: Optional[Union[datetime, str]] = None
@@ -119,6 +120,7 @@ class HazardAssociationInput:
             "hazard_id": self.hazard_id,
             "target_type": str(self.target_type.value if isinstance(self.target_type, HazardTarget) else self.target_type),
             "target_id": self.target_id,
+            "affected_bay_id": self.affected_bay_id,
             "review_state": str(self.review_state.value if isinstance(self.review_state, HazardReviewState) else self.review_state),
             "lifecycle_state": str(self.lifecycle_state.value if isinstance(self.lifecycle_state, HazardLifecycleState) else self.lifecycle_state),
             "severity_label": self.severity_label,
@@ -384,7 +386,7 @@ def evaluate_bay_capacity(
     # Audit & categorize hazards associated with this bay
     bay_hazards = [
         h for h in hazards
-        if h.target_id == bay.bay_id
+        if (h.affected_bay_id or h.target_id) == bay.bay_id
     ]
 
     has_active_bay_hazard = False

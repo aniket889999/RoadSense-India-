@@ -331,7 +331,8 @@ def test_rule_7_active_human_verified_approach_hazard_produces_approach_blocked(
         association_id="assoc_2",
         hazard_id="haz_2",
         target_type=HazardTarget.APPROACH_ZONE,
-        target_id="B1",
+        target_id="AZ1",
+        affected_bay_id="B1",
         review_state=HazardReviewState.CONFIRMED,
         lifecycle_state=HazardLifecycleState.ACTIVE,
     )

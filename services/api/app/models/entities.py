@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -284,6 +285,9 @@ class ApproachZone(Base):
 
     # Relationships
     parking_space: Mapped[ParkingSpace] = relationship("ParkingSpace", back_populates="approach_zone")
+    hazard_associations: Mapped[List["ParkingHazardAssociation"]] = relationship(
+        "ParkingHazardAssociation", back_populates="approach_zone"
+    )
 
 
 class LayoutAuditEvent(Base):
@@ -456,10 +460,20 @@ class ParkingJobAuditEvent(Base):
 class ParkingHazardAssociation(Base):
     """Audited association of a human-reviewed surface hazard to a parking bay or approach zone."""
     __tablename__ = "parking_hazard_associations"
+    __table_args__ = (
+        CheckConstraint(
+            "(target_type = 'BAY' AND approach_zone_id IS NULL) OR "
+            "(target_type = 'APPROACH_ZONE' AND approach_zone_id IS NOT NULL)",
+            name="ck_parking_hazard_target_reference",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=generate_uuid)
     camera_id: Mapped[str] = mapped_column(String(64), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     parking_space_id: Mapped[str] = mapped_column(String(64), ForeignKey("parking_spaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    approach_zone_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("approach_zones.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     target_type: Mapped[str] = mapped_column(String(32), default="BAY", nullable=False)  # BAY, APPROACH_ZONE
     road_event_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("road_events.id", ondelete="SET NULL"), nullable=True, index=True)
 
@@ -480,6 +494,9 @@ class ParkingHazardAssociation(Base):
     # Relationships
     camera: Mapped[Camera] = relationship("Camera", back_populates="hazard_associations")
     parking_space: Mapped[ParkingSpace] = relationship("ParkingSpace", back_populates="hazard_associations")
+    approach_zone: Mapped[Optional[ApproachZone]] = relationship(
+        "ApproachZone", back_populates="hazard_associations"
+    )
     road_event: Mapped[Optional[RoadEvent]] = relationship("RoadEvent")
     audit_events: Mapped[List["ParkingHazardAuditEvent"]] = relationship("ParkingHazardAuditEvent", back_populates="association", cascade="all, delete-orphan")
 

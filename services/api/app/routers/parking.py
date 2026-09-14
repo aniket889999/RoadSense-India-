@@ -27,6 +27,7 @@ from services.api.app.models.entities import (
     Camera,
     CameraStabilityAssessment,
     CameraStabilityAuditEvent,
+    DriveSession,
     LayoutAuditEvent,
     ParkingHazardAssociation,
     ParkingHazardAuditEvent,
@@ -2551,13 +2552,33 @@ async def create_hazard_association(
         .join(ParkingLayoutRevision, ParkingSpace.layout_revision_id == ParkingLayoutRevision.id)
         .where(ParkingSpace.id == payload.parking_space_id)
         .where(ParkingLayoutRevision.camera_id == camera_id)
+        .where(ParkingLayoutRevision.status == LayoutRevisionStatus.VERIFIED.value)
     )
     space = space_res.scalar_one_or_none()
     if not space:
         raise HTTPException(
             status_code=400,
-            detail=f"Parking space '{payload.parking_space_id}' does not exist on camera '{camera_id}'.",
+            detail=(
+                f"Parking space '{payload.parking_space_id}' is not part of the active "
+                f"verified layout for camera '{camera_id}'."
+            ),
         )
+
+    approach_zone_id: Optional[str] = None
+    if payload.target_type == "APPROACH_ZONE":
+        zone_query = select(ApproachZone).where(ApproachZone.parking_space_id == space.id)
+        if payload.approach_zone_id is not None:
+            zone_query = zone_query.where(ApproachZone.id == payload.approach_zone_id)
+        zone = (await db.execute(zone_query)).scalar_one_or_none()
+        if zone is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "APPROACH_ZONE hazards require an approach zone belonging to the "
+                    "selected bay in the active verified layout."
+                ),
+            )
+        approach_zone_id = zone.id
 
     # Optional road event verification
     if payload.road_event_id:
@@ -2571,6 +2592,7 @@ async def create_hazard_association(
     assoc = ParkingHazardAssociation(
         camera_id=camera_id,
         parking_space_id=payload.parking_space_id,
+        approach_zone_id=approach_zone_id,
         target_type=payload.target_type,
         road_event_id=payload.road_event_id,
         hazard_label=payload.hazard_label,
@@ -2850,10 +2872,27 @@ async def record_pavement_inspection(
     if not cam_res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail=f"Camera '{camera_id}' not found.")
 
+    if payload.session_id is not None:
+        session_res = await db.execute(
+            select(DriveSession).where(DriveSession.id == payload.session_id)
+        )
+        if session_res.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Referenced drive session '{payload.session_id}' not found.",
+            )
+
+    inspected_at = payload.inspected_at or utc_now()
+    if inspected_at > utc_now():
+        raise HTTPException(
+            status_code=400,
+            detail="inspected_at cannot be in the future.",
+        )
+
     rec = PavementInspectionRecord(
         camera_id=camera_id,
         session_id=payload.session_id,
-        inspected_at=payload.inspected_at or utc_now(),
+        inspected_at=inspected_at,
         inspector_label=payload.inspector_label,
         notes=payload.notes,
     )
@@ -3024,6 +3063,7 @@ async def get_camera_capacity_snapshot(
     # 6. Active/reviewed hazard associations
     haz_res = await db.execute(
         select(ParkingHazardAssociation)
+        .options(selectinload(ParkingHazardAssociation.approach_zone))
         .where(ParkingHazardAssociation.camera_id == camera_id)
     )
     db_hazards = haz_res.scalars().all()
@@ -3047,7 +3087,12 @@ async def get_camera_capacity_snapshot(
                 association_id=h.id,
                 hazard_id=h.road_event_id or h.id,
                 target_type=target_enum,
-                target_id=h.parking_space_id,
+                target_id=(
+                    h.approach_zone_id
+                    if target_enum == HazardTarget.APPROACH_ZONE
+                    else h.parking_space_id
+                ),
+                affected_bay_id=h.parking_space_id,
                 review_state=rev_enum,
                 lifecycle_state=life_enum,
                 severity_label=h.severity_label,

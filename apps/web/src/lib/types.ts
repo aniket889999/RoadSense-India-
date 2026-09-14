@@ -484,6 +484,7 @@ export interface HazardAssociation {
   id: string;
   camera_id: string;
   parking_space_id: string;
+  approach_zone_id?: string | null;
   target_type: HazardTarget;
   road_event_id?: string | null;
   hazard_label: string;

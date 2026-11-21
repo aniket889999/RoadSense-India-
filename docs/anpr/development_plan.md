@@ -137,13 +137,29 @@ remain unverified until the required local packages and assets are available.
   accepted reads (`91` plates routed to `NEEDS_REVIEW`, `3` `UNREADABLE`), and
   mean latency `324.61 ms/image`. Held-out `test` split remains untouched. See
   [Witvix validation OCR results](witvix_validation_ocr_results.md).
-- Module 4 web dashboard integration: `AnprInspectionPanel` is connected to
-  `POST /api/v1/anpr/images/recognize` via `recognizeAnprImage` in
-  `apps/web/src/lib/api.ts` (raw JPEG/PNG bytes with matching `Content-Type`)
-  and exposed under the `ANPR Inspection` tab in `Sidebar.tsx` and `page.tsx`.
-  `npm run typecheck` passes (`0` errors); live Next.js browser serving (`next dev`
-  / `next build`) remains blocked by the pre-existing absent
-  `next-swc.darwin-arm64.node` binary in `@next/swc-darwin-arm64`.
+- Module 4 web dashboard integration and corrective OCR audit:
+  `AnprInspectionPanel` is connected to `POST /api/v1/anpr/images/recognize` via
+  `recognizeAnprImage` in `apps/web/src/lib/api.ts` (raw JPEG/PNG bytes with
+  matching `Content-Type`) and exposed under the `ANPR Inspection` tab in
+  `Sidebar.tsx` and `page.tsx`. The missing local
+  `apps/web/node_modules/@next/swc-darwin-arm64/next-swc.darwin-arm64.node`
+  binary (`@next/swc-darwin-arm64@14.2.18`) was restored from the lockfile's
+  exact URL and verified against its lockfile SHA-512 integrity hash; both
+  `npm run typecheck` and `npm run build` pass, and the live browser workflow
+  (`http://localhost:3000` -> `http://127.0.0.1:8000`) was verified end-to-end
+  with real validation images (`witvix-img_0137.png` and `witvix-img_0003.png`).
+  A 40-image (`50`-plate) training-subset diagnosis showed that detector box
+  crops are not the primary bottleneck (reference boxes scored identically to
+  predicted boxes at `2/50` exact match under `enhanced_grayscale`), while
+  pre-applying bilateral filtering + CLAHE amplified border/bolt noise. Switching
+  EasyOCR's default view to `original_bgr` (`C4_original_bgr`, selected on the
+  training subset where CER dropped from `0.5052` to `0.4062`) reduced
+  validation-split (`71` images, `94` plates) CER from `0.4584` (`419/914`) to
+  `0.4519` (`413/914`) and produced `1` accepted `READ` (`0` wrong accepted
+  reads), while overall validation exact plate agreement remained `3/94`
+  (`0.0319`) due to generic `english_g2` character confusions on two-line
+  commercial truck plates. See
+  [Witvix validation OCR results](witvix_validation_ocr_results.md).
 
 ## Module 1 shared result contract
 

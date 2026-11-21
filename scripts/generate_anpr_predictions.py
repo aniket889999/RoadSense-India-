@@ -199,6 +199,7 @@ def generate_split_predictions(
                 else str(getattr(rec, "model_dir", ""))
             ),
             "ocr_device": getattr(rec, "device", None),
+            "ocr_crop_view": getattr(rec, "crop_view", None),
             "ocr_languages": list(getattr(rec, "languages", ())),
             "ocr_weight_files": {
                 Path(w).name: sha256_file(Path(w))

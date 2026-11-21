@@ -27,6 +27,13 @@ from src.anpr.preprocessing import preprocess_plate_crop, validate_bgr_image
 from src.anpr.runtime_contracts import OcrRead, RuntimeUnavailable
 
 ENV_OCR_MODEL_DIR = "ROADSENSE_ANPR_OCR_MODEL_DIR"
+ENV_OCR_CROP_VIEW = "ROADSENSE_ANPR_OCR_CROP_VIEW"
+SUPPORTED_OCR_CROP_VIEWS = (
+    "original_bgr",
+    "resized_bgr",
+    "grayscale",
+    "enhanced_grayscale",
+)
 _OCR_WEIGHT_EXTENSIONS = {".pth", ".pt"}
 _ROW_MERGE_HEIGHT_RATIO = 0.55
 
@@ -218,9 +225,21 @@ class EasyOcrPlateRecognizer:
         device: Optional[str] = None,
         repo_root: Optional[Path] = None,
         languages: Sequence[str] = ("en",),
+        crop_view: Optional[str] = None,
     ) -> None:
         if not languages or not all(isinstance(lang, str) and lang.strip() for lang in languages):
             raise ValueError("languages must be a non-empty sequence of language codes.")
+
+        raw_crop_view = (
+            os.environ.get(ENV_OCR_CROP_VIEW, "original_bgr")
+            if crop_view is None
+            else crop_view
+        )
+        if not isinstance(raw_crop_view, str) or raw_crop_view.strip() not in SUPPORTED_OCR_CROP_VIEWS:
+            raise ValueError(
+                f"crop_view must be one of {SUPPORTED_OCR_CROP_VIEWS}, got {raw_crop_view!r}."
+            )
+        validated_crop_view = raw_crop_view.strip()
 
         raw_model_dir = (
             os.environ.get(ENV_OCR_MODEL_DIR, "") if model_dir is None else model_dir
@@ -262,16 +281,18 @@ class EasyOcrPlateRecognizer:
         self.weight_files = tuple(weight_files)
         self.device = validated_device
         self.languages = tuple(languages)
+        self.crop_view = validated_crop_view
         self._reader = reader
 
     def recognize(self, plate_bgr: np.ndarray) -> OcrRead:
         """Preprocess a plate crop with bounded OpenCV ops and run offline EasyOCR."""
         validate_bgr_image(plate_bgr, label="plate_bgr")
         preprocessed = preprocess_plate_crop(plate_bgr)
+        primary_image = getattr(preprocessed, self.crop_view)
 
         try:
             detections = self._reader.readtext(
-                preprocessed.enhanced_grayscale,
+                primary_image,
                 detail=1,
                 paragraph=False,
             )
@@ -283,11 +304,16 @@ class EasyOcrPlateRecognizer:
 
         read = order_and_merge_ocr_detections(detections)
 
-        # If enhanced grayscale produced no text on a tiny/low-contrast crop, fall back once to resized BGR
+        # If the primary view produced no text on a tiny/low-contrast crop, fall back once
         if not read.raw_text.strip():
+            fallback_image = (
+                preprocessed.enhanced_grayscale
+                if self.crop_view != "enhanced_grayscale"
+                else preprocessed.resized_bgr
+            )
             try:
                 fallback_detections = self._reader.readtext(
-                    preprocessed.resized_bgr,
+                    fallback_image,
                     detail=1,
                     paragraph=False,
                 )

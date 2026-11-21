@@ -161,9 +161,10 @@ and `english_g2.pth`) were staged under `models/easyocr/` and evaluated across
 all 71 `val` images via `scripts/generate_anpr_predictions.py` and
 `scripts/evaluate_anpr_predictions.py`; see
 [Witvix validation OCR results](witvix_validation_ocr_results.md).
-Held-out `test` split evaluation has still not been run. The earlier missing
-frontend SWC compiler (`next-swc.darwin-arm64.node`) remains an independent
-environment blocker for `next dev`/`next build` and is not repaired here.
+Held-out `test` split evaluation has still not been run. The previously missing
+local `@next/swc-darwin-arm64@14.2.18` binary was restored from the lockfile
+with verified SHA-512 integrity, unblocking `npm run build` and live browser
+verification of the ANPR inspection panel.
 
 The downloaded Witvix sample is audited separately in
 [Witvix intake results](witvix_intake_results.md); its annotations and source

@@ -285,7 +285,7 @@ def test_ocr_requires_local_assets_and_disables_downloads(monkeypatch, tmp_path)
             reader_calls.append((lang_list, kwargs))
 
         def readtext(self, image, detail=1, paragraph=False):
-            assert image.ndim == 2
+            assert image.ndim == 3 and image.shape[2] == 3
             return [
                 ([[50, 8], [140, 8], [140, 36], [50, 36]], "12 AB 1234", 0.86),
                 ([[4, 8], [44, 8], [44, 36], [4, 36]], "MH", 0.94),
@@ -307,8 +307,17 @@ def test_ocr_requires_local_assets_and_disables_downloads(monkeypatch, tmp_path)
 
     plate_crop = np.full((28, 120, 3), 180, dtype=np.uint8)
     result = recognizer.recognize(plate_crop)
+    assert recognizer.crop_view == "original_bgr"
     assert result.raw_text == "MH 12 AB 1234"
     assert result.confidence == pytest.approx(0.86)
+
+    with pytest.raises(ValueError, match="crop_view"):
+        EasyOcrPlateRecognizer(
+            model_dir=rel_ocr_dir,
+            device="cpu",
+            repo_root=repo_root,
+            crop_view="invalid_view",
+        )
 
 
 def test_ocr_rejects_empty_or_symlinked_model_dir(monkeypatch, tmp_path):
@@ -386,7 +395,7 @@ def test_composed_adapters_integrate_with_the_image_pipeline(monkeypatch, tmp_pa
             assert kwargs["download_enabled"] is False
 
         def readtext(self, image, **kwargs):
-            assert image.ndim == 2
+            assert image.ndim == 3 and image.shape[2] == 3
             return [([[2, 2], [120, 2], [120, 35], [2, 35]], "MH 12 AB 1234", 0.91)]
 
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))

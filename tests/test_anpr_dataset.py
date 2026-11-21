@@ -137,6 +137,30 @@ def test_existing_output_cannot_be_overwritten(source_dataset):
     assert marker.read_text() == "keep me"
 
 
+def test_publisher_proxy_and_mixed_labels_remain_explicit_in_verified_metadata(source_dataset):
+    repository, source, manifest, rows = source_dataset
+    for row in rows:
+        row["grouping_basis"] = "publisher_vehicle_proxy"
+        row["plates"][0]["label_provenance"] = "publisher_mixed"
+    write_rows(manifest, rows)
+    output = repository / "data" / "processed" / "publisher-pilot"
+    prepared = prepare_dataset(manifest, source, output, dry_run=False)
+    verified = validate_prepared_dataset(output)
+    assert verified == prepared
+    assert verified["schema_version"] == "1.1"
+    assurance = verified["evidence_assurance"]
+    assert assurance["capture_session_disjointness"] == "not_established_vehicle_proxy"
+    assert assurance["all_plate_texts_human_verified"] is False
+    assert assurance["plate_label_provenance_counts"]["publisher_mixed"] == 9
+
+    metadata_path = output / "preparation_metadata.json"
+    altered = json.loads(metadata_path.read_text())
+    altered["evidence_assurance"]["all_plate_texts_human_verified"] = True
+    metadata_path.write_text(json.dumps(altered))
+    with pytest.raises(DatasetValidationError, match="metadata/fingerprint"):
+        validate_prepared_dataset(output)
+
+
 def test_scoring_cli_defaults_to_validation_and_preserves_existing_report(source_dataset, monkeypatch):
     import scripts.evaluate_anpr_predictions as cli
 

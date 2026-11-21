@@ -3,8 +3,11 @@
 This module supplies tools to prepare transcribed images, fine-tune a dedicated
 plate detector, and score frozen predictions. It does not contain a trained plate
 checkpoint or a measured real-image accuracy result. The existing local
-`models/yolov8n.pt` base checkpoint matches the configured SHA-256; the missing
-input for real training is an appropriately labelled ANPR dataset.
+`models/yolov8n.pt` base checkpoint matches the configured SHA-256. A limited
+Witvix truck-plate pilot is now prepared at
+`data/processed/witvix_anpr_pilot_v1`; its labels have mixed publisher provenance
+and capture-session independence is unverified. Training preflight passes;
+actual training has not started.
 
 ## Work split
 
@@ -35,9 +38,15 @@ row is synthetic and is not a real sample or a benchmark result:
   same half-open x/y convention as the ANPR API.
 - `group_id` identifies a shared capture session/sequence. Do not invent a unique
   group per adjacent video frame.
+- `grouping_basis` defaults to `declared_capture_session`. Use
+  `publisher_vehicle_proxy` only where the source's one-image-per-vehicle claim
+  is the grouping evidence, and retain its weaker assurance in reported results.
 - `source_id` identifies the original image before augmentation. Every derivative
   shares its original's ID; this is not a camera ID.
 - `plates: []` is allowed for genuinely negative images.
+- Each plate has `label_provenance`: `human_verified`, `publisher_mixed` or
+  `unspecified` (default). Do not mark model-assisted publisher labels as human
+  verified without a corresponding review.
 - `conditions` accepts `clear`, `blur`, `angled`, `low_light`, `occluded`, `other`.
 
 The splitter transitively joins shared capture groups, source IDs, normalized
@@ -45,6 +54,9 @@ plate identities, raw file hashes and normalized-image hashes. A connected group
 always belongs to one split. At least three independent groups containing plates
 are required, so train/val/test each contain labelled plate evidence. Target
 ratios are 70/15/15, but preserving groups takes precedence over exact counts.
+Dataset schema 1.1 records grouping assumptions and annotation trust separately
+from file/label integrity. A valid fingerprint does not certify either label
+correctness or camera/session independence.
 
 Sources remain read-only. Preparation makes EXIF-normalized PNG copies under a
 new `data/processed/` child directory, with single-class YOLO labels, transcriptions,
@@ -132,11 +144,18 @@ CER; CER can exceed 1.0. Accepted false positives are counted as wrong accepted
 reads even on negative images. Undefined rates are JSON `null`, not a claimed
 zero error rate. Unavailable runtime timings are excluded from inference timing.
 Results are also broken down by condition; condition groups can overlap.
+Reports explicitly distinguish agreement with mixed/unspecified supplied labels
+from accuracy against human-verified references.
 
 ## Current limits
 
-Module 3 verification uses synthetic fixtures and fake training engines. No real
+Module 3 unit tests use synthetic fixtures and fake training engines. The real
+Witvix dataset has also passed preparation and training preflight. No real
 ANPR training or held-out inference has been run. Real image OCR still requires
 the EasyOCR package and local OCR model files. Downloads and installation are not
 performed by these tools. The earlier missing frontend SWC compiler is an
 independent environment issue and is not repaired by this module.
+
+The downloaded Witvix sample is audited separately in
+[Witvix intake results](witvix_intake_results.md); its annotations and source
+grouping use the weaker provenance categories described above.

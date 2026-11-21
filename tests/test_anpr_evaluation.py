@@ -8,7 +8,7 @@ from src.anpr.evaluation import EvaluationError, evaluate_predictions
 from src.anpr.validation import assess_ocr_read
 
 
-def record(image_id="image-1", *, text="MH12AB1234", conditions=None):
+def record(image_id="image-1", *, text="MH12AB1234", conditions=None, label_provenance="unspecified"):
     return PreparedRecord(
         image_id=image_id, image_path=f"images/val/{image_id}.png", split="val",
         group_id=image_id, source_id=image_id, source_image_path=f"{image_id}.png",
@@ -16,6 +16,7 @@ def record(image_id="image-1", *, text="MH12AB1234", conditions=None):
         conditions=conditions or ["clear"],
         plates=[] if text is None else [{
             "bbox": {"x1": 5, "y1": 5, "x2": 70, "y2": 30}, "text": text,
+            "label_provenance": label_provenance,
         }],
     )
 
@@ -98,3 +99,16 @@ def test_predictions_cannot_include_another_split_or_hide_raw_ocr_changes():
     observed.plates[0].normalized_text = "MH12AB1235"
     with pytest.raises(EvaluationError, match="raw OCR"):
         evaluate_predictions([record()], {"image-1": observed})
+
+
+@pytest.mark.parametrize("provenance,interpretation", [
+    ("publisher_mixed", "agreement_with_supplied_labels"),
+    ("unspecified", "agreement_with_supplied_labels"),
+    ("human_verified", "accuracy_against_human_verified_labels"),
+])
+def test_metric_interpretation_preserves_reference_label_trust(provenance, interpretation):
+    observed = evaluate_predictions(
+        [record(label_provenance=provenance)], {"image-1": prediction()}
+    )
+    assert observed["metric_interpretation"] == interpretation
+    assert observed["reference_evidence"]["plate_label_provenance_counts"][provenance] == 1

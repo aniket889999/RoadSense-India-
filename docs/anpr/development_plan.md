@@ -97,10 +97,20 @@ remain unverified until the required local packages and assets are available.
 - Module 3 implementation and usage are documented in
   [Data, training and evaluation](module3_data_and_training.md). Codex implements
   grouped dataset preparation and offline metrics; Gemini supplies the dedicated
-  detector training wrapper. Actual training waits for a labelled ANPR dataset.
+  detector training wrapper.
 - Module 3 combined verification passes 93 focused tests and Python compilation.
   The local base checkpoint SHA matches its training config. A real project
-  dry-run stops before training because `anpr_india_v1` has not been prepared.
+  dry-run initially stopped before training because `anpr_india_v1` had not been
+  prepared.
+- Witvix intake now prepares a real, limited truck-plate pilot:
+  329 train / 71 val / 70 test images, with 408 / 94 / 87 plate annotations.
+  Real training preflight passes using the pinned local base checkpoint. Dataset
+  schema 1.1 records mixed publisher labels and unverified capture-session
+  independence explicitly; these are not certified ground-truth labels or capture
+  groups. See [Witvix intake results](witvix_intake_results.md).
+  Training, OCR asset setup and held-out inference remain pending.
+- Combined ANPR/intake/API/OpenAPI verification after this intake: 102 tests
+  passed, changed Python modules compiled, and whitespace checks passed.
 
 ## Module 1 shared result contract
 

@@ -66,7 +66,10 @@ def main() -> int:
     except (DatasetValidationError, EvaluationError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"ANPR prediction evaluation failed: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({"report_path": str(output), "split": args.split, "overall": report["overall"]}, indent=2))
+    print(json.dumps({
+        "report_path": str(output), "split": args.split,
+        "metric_interpretation": report["metric_interpretation"], "overall": report["overall"],
+    }, indent=2))
     return 0
 
 

@@ -23,7 +23,8 @@ from src.anpr.validation import normalize_plate_text
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPLITS = ("train", "val", "test")
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
-GROUP_POLICY = "capture+source+normalized_plate+raw_and_prepared_sha256_v1"
+DATASET_SCHEMA_VERSION = "1.1"
+GROUP_POLICY = "declared_group+source+normalized_plate+raw_and_prepared_sha256_v2"
 SafeId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Condition = Literal["clear", "blur", "angled", "low_light", "occluded", "other"]
@@ -37,12 +38,13 @@ class PlateAnnotation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bbox: PlateBox
     text: str = Field(min_length=1, max_length=256)
+    label_provenance: Literal["human_verified", "publisher_mixed", "unspecified"] = "unspecified"
 
     @field_validator("text")
     @classmethod
     def require_transcription(cls, value: str) -> str:
         if not normalize_plate_text(value):
-            raise ValueError("Each labelled plate requires a verified text transcription.")
+            raise ValueError("Each labelled plate requires a nonempty text transcription.")
         return value
 
 
@@ -51,6 +53,7 @@ class ImageRecord(BaseModel):
     image_id: SafeId
     image_path: str = Field(min_length=1)
     group_id: str = Field(min_length=1, max_length=128)
+    grouping_basis: Literal["declared_capture_session", "publisher_vehicle_proxy"] = "declared_capture_session"
     source_id: str = Field(min_length=1, max_length=128)
     plates: list[PlateAnnotation] = Field(default_factory=list)
     conditions: list[Condition] = Field(default_factory=lambda: ["other"])
@@ -59,7 +62,7 @@ class ImageRecord(BaseModel):
     @classmethod
     def require_group_identity(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("Capture/source group IDs must be supplied, not inferred per image.")
+            raise ValueError("Grouping/source IDs must be nonblank.")
         return value.strip()
 
     @field_validator("conditions")
@@ -124,16 +127,20 @@ def load_manifest(path: Path, *, prepared: bool = False) -> list[ImageRecord]:
     return sorted(records, key=lambda record: record.image_id)
 
 
-def _normalized_png(path: Path) -> tuple[bytes, int, int]:
+def _decode_image_file(path: Path):
     media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
     if path.suffix.lower() not in media_types:
         raise DatasetValidationError("ANPR images must be JPEG/PNG.")
     with path.open("rb") as handle:
         payload = handle.read(MAX_IMAGE_BYTES + 1)
     try:
-        bgr = decode_image(payload, media_types[path.suffix.lower()])
+        return decode_image(payload, media_types[path.suffix.lower()])
     except ValueError as exc:
         raise DatasetValidationError(str(exc)) from exc
+
+
+def _normalized_png(path: Path) -> tuple[bytes, int, int]:
+    bgr = _decode_image_file(path)
     height, width = bgr.shape[:2]
     output = io.BytesIO()
     Image.fromarray(bgr[:, :, ::-1]).save(output, "PNG")
@@ -168,7 +175,7 @@ def _components(records: list[dict]) -> list[list[dict]]:
             if prior != signature:
                 raise DatasetValidationError("Identical source images have conflicting plate annotations.")
         keys = [
-            ("capture", record["group_id"]), ("source", record["source_id"]),
+            ("declared_group", record["group_id"]), ("source", record["source_id"]),
             ("bytes", record["image_sha256"]),
             ("pixels", record["prepared_image_sha256"]),
         ] + [("plate", normalize_plate_text(p["text"])) for p in record["plates"]]
@@ -222,7 +229,7 @@ def _assign_splits(records: list[dict], seed: int) -> list[dict]:
 
 def _fingerprint(rows: list[dict], seed: int) -> str:
     return hashlib.sha256(_json_bytes({
-        "schema_version": "1.0", "group_policy": GROUP_POLICY,
+        "schema_version": DATASET_SCHEMA_VERSION, "group_policy": GROUP_POLICY,
         "seed": seed, "records": rows,
     })).hexdigest()
 
@@ -233,6 +240,27 @@ def _split_counts(rows: list[dict]) -> dict:
         "plates": sum(len(row["plates"]) for row in rows if row["split"] == split),
         "negative_images": sum(not row["plates"] for row in rows if row["split"] == split),
     } for split in SPLITS}
+
+
+def summarize_evidence_assurance(rows: list[dict]) -> dict:
+    """Keep annotation trust and grouping assumptions separate from file integrity."""
+    bases = sorted({row["grouping_basis"] for row in rows})
+    label_counts = {name: 0 for name in ("human_verified", "publisher_mixed", "unspecified")}
+    for row in rows:
+        for plate in row["plates"]:
+            label_counts[plate["label_provenance"]] += 1
+    return {
+        "grouping_bases": bases,
+        "capture_session_disjointness": (
+            "not_established_vehicle_proxy" if "publisher_vehicle_proxy" in bases
+            else "based_on_declared_capture_groups"
+        ),
+        "plate_label_provenance_counts": label_counts,
+        "all_plate_texts_human_verified": (
+            label_counts["human_verified"] > 0
+            and label_counts["publisher_mixed"] == label_counts["unspecified"] == 0
+        ),
+    }
 
 
 def _yolo_labels(row: dict) -> str:
@@ -301,11 +329,12 @@ def prepare_dataset(
         })
     rows = _assign_splits(audited, seed)
     metadata = {
-        "schema_version": "1.0", "group_policy": GROUP_POLICY, "seed": seed,
+        "schema_version": DATASET_SCHEMA_VERSION, "group_policy": GROUP_POLICY, "seed": seed,
         "dataset_fingerprint": _fingerprint(rows, seed),
         "source_manifest_sha256": sha256_file(manifest_path),
         "split_counts": _split_counts(rows),
         "independent_groups": len(_components(rows)),
+        "evidence_assurance": summarize_evidence_assurance(rows),
     }
     if dry_run:
         return metadata
@@ -370,11 +399,12 @@ def validate_prepared_dataset(dataset_dir: Path, *, expected_path: Path | None =
         if reassigned != rows:
             raise DatasetValidationError("Prepared split membership violates the deterministic group policy.")
         if (
-            metadata.get("schema_version") != "1.0"
+            metadata.get("schema_version") != DATASET_SCHEMA_VERSION
             or metadata.get("group_policy") != GROUP_POLICY
             or metadata.get("dataset_fingerprint") != _fingerprint(rows, metadata["seed"])
             or _json_bytes(metadata.get("split_counts")) != _json_bytes(_split_counts(rows))
             or metadata.get("independent_groups") != len(_components(rows))
+            or _json_bytes(metadata.get("evidence_assurance")) != _json_bytes(summarize_evidence_assurance(rows))
         ):
             raise DatasetValidationError("Dataset metadata/fingerprint does not match the prepared manifest.")
         expected_files = set()
@@ -382,7 +412,7 @@ def validate_prepared_dataset(dataset_dir: Path, *, expected_path: Path | None =
             image_path = _confined_file(directory, row["image_path"])
             if sha256_file(image_path) != row["prepared_image_sha256"]:
                 raise DatasetValidationError("A prepared image hash does not match the manifest.")
-            _, width, height = _normalized_png(image_path)
+            height, width = _decode_image_file(image_path).shape[:2]
             if (width, height) != (row["width"], row["height"]):
                 raise DatasetValidationError("A prepared image has unexpected dimensions.")
             if any(p["bbox"]["x2"] > width or p["bbox"]["y2"] > height for p in row["plates"]):

@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from src.anpr.contracts import AnprImageResult, PlateBox, ReadStatus, ResultStatus
-from src.anpr.dataset import PreparedRecord
+from src.anpr.dataset import PreparedRecord, summarize_evidence_assurance
 from src.anpr.validation import normalize_plate_text
 
 
@@ -175,9 +175,15 @@ def evaluate_predictions(
                 raise EvaluationError("Prediction normalized text differs from its raw OCR evidence.")
 
     conditions = sorted({condition for record in records for condition in record.conditions})
+    assurance = summarize_evidence_assurance([record.model_dump(mode="json") for record in records])
     return {
         "schema_version": "1.0", "iou_threshold": float(iou_threshold),
         "matching_policy": "greedy_descending_iou_without_text_v1",
+        "reference_evidence": assurance,
+        "metric_interpretation": (
+            "accuracy_against_human_verified_labels"
+            if assurance["all_plate_texts_human_verified"] else "agreement_with_supplied_labels"
+        ),
         "overall": _score(records, predictions, iou_threshold),
         "by_condition": {
             condition: _score([record for record in records if condition in record.conditions], predictions, iou_threshold)

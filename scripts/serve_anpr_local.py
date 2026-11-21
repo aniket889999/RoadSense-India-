@@ -1,4 +1,4 @@
-"""Launch the local ANPR API with the verified Witvix detector and adapted OCR."""
+"""Launch the local ANPR API with RapidOCR review suggestions or adapted EasyOCR."""
 from __future__ import annotations
 
 import argparse
@@ -17,11 +17,26 @@ DEFAULTS = {
 }
 
 
+def build_environment(engine: str, device: str, inherited=None):
+    if engine not in ("rapidocr", "easyocr"):
+        raise ValueError("Select rapidocr or easyocr explicitly.")
+    env = {**(os.environ if inherited is None else inherited), **DEFAULTS,
+           "ROADSENSE_ANPR_DEVICE": device, "ROADSENSE_ANPR_OCR_ENGINE": engine}
+    if engine == "rapidocr":
+        env["ROADSENSE_ANPR_OCR_MODEL_DIR"] = "models/rapidocr"
+        env["ROADSENSE_ANPR_OCR_CROP_VIEW"] = "resized_bgr"
+        env.pop("ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS", None)
+        env.pop("ROADSENSE_ANPR_OCR_RECOGNIZER_SHA256", None)
+    return env
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--device", choices=("mps", "cpu", "cuda"), default="mps")
+    parser.add_argument("--engine", choices=("rapidocr", "easyocr"), default="rapidocr",
+                        help="RapidOCR uses CPU OCR and keeps every read for human review; device selects the plate detector.")
     args = parser.parse_args()
-    env = {**os.environ, **DEFAULTS, "ROADSENSE_ANPR_DEVICE": args.device}
+    env = build_environment(args.engine, args.device)
     os.chdir(ROOT)
     os.execve(str(ROOT / ".venv/bin/python"), [str(ROOT / ".venv/bin/python"), "-m", "uvicorn", "services.api.app.main:app", "--host", "127.0.0.1", "--port", str(args.port)], env)

@@ -432,6 +432,10 @@ def test_rapidocr_recognizer_orders_two_line_boxes_and_keeps_review_only_confide
     rapid_dir.mkdir(parents=True)
     for fname in RAPIDOCR_REQUIRED_ONNX_FILES:
         (rapid_dir / fname).write_bytes(b"fake-onnx-model-bytes")
+    monkeypatch.setattr("src.anpr.ocr.RAPIDOCR_EXPECTED_SHA256", {
+        fname: hashlib.sha256(b"fake-onnx-model-bytes").hexdigest()
+        for fname in RAPIDOCR_REQUIRED_ONNX_FILES
+    })
 
     init_calls = []
 

@@ -45,6 +45,11 @@ RAPIDOCR_REQUIRED_ONNX_FILES = (
     "ch_ppocr_mobile_v2.0_cls_infer.onnx",
     "ch_PP-OCRv4_rec_infer.onnx",
 )
+RAPIDOCR_EXPECTED_SHA256 = {
+    "ch_PP-OCRv4_det_infer.onnx": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+    "ch_ppocr_mobile_v2.0_cls_infer.onnx": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
+    "ch_PP-OCRv4_rec_infer.onnx": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+}
 _OCR_WEIGHT_EXTENSIONS = {".pth", ".pt"}
 _ROW_MERGE_HEIGHT_RATIO = 0.55
 
@@ -384,6 +389,8 @@ def _verify_local_rapidocr_assets(model_dir: Path) -> List[Path]:
             raise RuntimeUnavailable(
                 f"RapidOCR ONNX asset must be a non-empty regular file: {file_path}"
             )
+        if _compute_file_sha256(file_path) != RAPIDOCR_EXPECTED_SHA256[filename]:
+            raise RuntimeUnavailable(f"RapidOCR asset SHA-256 mismatch: {filename}")
         onnx_files.append(file_path)
     return onnx_files
 

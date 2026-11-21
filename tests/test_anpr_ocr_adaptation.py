@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from src.anpr.ocr import EasyOcrPlateRecognizer
+from src.anpr.ocr import EasyOcrPlateRecognizer, RapidOcrPlateRecognizer, RAPIDOCR_REQUIRED_ONNX_FILES
 from src.anpr.runtime_contracts import RuntimeUnavailable
 from src.anpr.text_regions import plate_text_regions
 
@@ -53,6 +53,44 @@ def test_wrong_adapted_hash_is_rejected_before_model_loading(tmp_path):
     with pytest.raises(RuntimeUnavailable, match="SHA-256 mismatch"):
         EasyOcrPlateRecognizer(model_dir="models/easyocr", device="cpu", repo_root=root,
                                recognizer_weights="models/adapted.pth", recognizer_sha256="0" * 64)
+
+
+@pytest.mark.parametrize("tampered", RAPIDOCR_REQUIRED_ONNX_FILES)
+def test_each_rapidocr_asset_is_hash_checked_before_engine_construction(tmp_path, monkeypatch, tampered):
+    root, _, _ = assets(tmp_path)
+    directory = root / "models/rapidocr"
+    directory.mkdir()
+    for filename in RAPIDOCR_REQUIRED_ONNX_FILES:
+        (directory / filename).write_bytes(b"trusted-fixture")
+    monkeypatch.setattr("src.anpr.ocr.RAPIDOCR_EXPECTED_SHA256", {
+        filename: hashlib.sha256(b"trusted-fixture").hexdigest()
+        for filename in RAPIDOCR_REQUIRED_ONNX_FILES
+    })
+    (directory / tampered).write_bytes(b"tampered")
+    monkeypatch.setitem(sys.modules, "rapidocr_onnxruntime", SimpleNamespace(RapidOCR=lambda **k: pytest.fail("Loaded a tampered model")))
+    with pytest.raises(RuntimeUnavailable, match="SHA-256 mismatch"):
+        RapidOcrPlateRecognizer(model_dir="models/rapidocr", repo_root=root)
+
+
+def test_rapidocr_launcher_overrides_stale_easyocr_settings_without_changing_parent():
+    from scripts.serve_anpr_local import build_environment
+    inherited = {"PATH": "unchanged", "ROADSENSE_ANPR_OCR_ENGINE": "easyocr",
+                 "ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS": "old.pth"}
+    actual = build_environment("rapidocr", "mps", inherited)
+    assert actual["PATH"] == "unchanged"
+    assert actual["ROADSENSE_ANPR_OCR_ENGINE"] == "rapidocr"
+    assert actual["ROADSENSE_ANPR_OCR_MODEL_DIR"] == "models/rapidocr"
+    assert actual["ROADSENSE_ANPR_OCR_CROP_VIEW"] == "resized_bgr"
+    assert "ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS" not in actual
+    assert inherited["ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS"] == "old.pth"
+
+
+def test_easyocr_launcher_preserves_the_adapted_model_option():
+    from scripts.serve_anpr_local import build_environment
+    actual = build_environment("easyocr", "cpu", {})
+    assert actual["ROADSENSE_ANPR_OCR_ENGINE"] == "easyocr"
+    assert actual["ROADSENSE_ANPR_OCR_MODEL_DIR"] == "models/easyocr"
+    assert actual["ROADSENSE_ANPR_OCR_RECOGNIZER_SHA256"] == "c72eab9cc00d2aff5a2eb006be5251d346d3be02de225db92aacbf08ad615fd3"
 
 
 @pytest.mark.parametrize("path,digest", [("models/adapted.pth", ""), ("", "0" * 64)])

@@ -91,13 +91,16 @@ Git. No real plate strings or images are included in this document.
 From the repository root, with the staged local assets present:
 
 ```bash
-.venv/bin/python scripts/serve_anpr_local.py
+.venv/bin/python scripts/serve_anpr_local.py --engine easyocr
 ```
 
-This starts the existing API on `127.0.0.1:8000`, with the pinned detector,
+This explicitly selects the adapted EasyOCR engine and starts the existing API on `127.0.0.1:8000`, with the pinned detector,
 original-BGR crops and adapted recognizer. Use `--device cpu` for explicit CPU
 inference, or `--port` to select another API port. Start the dashboard separately
 with `npm run start` from `apps/web` after its production build.
+The launcher's newer default is review-only RapidOCR following the
+[model comparison](ocr_model_comparison_results.md); `--engine easyocr` retains
+the adapted model described in this report.
 
 The adapter verifies both the adapted model path under `models/` and its SHA-256
 before loading tensor-only weights with strict parameter matching. Official

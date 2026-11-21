@@ -221,3 +221,30 @@ ROADSENSE_ANPR_DEVICE=mps \
 2. Address the remaining `24.07%` CER (`28.10%` on two-line plates, `38.27%` on
    low-light plates) by fine-tuning the PP-OCRv4 SVTR recognizer or adding
    4-corner plate rectification where corner annotations are available.
+
+### Integrated local launcher
+
+The dedicated API launcher now selects the higher-agreement RapidOCR profile by
+default, using the same `resized_bgr` setting as the frozen comparison:
+
+```bash
+.venv/bin/python scripts/serve_anpr_local.py
+```
+
+The detector uses the explicitly selected device (`mps` by default), while ONNX
+OCR runs on CPU. Every RapidOCR reading remains a review suggestion. A missing
+OCR confidence in this profile is intentional and does not indicate that the
+recognition service failed.
+
+Use `--engine easyocr` to select the preserved adapted EasyOCR profile instead.
+The generic `build_local_runtime()` default remains EasyOCR; only this explicit
+local launcher defaults to RapidOCR. Engine selection replaces stale OCR model
+directory/crop settings and removes incompatible EasyOCR override variables.
+
+All three ONNX assets are now SHA-256 checked against the identities recorded
+above before engine construction. Changed, missing or symlinked models fail
+closed. Runtime inference remains offline and no assets are included in Git.
+Focused ANPR/intake/API/OpenAPI verification after integration: 118 tests passed;
+changed Python modules compiled and whitespace checks passed.
+A real HTTP image request to the launched API returned 200, reproduced the
+frozen RapidOCR text for the demonstration image and retained review-only status.

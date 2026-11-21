@@ -92,8 +92,9 @@ Latest OCR updates:
   training crops increased validation complete-read agreement from `3/94` to
   `22/94` (`23.40%`) and reduced CER from `45.19%` to `30.09%`. The detector is
   unchanged; the held-out test split remains untouched. Use
-  `scripts/serve_anpr_local.py` to launch the API with the pinned adapted
-  EasyOCR checkpoint already staged locally, or set
+  `scripts/serve_anpr_local.py --engine easyocr` to launch the API with the pinned adapted
+  EasyOCR checkpoint already staged locally. The launcher defaults to review-only
+  RapidOCR with `resized_bgr` crops; manual configuration can also set
   `ROADSENSE_ANPR_OCR_ENGINE=rapidocr` with
   `ROADSENSE_ANPR_OCR_MODEL_DIR=models/rapidocr` to use the review-only
   RapidOCR adapter.

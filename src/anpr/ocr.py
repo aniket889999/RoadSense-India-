@@ -32,11 +32,18 @@ ENV_OCR_MODEL_DIR = "ROADSENSE_ANPR_OCR_MODEL_DIR"
 ENV_OCR_CROP_VIEW = "ROADSENSE_ANPR_OCR_CROP_VIEW"
 ENV_OCR_RECOGNIZER_WEIGHTS = "ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS"
 ENV_OCR_RECOGNIZER_SHA256 = "ROADSENSE_ANPR_OCR_RECOGNIZER_SHA256"
+ENV_OCR_ENGINE = "ROADSENSE_ANPR_OCR_ENGINE"
+SUPPORTED_OCR_ENGINES = ("easyocr", "rapidocr")
 SUPPORTED_OCR_CROP_VIEWS = (
     "original_bgr",
     "resized_bgr",
     "grayscale",
     "enhanced_grayscale",
+)
+RAPIDOCR_REQUIRED_ONNX_FILES = (
+    "ch_PP-OCRv4_det_infer.onnx",
+    "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "ch_PP-OCRv4_rec_infer.onnx",
 )
 _OCR_WEIGHT_EXTENSIONS = {".pth", ".pt"}
 _ROW_MERGE_HEIGHT_RATIO = 0.55
@@ -355,4 +362,154 @@ class EasyOcrPlateRecognizer:
                 if fallback_read.raw_text.strip():
                     return fallback_read
 
+        return read
+
+
+def _verify_local_rapidocr_assets(model_dir: Path) -> List[Path]:
+    """Verify the confined RapidOCR model directory contains the 3 required PP-OCRv4 ONNX files."""
+    onnx_files: List[Path] = []
+    for filename in RAPIDOCR_REQUIRED_ONNX_FILES:
+        file_path = model_dir / filename
+        try:
+            info = os.lstat(file_path)
+        except OSError as exc:
+            raise RuntimeUnavailable(
+                f"Required RapidOCR ONNX asset missing or unreadable at {file_path}: {exc}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise RuntimeUnavailable(
+                f"ROADSENSE_ANPR_OCR_MODEL_DIR contains a forbidden symlink asset: {file_path}"
+            )
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+            raise RuntimeUnavailable(
+                f"RapidOCR ONNX asset must be a non-empty regular file: {file_path}"
+            )
+        onnx_files.append(file_path)
+    return onnx_files
+
+
+class RapidOcrPlateRecognizer:
+    """Offline RapidOCR (PP-OCRv4 ONNX Runtime) plate recognizer with two-line row assembly.
+
+    By default ``review_only=True`` returns ``confidence=None`` in ``OcrRead`` so
+    all non-empty candidate reads remain reviewable (``NEEDS_REVIEW`` with
+    ``OCR_CONFIDENCE_MISSING``) rather than silently reusing EasyOCR's
+    uncalibrated 0.75 score threshold across a different OCR engine scale.
+    """
+
+    def __init__(
+        self,
+        *,
+        model_dir: Optional[str] = None,
+        repo_root: Optional[Path] = None,
+        crop_view: Optional[str] = None,
+        review_only: bool = True,
+    ) -> None:
+        raw_crop_view = (
+            os.environ.get(ENV_OCR_CROP_VIEW, "resized_bgr")
+            if crop_view is None
+            else crop_view
+        )
+        if not isinstance(raw_crop_view, str) or raw_crop_view.strip() not in SUPPORTED_OCR_CROP_VIEWS:
+            raise ValueError(
+                f"crop_view must be one of {SUPPORTED_OCR_CROP_VIEWS}, got {raw_crop_view!r}."
+            )
+        validated_crop_view = raw_crop_view.strip()
+
+        raw_model_dir = (
+            os.environ.get(ENV_OCR_MODEL_DIR, "") if model_dir is None else model_dir
+        )
+        verified_dir = verify_confinement_under_models(
+            raw_model_dir,
+            repo_root=repo_root,
+            expect_directory=True,
+            setting_name=ENV_OCR_MODEL_DIR,
+        )
+        weight_files = _verify_local_rapidocr_assets(verified_dir)
+
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as exc:
+            raise RuntimeUnavailable(
+                "rapidocr_onnxruntime is not installed in the local Python environment."
+            ) from exc
+
+        det_path, cls_path, rec_path = weight_files
+        try:
+            engine = RapidOCR(
+                det_model_path=str(det_path),
+                cls_model_path=str(cls_path),
+                rec_model_path=str(rec_path),
+            )
+        except Exception as exc:
+            raise RuntimeUnavailable(
+                f"Unable to initialize local RapidOCR engine from {verified_dir}: {exc}"
+            ) from exc
+
+        self.engine_name = "rapidocr"
+        self.model_dir = verified_dir
+        self.weight_files = tuple(weight_files)
+        self.device = "cpu"
+        self.languages = ("en",)
+        self.crop_view = validated_crop_view
+        self.review_only = bool(review_only)
+        self._engine = engine
+
+    def _run_rapidocr_on_view(self, view_image: np.ndarray) -> OcrRead:
+        try:
+            detections, _ = self._engine(view_image)
+        except Exception as exc:
+            raise RuntimeUnavailable(f"RapidOCR inference failed: {exc}") from exc
+
+        if detections:
+            return order_and_merge_ocr_detections(detections)
+
+        # If DBNet found no text polygon on a tightly cropped single-line plate,
+        # run direct SVTR/CRNN recognition once on the whole crop.
+        try:
+            rec_only, _ = self._engine(
+                view_image,
+                use_det=False,
+                use_cls=False,
+                use_rec=True,
+            )
+        except Exception as exc:
+            raise RuntimeUnavailable(f"RapidOCR rec-only fallback failed: {exc}") from exc
+
+        if rec_only:
+            height, width = view_image.shape[:2]
+            synthetic_spans = []
+            for item in rec_only:
+                if (
+                    isinstance(item, (list, tuple))
+                    and len(item) >= 2
+                    and isinstance(item[0], str)
+                    and item[0].strip()
+                ):
+                    synthetic_spans.append(
+                        (
+                            [[0, 0], [width, 0], [width, height], [0, height]],
+                            item[0],
+                            item[1],
+                        )
+                    )
+            if synthetic_spans:
+                return order_and_merge_ocr_detections(synthetic_spans)
+
+        return OcrRead(raw_text="", confidence=None)
+
+    def recognize(self, plate_bgr: np.ndarray) -> OcrRead:
+        """Run offline RapidOCR on the configured bounded crop view."""
+        validate_bgr_image(plate_bgr, label="plate_bgr")
+        preprocessed = preprocess_plate_crop(plate_bgr)
+        primary_image = getattr(preprocessed, self.crop_view)
+
+        read = self._run_rapidocr_on_view(primary_image)
+        if not read.raw_text.strip() and self.crop_view != "original_bgr":
+            fallback_read = self._run_rapidocr_on_view(preprocessed.original_bgr)
+            if fallback_read.raw_text.strip():
+                read = fallback_read
+
+        if self.review_only:
+            return OcrRead(raw_text=read.raw_text, confidence=None)
         return read

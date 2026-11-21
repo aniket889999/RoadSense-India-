@@ -13,6 +13,7 @@ models/*.pth
 models/**/*.pt
 models/**/*.pth
 models/*.onnx
+models/**/*.onnx
 models/*.engine
 !models/.gitkeep
 outputs/*

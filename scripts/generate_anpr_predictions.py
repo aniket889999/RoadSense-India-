@@ -198,6 +198,8 @@ def generate_split_predictions(
                 and Path(getattr(rec, "model_dir")).is_relative_to(repo_root.resolve())
                 else str(getattr(rec, "model_dir", ""))
             ),
+            "ocr_engine": getattr(rec, "engine_name", "easyocr"),
+            "ocr_review_only": getattr(rec, "review_only", False),
             "ocr_device": getattr(rec, "device", None),
             "ocr_crop_view": getattr(rec, "crop_view", None),
             "ocr_adapted_checkpoint_sha256": getattr(rec, "recognizer_checkpoint_sha256", None),
@@ -233,6 +235,8 @@ def generate_split_predictions(
             "torchvision": _installed_version("torchvision"),
             "ultralytics": _installed_version("ultralytics"),
             "easyocr": _installed_version("easyocr"),
+            "rapidocr_onnxruntime": _installed_version("rapidocr_onnxruntime"),
+            "onnxruntime": _installed_version("onnxruntime"),
             "opencv_python_headless": _installed_version("opencv-python-headless"),
         },
     }

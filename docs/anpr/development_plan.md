@@ -77,11 +77,26 @@ remain unverified until the required local packages and assets are available.
 
 ## Verified progress
 
-Latest OCR update: [Local recognizer adaptation](ocr_adaptation_results.md).
-The selected checkpoint increased validation complete-read agreement from 3/94
-to 22/94 (23.40%) and reduced CER from 45.19% to 30.09%. The detector is unchanged;
-the held-out test split remains untouched. Use `scripts/serve_anpr_local.py` to
-launch the API with the pinned adapted checkpoint already staged locally.
+Latest OCR updates:
+- [Recognition model comparison (EasyOCR vs. RapidOCR PP-OCRv4 ONNX)](ocr_model_comparison_results.md):
+  Off-the-shelf `rapidocr_onnxruntime==1.4.4` (`PP-OCRv4` ONNX staged offline
+  under `models/rapidocr/`, selected on the 40-image training subset where exact
+  reads rose from `5/50` to `19/50`) achieved **`37/94` (`39.36%`)** exact
+  full-plate agreement and **`24.07%` CER** (`220/914` character edits; `15/31`
+  = `48.39%` exact on `single_line`, `22/63` = `34.92%` on `two_line`, `30/65` =
+  `46.15%` on `other`/day, `7/29` = `24.14%` on `low_light`) across all 71
+  validation images in review-only mode (`confidence=None`, `0` wrong accepted
+  reads).
+- [Local recognizer adaptation](ocr_adaptation_results.md):
+  Fine-tuning the existing EasyOCR `english_g2` checkpoint on single-line
+  training crops increased validation complete-read agreement from `3/94` to
+  `22/94` (`23.40%`) and reduced CER from `45.19%` to `30.09%`. The detector is
+  unchanged; the held-out test split remains untouched. Use
+  `scripts/serve_anpr_local.py` to launch the API with the pinned adapted
+  EasyOCR checkpoint already staged locally, or set
+  `ROADSENSE_ANPR_OCR_ENGINE=rapidocr` with
+  `ROADSENSE_ANPR_OCR_MODEL_DIR=models/rapidocr` to use the review-only
+  RapidOCR adapter.
 
 - Module 1 backend: `aaf9162`, 18 focused tests passed.
 - Module 1 frontend: reviewed against the Python contract and independently

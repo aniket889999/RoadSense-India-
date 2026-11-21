@@ -9,6 +9,9 @@ data/interim/*
 data/processed/*
 !data/processed/.gitkeep
 models/*.pt
+models/*.pth
+models/**/*.pt
+models/**/*.pth
 models/*.onnx
 models/*.engine
 !models/.gitkeep

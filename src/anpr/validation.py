@@ -56,6 +56,7 @@ def assess_ocr_read(
     ocr_confidence: float | None,
     *,
     minimum_confidence: float = 0.75,
+    review_only: bool = False,
 ) -> OcrAssessment:
     """Preserve OCR evidence and derive a candidate/review decision.
 
@@ -63,6 +64,8 @@ def assess_ocr_read(
     An OCR engine score is not a calibrated probability of correct recognition.
     """
     threshold = _validate_confidence(minimum_confidence, "minimum_confidence")
+    if not isinstance(review_only, bool):
+        raise ValueError("review_only must be a boolean.")
     confidence = (
         None
         if ocr_confidence is None
@@ -76,7 +79,9 @@ def assess_ocr_read(
         reasons.append(ReasonCode.NO_TEXT)
         recognition_status = ReadStatus.UNREADABLE
     else:
-        if confidence is None:
+        if review_only:
+            reasons.append(ReasonCode.OCR_REVIEW_ONLY)
+        elif confidence is None:
             reasons.append(ReasonCode.OCR_CONFIDENCE_MISSING)
         elif confidence < threshold:
             reasons.append(ReasonCode.LOW_OCR_CONFIDENCE)

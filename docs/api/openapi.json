@@ -2754,9 +2754,12 @@
         "properties": {
           "schema_version": {
             "type": "string",
-            "const": "1.0",
+            "enum": [
+              "1.0",
+              "1.1"
+            ],
             "title": "Schema Version",
-            "default": "1.0"
+            "default": "1.1"
           },
           "request_id": {
             "type": "string",
@@ -5160,6 +5163,73 @@
         "title": "PlateBox",
         "description": "Half-open x/y pixel bounds in the EXIF-normalized source image."
       },
+      "PlateImageQuality": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "opencv_review_v1",
+            "title": "Method",
+            "default": "opencv_review_v1"
+          },
+          "crop_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Crop Width"
+          },
+          "crop_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Crop Height"
+          },
+          "sharpness_score": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Sharpness Score"
+          },
+          "mean_brightness": {
+            "type": "number",
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Mean Brightness"
+          },
+          "clipped_highlight_fraction": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Clipped Highlight Fraction"
+          },
+          "observed_line_tilt_degrees": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 35.0,
+                "minimum": -35.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Line Tilt Degrees"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/QualityFlag"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "crop_width",
+          "crop_height",
+          "sharpness_score",
+          "mean_brightness",
+          "clipped_highlight_fraction"
+        ],
+        "title": "PlateImageQuality"
+      },
       "PlateResult": {
         "properties": {
           "raw_text": {
@@ -5219,6 +5289,16 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Detection Confidence"
+          },
+          "image_quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlateImageQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -5258,6 +5338,17 @@
           "y"
         ],
         "title": "PointSchema"
+      },
+      "QualityFlag": {
+        "type": "string",
+        "enum": [
+          "SMALL_CROP",
+          "LOW_SHARPNESS",
+          "DARK_CROP",
+          "CLIPPED_HIGHLIGHTS",
+          "TILT_OBSERVED"
+        ],
+        "title": "QualityFlag"
       },
       "RawDetectionResponse": {
         "properties": {
@@ -5360,7 +5451,8 @@
           "NO_TEXT",
           "OCR_CONFIDENCE_MISSING",
           "LOW_OCR_CONFIDENCE",
-          "FORMAT_NOT_SUPPORTED"
+          "FORMAT_NOT_SUPPORTED",
+          "OCR_REVIEW_ONLY"
         ],
         "title": "ReasonCode"
       },

@@ -518,5 +518,5 @@ class RapidOcrPlateRecognizer:
                 read = fallback_read
 
         if self.review_only:
-            return OcrRead(raw_text=read.raw_text, confidence=None)
+            return OcrRead(raw_text=read.raw_text, confidence=None, review_only=True)
         return read

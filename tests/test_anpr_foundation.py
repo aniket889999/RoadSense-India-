@@ -70,7 +70,7 @@ def test_result_round_trip_preserves_bbox_and_ocr_fields():
         processing_ms=12.5,
     )
     payload = result.model_dump(mode="json")
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["plates"][0]["bbox"] == {"x1": 10, "y1": 20, "x2": 180, "y2": 75}
     assert payload["plates"][0]["recognition_status"] == "READ"
     assert AnprImageResult.model_validate_json(result.model_dump_json()) == result

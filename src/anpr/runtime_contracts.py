@@ -29,6 +29,7 @@ class PlateDetection:
 class OcrRead:
     raw_text: str
     confidence: float | None
+    review_only: bool = False
 
 
 class PlateDetector(Protocol):

@@ -37,6 +37,7 @@ class ReasonCode(str, Enum):
     OCR_CONFIDENCE_MISSING = "OCR_CONFIDENCE_MISSING"
     LOW_OCR_CONFIDENCE = "LOW_OCR_CONFIDENCE"
     FORMAT_NOT_SUPPORTED = "FORMAT_NOT_SUPPORTED"
+    OCR_REVIEW_ONLY = "OCR_REVIEW_ONLY"
 
 
 class AnprContract(BaseModel):
@@ -56,6 +57,25 @@ class PlateBox(AnprContract):
         if self.x2 <= self.x1 or self.y2 <= self.y1:
             raise ValueError("Plate box must have positive width and height.")
         return self
+
+
+class QualityFlag(str, Enum):
+    SMALL_CROP = "SMALL_CROP"
+    LOW_SHARPNESS = "LOW_SHARPNESS"
+    DARK_CROP = "DARK_CROP"
+    CLIPPED_HIGHLIGHTS = "CLIPPED_HIGHLIGHTS"
+    TILT_OBSERVED = "TILT_OBSERVED"
+
+
+class PlateImageQuality(AnprContract):
+    method: Literal["opencv_review_v1"] = "opencv_review_v1"
+    crop_width: int = Field(strict=True, gt=0)
+    crop_height: int = Field(strict=True, gt=0)
+    sharpness_score: float = Field(ge=0)
+    mean_brightness: float = Field(ge=0, le=255)
+    clipped_highlight_fraction: float = Field(ge=0, le=1)
+    observed_line_tilt_degrees: float | None = Field(default=None, ge=-35, le=35)
+    warnings: list[QualityFlag] = Field(default_factory=list)
 
 
 class OcrAssessment(AnprContract):
@@ -93,10 +113,11 @@ class PlateResult(OcrAssessment):
     plate_id: Identifier
     bbox: PlateBox
     detection_confidence: Confidence
+    image_quality: PlateImageQuality | None = None
 
 
 class AnprImageResult(AnprContract):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     request_id: Identifier
     status: ResultStatus
     image_width: int = Field(strict=True, gt=0)

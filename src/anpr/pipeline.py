@@ -174,12 +174,15 @@ class AnprImageService:
             if not isinstance(ocr, OcrRead):
                 raise TypeError("Recognizer returned an incompatible OCR result.")
             assessment = assess_ocr_read(
-                ocr.raw_text, ocr.confidence, minimum_confidence=self.minimum_confidence
+                ocr.raw_text, ocr.confidence, minimum_confidence=self.minimum_confidence,
+                review_only=ocr.review_only,
             )
+            from src.anpr.quality import assess_plate_quality
             results.append(PlateResult(
                 **assessment.model_dump(),
                 plate_id=f"plate-{index}",
                 bbox=box,
                 detection_confidence=detection.confidence,
+                image_quality=assess_plate_quality(crop),
             ))
         return results

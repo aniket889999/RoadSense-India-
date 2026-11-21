@@ -245,6 +245,9 @@ def test_execute_runs_val_only_training_records_provenance_and_never_touches_tes
 
         def train(self, **kwargs):
             train_calls.append(kwargs)
+            # Simulate Ultralytics writing transient train.cache and val.cache into labels/
+            (dataset_dir / "labels" / "train.cache").write_bytes(b"ultralytics-train-cache")
+            (dataset_dir / "labels" / "val.cache").write_bytes(b"ultralytics-val-cache")
             run_dir = Path(kwargs["project"]) / kwargs["name"]
             weights_dir = run_dir / "weights"
             weights_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +268,8 @@ def test_execute_runs_val_only_training_records_provenance_and_never_touches_tes
         repo_root=repo_root,
         yolo_loader=FakeYOLO,
     )
+    assert not (dataset_dir / "labels" / "train.cache").exists()
+    assert not (dataset_dir / "labels" / "val.cache").exists()
 
     assert loaded_weights == [str(repo_root / "models" / "yolov8n.pt")]
     assert len(train_calls) == 1

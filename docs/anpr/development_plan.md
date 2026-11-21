@@ -108,9 +108,22 @@ remain unverified until the required local packages and assets are available.
   schema 1.1 records mixed publisher labels and unverified capture-session
   independence explicitly; these are not certified ground-truth labels or capture
   groups. See [Witvix intake results](witvix_intake_results.md).
-  Training, OCR asset setup and held-out inference remain pending.
 - Combined ANPR/intake/API/OpenAPI verification after this intake: 102 tests
   passed, changed Python modules compiled, and whitespace checks passed.
+- Module 3B real plate-detector baseline training completed on Apple M4 MPS
+  (`configs/training/anpr_witvix_mps_baseline_v1.yaml`, run
+  `outputs/training/anpr/anpr_witvix_detector_mps_v1`, 50/50 epochs in
+  `2107.23s`). The trained single-class `license_plate` checkpoint
+  `weights/best.pt` (SHA-256
+  `37eae626c753e3742bc27437f6c7671898315a4591e2d0cf92e98d996b0421db`, peak
+  epoch 36) recorded `val` box precision `0.99752` (`0.998` fused), recall
+  `0.94681` (`0.947` fused), `mAP50` `0.99217` (`0.992` fused) and `mAP50-95`
+  `0.84655` (`0.847` fused); final epoch 50 (`weights/last.pt`) recorded `val`
+  precision `0.97894`, recall `0.98893`, `mAP50` `0.99347` and `mAP50-95`
+  `0.83607`. Held-out `test` split evaluation was not performed, and OCR /
+  end-to-end plate reading remain blocked by the absent `easyocr` package and
+  offline OCR weights. See
+  [Witvix detector baseline results](witvix_detector_baseline_results.md).
 
 ## Module 1 shared result contract
 

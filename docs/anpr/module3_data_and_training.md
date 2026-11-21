@@ -1,13 +1,15 @@
 # Module 3: ANPR data, training and evaluation
 
 This module supplies tools to prepare transcribed images, fine-tune a dedicated
-plate detector, and score frozen predictions. It does not contain a trained plate
-checkpoint or a measured real-image accuracy result. The existing local
+plate detector, and score frozen predictions. The existing local
 `models/yolov8n.pt` base checkpoint matches the configured SHA-256. A limited
-Witvix truck-plate pilot is now prepared at
-`data/processed/witvix_anpr_pilot_v1`; its labels have mixed publisher provenance
-and capture-session independence is unverified. Training preflight passes;
-actual training has not started.
+Witvix truck-plate pilot is prepared at `data/processed/witvix_anpr_pilot_v1`;
+its labels have mixed publisher provenance and capture-session independence is
+unverified. A 50-epoch Apple M4 MPS detector baseline has been trained on the
+`train`/`val` splits (`outputs/training/anpr/anpr_witvix_detector_mps_v1`; see
+[Witvix detector baseline results](witvix_detector_baseline_results.md)),
+establishing validation plate-region detection metrics only. Held-out `test`
+evaluation and real-image OCR recognition have not yet been performed.
 
 ## Work split
 
@@ -149,12 +151,16 @@ from accuracy against human-verified references.
 
 ## Current limits
 
-Module 3 unit tests use synthetic fixtures and fake training engines. The real
-Witvix dataset has also passed preparation and training preflight. No real
-ANPR training or held-out inference has been run. Real image OCR still requires
-the EasyOCR package and local OCR model files. Downloads and installation are not
-performed by these tools. The earlier missing frontend SWC compiler is an
-independent environment issue and is not repaired by this module.
+Module 3 unit tests use synthetic fixtures and fake training engines. On the
+prepared Witvix pilot (`data/processed/witvix_anpr_pilot_v1`), the 50-epoch MPS
+plate-detector baseline (`anpr_witvix_detector_mps_v1`) has completed `train`/`val`
+optimization and validation logging; see
+[Witvix detector baseline results](witvix_detector_baseline_results.md).
+Held-out `test` split evaluation has not been run. Real image OCR and end-to-end
+plate text accuracy measurement still require the `easyocr` package and local
+OCR model files under `models/`. Downloads and installation are not performed by
+these tools. The earlier missing frontend SWC compiler is an independent
+environment issue and is not repaired by this module.
 
 The downloaded Witvix sample is audited separately in
 [Witvix intake results](witvix_intake_results.md); its annotations and source

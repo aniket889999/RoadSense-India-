@@ -458,6 +458,27 @@ def _assert_trained_model_is_single_plate_class(model: Any) -> None:
         raise AnprTrainingError(f"Trained plate detector class verification failed: {exc}") from exc
 
 
+def _remove_ultralytics_label_caches(dataset_dir: Path) -> None:
+    """Remove transient labels/*.cache files created by Ultralytics during train/val."""
+    labels_dir = dataset_dir / "labels"
+    if not labels_dir.is_dir() or labels_dir.is_symlink():
+        return
+    for split_name in ("train", "val"):
+        cache_file = labels_dir / f"{split_name}.cache"
+        try:
+            info = os.lstat(cache_file)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise AnprTrainingError(f"Unable to inspect Ultralytics cache file {cache_file}: {exc}") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise AnprTrainingError(f"Refusing to remove non-regular cache entry: {cache_file}")
+        try:
+            cache_file.unlink()
+        except OSError as exc:
+            raise AnprTrainingError(f"Unable to remove Ultralytics cache file {cache_file}: {exc}") from exc
+
+
 def _verify_plan_inputs(plan: AnprTrainingPlan) -> None:
     if _compute_regular_file_sha256(plan.config_path, "training config") != plan.config_sha256:
         raise AnprTrainingError("Training configuration changed after preflight.")
@@ -466,93 +487,16 @@ def _verify_plan_inputs(plan: AnprTrainingPlan) -> None:
         raise AnprTrainingError("Prepared ANPR dataset changed after preflight.")
 
 
-def execute_training_plan(
+def finalize_completed_training_run(
     plan: AnprTrainingPlan,
     *,
-    yolo_loader: Optional[Callable[[str], Any]] = None,
+    actual_run_dir: Path,
+    training_git_sha: str,
+    started_wall: str,
+    completed_wall: str,
+    elapsed_seconds: float,
 ) -> Dict[str, Any]:
-    """Execute dedicated plate-detector training and write verified provenance metadata.
-
-    Trains using local base weights, validates strictly on the ``val`` split,
-    and never invokes ``test`` split evaluation.
-    """
-    if plan.run_directory.exists() or plan.run_directory.is_symlink():
-        raise AnprTrainingError(
-            f"Training run directory already exists: {plan.run_directory}. "
-            "Refusing to overwrite prior training outputs."
-        )
-
-    # Re-verify base weights hash right before loading
-    current_base_sha = _compute_regular_file_sha256(plan.base_weights_path, label="base weights")
-    if current_base_sha != plan.base_weights_sha256:
-        raise AnprTrainingError("Base weights changed after preflight validation; aborting training.")
-
-    _verify_plan_inputs(plan)
-    training_git_sha = _resolve_git_sha(plan.repo_root)
-
-    _validate_device_setting(plan.device, check_hardware=(yolo_loader is None))
-
-    if yolo_loader is None:
-        try:
-            from ultralytics import YOLO as _YOLO
-        except ImportError as exc:
-            raise AnprTrainingError(
-                "Ultralytics is required for --execute training, but it is not installed locally."
-            ) from exc
-        loader: Callable[[str], Any] = _YOLO
-    else:
-        loader = yolo_loader
-
-    plan.output_project_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_no_symlink_chain_under_repo(plan.output_project_dir, plan.repo_root, "output project directory")
-
-    started_wall = datetime.now(timezone.utc).isoformat()
-    started_perf = time.perf_counter()
-
-    try:
-        model = loader(str(plan.base_weights_path))
-    except Exception as exc:
-        raise AnprTrainingError(
-            f"Unable to initialize YOLO from local base weights {plan.base_weights_path}: {exc}"
-        ) from exc
-
-    train_kwargs: Dict[str, Any] = {
-        "data": str(plan.dataset_yaml_path),
-        "epochs": plan.epochs,
-        "batch": plan.batch,
-        "patience": plan.patience,
-        "device": plan.device,
-        "imgsz": plan.image_size,
-        "seed": plan.seed,
-        "workers": plan.workers,
-        "project": str(plan.output_project_dir),
-        "name": plan.run_name,
-        "exist_ok": False,
-        "deterministic": True,
-        "val": True,
-        "split": "val",
-        "pretrained": True,
-        # Ultralytics AMP validation can fetch a separate reference checkpoint.
-        "amp": False,
-        "verbose": False,
-        **plan.augmentation,
-    }
-
-    try:
-        model.train(**train_kwargs)
-    except Exception as exc:
-        raise AnprTrainingError(f"Plate detector training execution failed: {exc}") from exc
-
-    elapsed_seconds = round(max(0.0, time.perf_counter() - started_perf), 4)
-    completed_wall = datetime.now(timezone.utc).isoformat()
-
-    trainer = getattr(model, "trainer", None)
-    save_dir_attr = getattr(trainer, "save_dir", None) if trainer is not None else None
-    actual_run_dir = (
-        Path(os.path.abspath(os.fspath(save_dir_attr)))
-        if save_dir_attr is not None
-        else plan.run_directory
-    )
+    """Verify post-training dataset integrity, hash required artifacts, and write model_metadata.json."""
     if actual_run_dir != plan.run_directory:
         raise AnprTrainingError(
             f"Trainer save_dir ({actual_run_dir}) did not match expected run directory ({plan.run_directory})."
@@ -562,7 +506,7 @@ def execute_training_plan(
             f"Expected training output directory was not created as a real directory: {actual_run_dir}"
         )
 
-    _assert_trained_model_is_single_plate_class(model)
+    _remove_ultralytics_label_caches(plan.dataset_dir)
     _verify_plan_inputs(plan)
 
     # Copy config and dataset preparation metadata into the run directory before hashing all required artifacts
@@ -641,6 +585,106 @@ def execute_training_plan(
     metadata_path = actual_run_dir / "model_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return metadata
+
+
+def execute_training_plan(
+    plan: AnprTrainingPlan,
+    *,
+    yolo_loader: Optional[Callable[[str], Any]] = None,
+) -> Dict[str, Any]:
+    """Execute dedicated plate-detector training and write verified provenance metadata.
+
+    Trains using local base weights, validates strictly on the ``val`` split,
+    and never invokes ``test`` split evaluation.
+    """
+    if plan.run_directory.exists() or plan.run_directory.is_symlink():
+        raise AnprTrainingError(
+            f"Training run directory already exists: {plan.run_directory}. "
+            "Refusing to overwrite prior training outputs."
+        )
+
+    # Re-verify base weights hash right before loading
+    current_base_sha = _compute_regular_file_sha256(plan.base_weights_path, label="base weights")
+    if current_base_sha != plan.base_weights_sha256:
+        raise AnprTrainingError("Base weights changed after preflight validation; aborting training.")
+
+    _verify_plan_inputs(plan)
+    training_git_sha = _resolve_git_sha(plan.repo_root)
+
+    _validate_device_setting(plan.device, check_hardware=(yolo_loader is None))
+
+    if yolo_loader is None:
+        try:
+            from ultralytics import YOLO as _YOLO
+        except ImportError as exc:
+            raise AnprTrainingError(
+                "Ultralytics is required for --execute training, but it is not installed locally."
+            ) from exc
+        loader: Callable[[str], Any] = _YOLO
+    else:
+        loader = yolo_loader
+
+    plan.output_project_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_no_symlink_chain_under_repo(plan.output_project_dir, plan.repo_root, "output project directory")
+
+    started_wall = datetime.now(timezone.utc).isoformat()
+    started_perf = time.perf_counter()
+
+    try:
+        model = loader(str(plan.base_weights_path))
+    except Exception as exc:
+        raise AnprTrainingError(
+            f"Unable to initialize YOLO from local base weights {plan.base_weights_path}: {exc}"
+        ) from exc
+
+    train_kwargs: Dict[str, Any] = {
+        "data": str(plan.dataset_yaml_path),
+        "epochs": plan.epochs,
+        "batch": plan.batch,
+        "patience": plan.patience,
+        "device": plan.device,
+        "imgsz": plan.image_size,
+        "seed": plan.seed,
+        "workers": plan.workers,
+        "project": str(plan.output_project_dir),
+        "name": plan.run_name,
+        "exist_ok": False,
+        "deterministic": True,
+        "val": True,
+        "split": "val",
+        "pretrained": True,
+        # Ultralytics AMP validation can fetch a separate reference checkpoint.
+        "amp": False,
+        "verbose": False,
+        **plan.augmentation,
+    }
+
+    try:
+        model.train(**train_kwargs)
+    except Exception as exc:
+        raise AnprTrainingError(f"Plate detector training execution failed: {exc}") from exc
+    finally:
+        _remove_ultralytics_label_caches(plan.dataset_dir)
+
+    elapsed_seconds = round(max(0.0, time.perf_counter() - started_perf), 4)
+    completed_wall = datetime.now(timezone.utc).isoformat()
+
+    trainer = getattr(model, "trainer", None)
+    save_dir_attr = getattr(trainer, "save_dir", None) if trainer is not None else None
+    actual_run_dir = (
+        Path(os.path.abspath(os.fspath(save_dir_attr)))
+        if save_dir_attr is not None
+        else plan.run_directory
+    )
+    _assert_trained_model_is_single_plate_class(model)
+    return finalize_completed_training_run(
+        plan,
+        actual_run_dir=actual_run_dir,
+        training_git_sha=training_git_sha,
+        started_wall=started_wall,
+        completed_wall=completed_wall,
+        elapsed_seconds=elapsed_seconds,
+    )
 
 
 def run_anpr_detector_training(

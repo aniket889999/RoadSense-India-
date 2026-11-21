@@ -77,6 +77,12 @@ remain unverified until the required local packages and assets are available.
 
 ## Verified progress
 
+Latest OCR update: [Local recognizer adaptation](ocr_adaptation_results.md).
+The selected checkpoint increased validation complete-read agreement from 3/94
+to 22/94 (23.40%) and reduced CER from 45.19% to 30.09%. The detector is unchanged;
+the held-out test split remains untouched. Use `scripts/serve_anpr_local.py` to
+launch the API with the pinned adapted checkpoint already staged locally.
+
 - Module 1 backend: `aaf9162`, 18 focused tests passed.
 - Module 1 frontend: reviewed against the Python contract and independently
   typechecked; committed as `6e4893f`.

@@ -30,6 +30,61 @@ parking occupancy and human-reviewed hazards provide the application context.
 Modules 2 onward receive exact file boundaries and adapter signatures in their
 own handoff prompts after Module 1 is reviewed. Do not start later modules early.
 
+### Module 2 file ownership and upload contract
+
+Codex owns `src/anpr/runtime_contracts.py`, `src/anpr/pipeline.py`,
+`services/api/app/routers/anpr.py`, application registration, API documentation,
+`tests/test_anpr_pipeline.py` and `services/api/tests/test_anpr_api.py`.
+Gemini owns `src/anpr/detector.py`, `src/anpr/preprocessing.py`,
+`src/anpr/ocr.py`, `src/anpr/local_runtime.py` and
+`tests/test_anpr_adapters.py`.
+
+Runtime interfaces are defined in `src/anpr/runtime_contracts.py`. Both adapters
+receive contiguous uint8 BGR arrays. Detector bounds must refer to the original,
+EXIF-normalized image; the pipeline passes a copied bounding-box crop to OCR.
+`build_local_runtime()` in `local_runtime.py` composes both adapters lazily.
+Missing local assets raise `RuntimeUnavailable`. Importing the API does not load
+weights or start OCR. These adapters do not install or download dependencies.
+
+`POST /api/v1/anpr/images/recognize` accepts **raw image bytes**, with
+`Content-Type: image/jpeg` or `image/png`. It deliberately does not use multipart,
+so the endpoint can enforce its streaming byte cap before decoding. The future
+frontend callback should use `fetch(url, {method: 'POST', headers:
+{'Content-Type': file.type}, body: file})`, not `FormData`.
+
+Encoded images are limited to 10 MiB, decoded images to 12 million pixels and
+8192 pixels per dimension, and detections to 16 per image. Decoding/model calls
+are serialized within a service instance; a busy instance rejects another call.
+Model execution runs off the API event loop. Images, crops and OCR text are not
+persisted by this endpoint. It returns the existing `AnprImageResult` contract.
+Corrupt/empty input returns HTTP 400, over-limit input 413, unsupported/mismatched
+type 415, and busy/failed recognition 503. Missing runtime assets return HTTP 200
+with `status: UNAVAILABLE`, warnings and no fabricated plate results.
+
+Local adapter configuration agreed with Gemini:
+
+- `ROADSENSE_ANPR_PLATE_WEIGHTS`: repository-relative checkpoint under `models/`.
+- `ROADSENSE_ANPR_PLATE_SHA256`: expected SHA-256 of the configured checkpoint.
+- `ROADSENSE_ANPR_OCR_MODEL_DIR`: repository-relative OCR assets under `models/`.
+- `ROADSENSE_ANPR_DEVICE`: explicit detector device; default CPU.
+
+The plate checkpoint must contain exactly one class named `license_plate`.
+The existing pothole/vehicle models are not substituted for missing plate weights.
+EasyOCR must disable automatic downloads. Actual OCR/plate detection and latency
+remain unverified until the required local packages and assets are available.
+
+## Verified progress
+
+- Module 1 backend: `aaf9162`, 18 focused tests passed.
+- Module 1 frontend: reviewed against the Python contract and independently
+  typechecked; committed as `6e4893f`.
+- Module 2 Codex work: endpoint, runtime interfaces and injected pipeline covered
+  by 42 passing focused tests (including the Module 1 and OpenAPI checks).
+- Module 2 Gemini adapter review and real-image verification are pending. The
+  local audit found EasyOCR absent and no configured plate-detector checkpoint.
+  Tests using injected adapters establish orchestration correctness, not ANPR
+  model accuracy or a completed real-image recognition demonstration.
+
 ## Module 1 shared result contract
 
 Source of truth: `src/anpr/contracts.py`. `AnprImageResult` serializes to:

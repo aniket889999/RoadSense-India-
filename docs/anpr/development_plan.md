@@ -13,6 +13,8 @@ parking occupancy and human-reviewed hazards provide the application context.
   stage, commit, push, install packages, or edit Codex-owned paths.
 - Run focused checks after a module. Run the complete test suite and frontend
   production build at integration milestones, without duplicate concurrent runs.
+- After reviewing a completed module, Codex pushes its verified commits to
+  `https://github.com/aniket889999/RoadSense-India-` on the feature branch.
 - Preserve `.agents/`, `.claude/`, existing stashes, media, datasets and weights.
 - Keep models and sample images local. No dependency downloads or training are
   part of Module 1. Training/download needs are assessed in the model module.
@@ -92,6 +94,13 @@ remain unverified until the required local packages and assets are available.
   and no configured plate-detector checkpoint. Tests with fake ML engines
   establish orchestration correctness, not ANPR accuracy or a completed real-image
   recognition demonstration.
+- Module 3 implementation and usage are documented in
+  [Data, training and evaluation](module3_data_and_training.md). Codex implements
+  grouped dataset preparation and offline metrics; Gemini supplies the dedicated
+  detector training wrapper. Actual training waits for a labelled ANPR dataset.
+- Module 3 combined verification passes 93 focused tests and Python compilation.
+  The local base checkpoint SHA matches its training config. A real project
+  dry-run stops before training because `anpr_india_v1` has not been prepared.
 
 ## Module 1 shared result contract
 

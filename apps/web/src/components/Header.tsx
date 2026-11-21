@@ -8,6 +8,7 @@ import {
   Upload,
   Activity,
   AlertCircle,
+  ScanLine,
 } from 'lucide-react';
 import { SystemHealth } from '../lib/types';
 
@@ -15,9 +16,10 @@ interface HeaderProps {
   health: SystemHealth | null;
   onOpenUpload: () => void;
   onOpenHealth: () => void;
+  context?: 'operations' | 'anpr';
 }
 
-export function Header({ health, onOpenUpload, onOpenHealth }: HeaderProps) {
+export function Header({ health, onOpenUpload, onOpenHealth, context = 'operations' }: HeaderProps) {
   return (
     <header className="h-16 border-b border-command-border bg-command-surface/90 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40">
       {/* Brand Identity */}
@@ -36,13 +38,20 @@ export function Header({ health, onOpenUpload, onOpenHealth }: HeaderProps) {
             </span>
           </div>
           <p className="text-[11px] text-command-muted tracking-tight">
-            Local Dashcam Inspection & Verification Engine
+            {context === 'anpr' ? 'Local number plate recognition & review' : 'Local Dashcam Inspection & Verification Engine'}
           </p>
         </div>
       </div>
 
       {/* Center Provenance & Hardware Status */}
       <div className="hidden lg:flex items-center space-x-4 text-xs font-mono">
+        {context === 'anpr' ? (
+          <div className="flex items-center space-x-2 bg-command-elevated px-3 py-1.5 rounded-md border border-command-border">
+            <ScanLine className="w-4 h-4 text-radar-bright" />
+            <span>Plate detection → OCR → Format check</span>
+            <span className="text-amber-300">Human review</span>
+          </div>
+        ) : (<>
         {/* Model Provenance Verification Badge */}
         <div className="flex items-center space-x-2 bg-command-elevated px-3 py-1.5 rounded-md border border-command-border">
           <ShieldCheck className="w-4 h-4 text-radar-bright" />
@@ -61,6 +70,7 @@ export function Header({ health, onOpenUpload, onOpenHealth }: HeaderProps) {
             {health?.mps_available ? 'Apple MPS (Metal)' : health?.cuda_available ? 'CUDA GPU' : 'CPU (Local)'}
           </span>
         </div>
+        </>)}
       </div>
 
       {/* Right Action Controls */}
@@ -69,11 +79,11 @@ export function Header({ health, onOpenUpload, onOpenHealth }: HeaderProps) {
         <button
           onClick={onOpenHealth}
           className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-command-elevated hover:bg-command-border text-command-text text-xs border border-command-border transition-colors"
-          title="Inspect Local System Health & Provenance"
+          title={context === 'anpr' ? 'General operations health. ANPR availability is checked when an image is recognized.' : 'Inspect Local System Health & Provenance'}
         >
           <Activity className="w-4 h-4 text-radar-bright" />
           <span className="hidden sm:inline font-mono">
-            {health?.status === 'operational' ? 'System Ready' : 'Connecting...'}
+            {context === 'anpr' ? 'Operations health' : health?.status === 'operational' ? 'System Ready' : 'Connecting...'}
           </span>
           <div
             className={`w-2 h-2 rounded-full ${
@@ -83,13 +93,13 @@ export function Header({ health, onOpenUpload, onOpenHealth }: HeaderProps) {
         </button>
 
         {/* Upload Action Button */}
-        <button
+        {context !== 'anpr' && <button
           onClick={onOpenUpload}
           className="flex items-center space-x-2 px-4 py-1.5 rounded-md bg-radar-bright hover:bg-radar-green text-command-bg font-semibold text-xs transition-all shadow-radar hover:shadow-lg"
         >
           <Upload className="w-4 h-4" />
           <span>New Upload</span>
-        </button>
+        </button>}
       </div>
     </header>
   );

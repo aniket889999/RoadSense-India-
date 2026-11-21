@@ -78,6 +78,10 @@ remain unverified until the required local packages and assets are available.
 ## Verified progress
 
 Latest OCR updates:
+- [Demonstration and jury guide](demo_and_jury_guide.md): crop-quality review cues,
+  enlarged plate preview, annotated PNG and review JSON downloads, and explicit
+  review-only policy. ANPR schema 1.1 adds advisory measurements while the reader
+  still accepts saved 1.0 results. The held-out test split remains untouched.
 - [Recognition model comparison (EasyOCR vs. RapidOCR PP-OCRv4 ONNX)](ocr_model_comparison_results.md):
   Off-the-shelf `rapidocr_onnxruntime==1.4.4` (`PP-OCRv4` ONNX staged offline
   under `models/rapidocr/`, selected on the 40-image training subset where exact

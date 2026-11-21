@@ -19,7 +19,29 @@ export type ReasonCode =
   | 'NO_TEXT'
   | 'OCR_CONFIDENCE_MISSING'
   | 'LOW_OCR_CONFIDENCE'
-  | 'FORMAT_NOT_SUPPORTED';
+  | 'FORMAT_NOT_SUPPORTED'
+  | 'OCR_REVIEW_ONLY';
+
+export type QualityFlag = 'SMALL_CROP' | 'LOW_SHARPNESS' | 'DARK_CROP' | 'CLIPPED_HIGHLIGHTS' | 'TILT_OBSERVED';
+
+export interface PlateImageQuality {
+  method: 'opencv_review_v1';
+  crop_width: number;
+  crop_height: number;
+  sharpness_score: number;
+  mean_brightness: number;
+  clipped_highlight_fraction: number;
+  observed_line_tilt_degrees: number | null;
+  warnings: QualityFlag[];
+}
+
+export const QUALITY_GUIDANCE: Record<QualityFlag, string> = {
+  SMALL_CROP: 'Small plate crop: move closer or use a higher-resolution source.',
+  LOW_SHARPNESS: 'Low detail, possibly blur: hold the camera steady and check focus.',
+  DARK_CROP: 'Dark crop: improve lighting and check that characters remain visible.',
+  CLIPPED_HIGHLIGHTS: 'Many bright clipped pixels: check for glare hiding characters.',
+  TILT_OBSERVED: 'Slanted edges observed: try a straight-on capture and inspect both text lines.',
+};
 
 /**
  * Half-open x/y pixel bounds in the EXIF-normalized source image.
@@ -51,13 +73,14 @@ export interface PlateResult extends OcrAssessment {
   plate_id: string;
   bbox: PlateBox;
   detection_confidence: number;
+  image_quality?: PlateImageQuality | null;
 }
 
 /**
  * Complete single-image ANPR inspection result.
  */
 export interface AnprImageResult {
-  schema_version: '1.0';
+  schema_version: '1.0' | '1.1';
   request_id: string;
   status: ResultStatus;
   image_width: number;
@@ -95,4 +118,5 @@ export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   OCR_CONFIDENCE_MISSING: 'OCR confidence score missing',
   LOW_OCR_CONFIDENCE: 'OCR score below review threshold',
   FORMAT_NOT_SUPPORTED: 'Normalized text does not match IN_COMMON_V1 shape',
+  OCR_REVIEW_ONLY: 'This engine provides review suggestions. Confirm the characters against the crop.',
 };

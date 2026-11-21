@@ -119,6 +119,7 @@ export default function OperationsDashboard() {
     <div className="flex flex-col min-h-screen bg-command-bg text-command-text">
       {/* Top Operations Header */}
       <Header
+        context={activeTab === 'anpr' ? 'anpr' : 'operations'}
         health={health}
         onOpenUpload={() => setIsUploadOpen(true)}
         onOpenHealth={() => setIsHealthOpen(true)}

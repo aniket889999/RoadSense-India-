@@ -27,7 +27,9 @@ import {
   RESULT_STATUS_LABELS,
   ReadStatus,
   ResultStatus,
+  QUALITY_GUIDANCE,
 } from '../../lib/anprTypes';
+import { createAnnotatedImage, createReviewReport, downloadBlob } from '../../lib/anprExports';
 import { ViewportBox, computeContainViewport } from '../../lib/canvasTransform';
 
 export interface AnprInspectionPanelProps {
@@ -82,7 +84,7 @@ function getResultStatusStyle(status: ResultStatus): {
         banner: 'bg-amber-950/30 border-amber-600/50 text-amber-200',
         badge: 'bg-amber-900/60 text-amber-300 border-amber-500/50',
         description:
-          'One or more detected plates require human review due to low/missing OCR score, unreadable text, or unsupported format shape.',
+          'Check each candidate against its image crop. Review-only engines intentionally require confirmation; other reasons can include uncertain text or unsupported format.',
       };
     case 'NO_PLATE':
       return {
@@ -149,6 +151,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
     null
   );
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AnprImageResult | null>(null);
   const [selectedPlateId, setSelectedPlateId] = useState<string | null>(null);
@@ -212,6 +215,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
       // Invalidate any in-flight recognition call and clear stale results immediately.
       requestCounterRef.current += 1;
       setIsAnalyzing(false);
+      setIsExporting(false);
       setResult(null);
       setSelectedPlateId(null);
       setNaturalDimensions(null);
@@ -328,7 +332,25 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
   };
 
   const isServiceConnected = typeof onAnalyze === 'function';
-  const canRunRecognition = Boolean(isServiceConnected && selectedFile && !isAnalyzing);
+  const canRunRecognition = Boolean(isServiceConnected && selectedFile && !isAnalyzing && !isExporting);
+
+  const handleAnnotatedExport = async () => {
+    if (!result || !previewUrl || isExporting) return;
+    const requestId = requestCounterRef.current;
+    setIsExporting(true);
+    try {
+      const blob = await createAnnotatedImage(previewUrl, result);
+      if (requestCounterRef.current === requestId) {
+        downloadBlob(blob, `roadsense-anpr-${result.request_id.replace(/[^a-zA-Z0-9_-]/g, '')}.png`);
+      }
+    } catch (err) {
+      if (requestCounterRef.current === requestId) {
+        setErrorMessage(err instanceof Error ? err.message : 'Annotated export failed.');
+      }
+    } finally {
+      if (requestCounterRef.current === requestId) setIsExporting(false);
+    }
+  };
 
   return (
     <section
@@ -486,6 +508,20 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
           </div>
         )}
       </div>
+
+      {result && !isAnalyzing && (
+        <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl glass-panel border border-command-border">
+          <button type="button" onClick={handleAnnotatedExport} disabled={!previewUrl || isExporting}
+            className="px-3 py-2 rounded border border-command-border bg-command-elevated hover:border-radar-bright disabled:opacity-40">
+            {isExporting ? 'Preparing image…' : 'Download annotated PNG'}
+          </button>
+          <button type="button" disabled={isExporting} onClick={() => downloadBlob(createReviewReport(result), `roadsense-anpr-${result.request_id.replace(/[^a-zA-Z0-9_-]/g, '')}.json`)}
+            className="px-3 py-2 rounded border border-command-border bg-command-elevated hover:border-radar-bright disabled:opacity-40">
+            Download review JSON
+          </button>
+          <span className="font-sans text-command-muted">Exports stay in your browser. Readings are not human verified.</span>
+        </div>
+      )}
 
       {/* Main Split Grid: Image Viewport + Plate Inspection Details */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
@@ -751,6 +787,16 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                         </div>
 
                         {/* Raw vs Normalized Text */}
+                        {isSelected && previewUrl && (
+                          <div className="rounded border border-command-border overflow-hidden bg-command-surface">
+                            <div className="p-2 text-command-muted text-[10px]">Detected crop — enlarged for inspection, not restored detail</div>
+                            <svg role="img" aria-label={`Enlarged crop for plate ${index + 1}`}
+                              viewBox={`${plate.bbox.x1} ${plate.bbox.y1} ${plate.bbox.x2 - plate.bbox.x1} ${plate.bbox.y2 - plate.bbox.y1}`}
+                              className="w-full h-32" preserveAspectRatio="xMidYMid meet">
+                              <image href={previewUrl} width={result.image_width} height={result.image_height} />
+                            </svg>
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="p-2 rounded bg-command-surface/80 border border-command-border">
                             <span className="block text-[10px] uppercase text-command-muted">
@@ -758,7 +804,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                             </span>
                             <div className="mt-0.5 text-xs font-bold text-command-text break-all">
                               {plate.raw_text ? (
-                                <span>{plate.raw_text}</span>
+                                <span className="whitespace-pre-wrap">{plate.raw_text}</span>
                               ) : (
                                 <span className="italic text-command-muted">Empty</span>
                               )}
@@ -797,13 +843,29 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                               OCR Score (Uncalibrated)
                             </span>
                             <div className="text-xs font-bold text-command-text">
-                              {formatScore(plate.ocr_confidence)}
+                              {plate.reason_codes.includes('OCR_REVIEW_ONLY') ? 'Not used — human review required' : formatScore(plate.ocr_confidence)}
                             </div>
                             <div className="text-[10px] text-command-muted">
                               Detector score: {formatScore(plate.detection_confidence)}
                             </div>
                           </div>
                         </div>
+
+                        {plate.image_quality && (
+                          <div className="p-2 rounded border border-command-border bg-command-surface/60 space-y-1 font-sans">
+                            <div className="font-bold text-command-text">Capture quality and retake guidance</div>
+                            <div className="text-command-muted text-[10px]">
+                              Detail score: {plate.image_quality.sharpness_score.toFixed(1)} • Brightness: {plate.image_quality.mean_brightness.toFixed(0)}/255
+                              {' • '}2D line tilt: {plate.image_quality.observed_line_tilt_degrees === null ? 'insufficient evidence' : `${plate.image_quality.observed_line_tilt_degrees.toFixed(1)}°`}
+                            </div>
+                            {plate.image_quality.warnings.map(flag => (
+                              <p key={flag} className="text-amber-200">{QUALITY_GUIDANCE[flag]}</p>
+                            ))}
+                            <p className="text-command-muted text-[10px]">
+                              Advisory measurements only. {plate.image_quality.warnings.length === 0 ? 'No configured cues triggered; this does not verify the text.' : 'Check the crop before using any reading.'}
+                            </p>
+                          </div>
+                        )}
 
                         {/* Bounding Box Coordinates */}
                         <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-command-muted pt-0.5">

@@ -1,5 +1,31 @@
 # RoadSense India
 
+## ANPR Academic Module
+
+The current academic module implements vehicle plate detection, OCR, supported
+Indian-format checks and human review. It includes enlarged plate crops,
+advisory blur/illumination/tilt cues, annotated PNG export and a JSON review report.
+The ANPR screen is available in the existing local dashboard.
+
+The selected RapidOCR pipeline matched **37/94 complete plate strings (39.36%)**
+on 71 validation images, with **24.07% character error rate**. These are validation
+agreements against mixed publisher labels; the data mainly represents trucks.
+Every RapidOCR result requires review, and the held-out test split is untouched.
+
+With the existing ANPR dependencies and staged, hash-pinned local model assets:
+
+```bash
+.venv/bin/python scripts/serve_anpr_local.py
+```
+
+Start the dashboard from `apps/web` with `npm run start` after `npm run build`,
+then select **ANPR Inspection**. Use `--engine easyocr` for the adapted EasyOCR
+comparison. Models and sample images are not included in Git.
+
+See the [demonstration and jury guide](docs/anpr/demo_and_jury_guide.md),
+[model comparison and asset details](docs/anpr/ocr_model_comparison_results.md),
+and [detector training results](docs/anpr/witvix_detector_baseline_results.md).
+
 ## Project Roadmap
 
 1. **Step 1:** Establish basic repository layout, CI configs, and foundational structures.
@@ -8,11 +34,11 @@
 4. **Step 5 (Experimental):** Offer local, hash-pinned model suggestions without changing the manual reporting workflow.
 5. **Step 6 (Drive Review):** Replay a bounded window of uploaded dashcam footage with green circles around raw model suggestions. *(Recorded-video review only; not a live driver-alert system.)*
 6. **Step 7 (Local Curation):** Export explicitly human-confirmed sampled frames into a separate, local-only curation pool for a future experiment. *(It does not train or change the frozen baseline.)*
-7. **Step 8 (Operations Command Center):** Industrial-grade local dashcam operations platform with Next.js 14 frontend, FastAPI async backend, PostgreSQL/PostGIS persistence, and immutable audit logs.
+7. **Step 8 (Operations Command Center):** Local dashcam operations platform with Next.js 14 frontend, FastAPI async backend, PostgreSQL/PostGIS persistence, and audit logs.
 8. **Step 9 (Media Intelligence Pipeline):** OpenCV bounded streaming, FFprobe container verification, ByteTrack multi-object tracking, and FFmpeg H.264 web encoding.
 
 ## Project Problem Statement
-RoadSense provides an industrial-grade, local-first road condition analytics platform. It ingests dashcam video, tracks pothole candidate detections across frames with ByteTrack, consolidates tracks into reviewable Road Events, and equips municipal road inspectors with an auditable verification workflow.
+RoadSense provides a local-first road condition analytics prototype. It ingests dashcam video, tracks pothole candidate detections across frames with ByteTrack, consolidates tracks into reviewable Road Events, and supports a human verification workflow. The ANPR academic module above extends this inspection setting with plate-reading experiments.
 
 ## Target User
 Road inspector, municipal public works department, campus facilities team, or fleet safety auditor.

@@ -27,3 +27,12 @@ def test_safe_capacity_operations_are_in_openapi() -> None:
     assert "/api/v1/hazards/associations/{association_id}/review" in paths
     assert "/api/v1/hazards/associations/{association_id}/lifecycle" in paths
     assert "/api/v1/cameras/{camera_id}/inspection/record" in paths
+
+
+def test_anpr_upload_contract_describes_raw_image_body() -> None:
+    operation = app.openapi()["paths"]["/api/v1/anpr/images/recognize"]["post"]
+    content = operation["requestBody"]["content"]
+    assert set(content) == {"image/jpeg", "image/png"}
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/AnprImageResult"
+    }

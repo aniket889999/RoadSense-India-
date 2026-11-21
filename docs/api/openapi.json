@@ -2647,6 +2647,58 @@
           }
         }
       }
+    },
+    "/api/v1/anpr/images/recognize": {
+      "post": {
+        "tags": [
+          "ANPR Image Inspection"
+        ],
+        "summary": "Recognize Image",
+        "description": "Read one bounded image without saving source bytes, OCR text or crops.\n\nA valid image with missing local assets returns UNAVAILABLE and no detections.\nInput errors use HTTP error responses. Model execution runs off the event loop.",
+        "operationId": "recognize_image_api_v1_anpr_images_recognize_post",
+        "requestBody": {
+          "description": "Raw JPEG/PNG bytes, at most 10 MiB. This endpoint does not use multipart.",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnprImageResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty, corrupt or invalid image."
+          },
+          "413": {
+            "description": "Encoded bytes or decoded dimensions exceed the image limits."
+          },
+          "415": {
+            "description": "Unsupported image type or mismatched Content-Type."
+          },
+          "503": {
+            "description": "Recognition is busy or an adapter failed to complete."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2697,6 +2749,65 @@
           "local_operator_label"
         ],
         "title": "AcknowledgeStabilityRequest"
+      },
+      "AnprImageResult": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Request Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResultStatus"
+          },
+          "image_width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Width"
+          },
+          "image_height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Image Height"
+          },
+          "plates": {
+            "items": {
+              "$ref": "#/components/schemas/PlateResult"
+            },
+            "type": "array",
+            "title": "Plates"
+          },
+          "processing_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Processing Ms"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "status",
+          "image_width",
+          "image_height",
+          "processing_ms"
+        ],
+        "title": "AnprImageResult"
       },
       "ApproachZoneSchema": {
         "properties": {
@@ -3547,6 +3658,15 @@
           "decisions"
         ],
         "title": "CapacitySnapshotResponse"
+      },
+      "FormatStatus": {
+        "type": "string",
+        "enum": [
+          "MATCHED",
+          "NO_MATCH",
+          "EMPTY"
+        ],
+        "title": "FormatStatus"
       },
       "HTTPValidationError": {
         "properties": {
@@ -5006,6 +5126,115 @@
         ],
         "title": "PavementInspectionRecordResponse"
       },
+      "PlateBox": {
+        "properties": {
+          "x1": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "X1"
+          },
+          "y1": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Y1"
+          },
+          "x2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "X2"
+          },
+          "y2": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Y2"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2"
+        ],
+        "title": "PlateBox",
+        "description": "Half-open x/y pixel bounds in the EXIF-normalized source image."
+      },
+      "PlateResult": {
+        "properties": {
+          "raw_text": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Raw Text"
+          },
+          "normalized_text": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Normalized Text"
+          },
+          "ocr_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocr Confidence"
+          },
+          "format_profile": {
+            "type": "string",
+            "const": "IN_COMMON_V1",
+            "title": "Format Profile",
+            "default": "IN_COMMON_V1"
+          },
+          "format_status": {
+            "$ref": "#/components/schemas/FormatStatus"
+          },
+          "recognition_status": {
+            "$ref": "#/components/schemas/ReadStatus"
+          },
+          "reason_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ReasonCode"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "plate_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Plate Id"
+          },
+          "bbox": {
+            "$ref": "#/components/schemas/PlateBox"
+          },
+          "detection_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Detection Confidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_text",
+          "normalized_text",
+          "ocr_confidence",
+          "format_status",
+          "recognition_status",
+          "plate_id",
+          "bbox",
+          "detection_confidence"
+        ],
+        "title": "PlateResult"
+      },
       "PointSchema": {
         "properties": {
           "x": {
@@ -5115,6 +5344,35 @@
           "created_at"
         ],
         "title": "RawDetectionResponse"
+      },
+      "ReadStatus": {
+        "type": "string",
+        "enum": [
+          "READ",
+          "NEEDS_REVIEW",
+          "UNREADABLE"
+        ],
+        "title": "ReadStatus"
+      },
+      "ReasonCode": {
+        "type": "string",
+        "enum": [
+          "NO_TEXT",
+          "OCR_CONFIDENCE_MISSING",
+          "LOW_OCR_CONFIDENCE",
+          "FORMAT_NOT_SUPPORTED"
+        ],
+        "title": "ReasonCode"
+      },
+      "ResultStatus": {
+        "type": "string",
+        "enum": [
+          "COMPLETE",
+          "NEEDS_REVIEW",
+          "NO_PLATE",
+          "UNAVAILABLE"
+        ],
+        "title": "ResultStatus"
       },
       "ReviewActionResponse": {
         "properties": {

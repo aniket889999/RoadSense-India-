@@ -80,10 +80,18 @@ remain unverified until the required local packages and assets are available.
   typechecked; committed as `6e4893f`.
 - Module 2 Codex work: endpoint, runtime interfaces and injected pipeline covered
   by 42 passing focused tests (including the Module 1 and OpenAPI checks).
-- Module 2 Gemini adapter review and real-image verification are pending. The
-  local audit found EasyOCR absent and no configured plate-detector checkpoint.
-  Tests using injected adapters establish orchestration correctness, not ANPR
-  model accuracy or a completed real-image recognition demonstration.
+- Module 2 Gemini adapters are reviewed and integrated. The combined ANPR and
+  OpenAPI checks pass: 61 tests, including a composed adapter-to-pipeline test
+  with fake ML engines. Review corrections prevent OCR evidence truncation and
+  invalid class IDs being coerced into a valid plate-detector schema.
+- TypeScript checking and Python compilation pass. The frontend production build
+  is blocked by an absent `next-swc.darwin-arm64.node` binary in the installed
+  `@next/swc-darwin-arm64` package. No compiler/dependency download was authorized
+  or completed to repair that local environment.
+- Real-image verification remains pending. The local audit found EasyOCR absent
+  and no configured plate-detector checkpoint. Tests with fake ML engines
+  establish orchestration correctness, not ANPR accuracy or a completed real-image
+  recognition demonstration.
 
 ## Module 1 shared result contract
 

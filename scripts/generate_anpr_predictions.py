@@ -200,6 +200,7 @@ def generate_split_predictions(
             ),
             "ocr_device": getattr(rec, "device", None),
             "ocr_crop_view": getattr(rec, "crop_view", None),
+            "ocr_adapted_checkpoint_sha256": getattr(rec, "recognizer_checkpoint_sha256", None),
             "ocr_languages": list(getattr(rec, "languages", ())),
             "ocr_weight_files": {
                 Path(w).name: sha256_file(Path(w))

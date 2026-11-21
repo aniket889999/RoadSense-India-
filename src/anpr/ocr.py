@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import os
+import re
 from pathlib import Path
 import stat
 from typing import Any, List, Optional, Sequence, Tuple
@@ -20,6 +21,7 @@ import numpy as np
 
 from src.anpr.detector import (
     ENV_ANPR_DEVICE,
+    _compute_file_sha256,
     _validate_device,
     verify_confinement_under_models,
 )
@@ -28,6 +30,8 @@ from src.anpr.runtime_contracts import OcrRead, RuntimeUnavailable
 
 ENV_OCR_MODEL_DIR = "ROADSENSE_ANPR_OCR_MODEL_DIR"
 ENV_OCR_CROP_VIEW = "ROADSENSE_ANPR_OCR_CROP_VIEW"
+ENV_OCR_RECOGNIZER_WEIGHTS = "ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS"
+ENV_OCR_RECOGNIZER_SHA256 = "ROADSENSE_ANPR_OCR_RECOGNIZER_SHA256"
 SUPPORTED_OCR_CROP_VIEWS = (
     "original_bgr",
     "resized_bgr",
@@ -226,6 +230,8 @@ class EasyOcrPlateRecognizer:
         repo_root: Optional[Path] = None,
         languages: Sequence[str] = ("en",),
         crop_view: Optional[str] = None,
+        recognizer_weights: Optional[str] = None,
+        recognizer_sha256: Optional[str] = None,
     ) -> None:
         if not languages or not all(isinstance(lang, str) and lang.strip() for lang in languages):
             raise ValueError("languages must be a non-empty sequence of language codes.")
@@ -255,6 +261,19 @@ class EasyOcrPlateRecognizer:
         weight_files = _verify_local_ocr_assets(verified_dir)
         validated_device = _validate_device(raw_device)
 
+        candidate_path = None
+        raw_candidate = os.environ.get(ENV_OCR_RECOGNIZER_WEIGHTS, "") if recognizer_weights is None else recognizer_weights
+        candidate_sha = os.environ.get(ENV_OCR_RECOGNIZER_SHA256, "") if recognizer_sha256 is None else recognizer_sha256
+        if raw_candidate or candidate_sha:
+            if not raw_candidate or not re.fullmatch(r"[0-9a-f]{64}", candidate_sha):
+                raise RuntimeUnavailable("Adapted OCR weights require a model path and exact lowercase SHA-256.")
+            candidate_path = verify_confinement_under_models(
+                raw_candidate, repo_root=repo_root, expect_directory=False,
+                setting_name=ENV_OCR_RECOGNIZER_WEIGHTS,
+            )
+            if _compute_file_sha256(candidate_path) != candidate_sha:
+                raise RuntimeUnavailable("Adapted OCR checkpoint SHA-256 mismatch.")
+
         try:
             import easyocr
         except ImportError as exc:
@@ -271,14 +290,26 @@ class EasyOcrPlateRecognizer:
                 user_network_directory=str(verified_dir),
                 download_enabled=False,
                 verbose=False,
+                # A float checkpoint cannot be restored into dynamically quantized layers.
+                **({"quantize": False} if candidate_path is not None else {}),
             )
+            if candidate_path is not None:
+                import torch
+                state = torch.load(str(candidate_path), map_location="cpu", weights_only=True)
+                if not isinstance(state, dict):
+                    raise ValueError("Adapted OCR checkpoint must contain only a state dictionary.")
+                if not hasattr(reader.recognizer, "module"):
+                    state = {key.removeprefix("module."): value for key, value in state.items()}
+                reader.recognizer.load_state_dict(state, strict=True)
+                reader.recognizer.eval()
         except Exception as exc:
             raise RuntimeUnavailable(
                 f"Unable to initialize local EasyOCR reader from {verified_dir}: {exc}"
             ) from exc
 
         self.model_dir = verified_dir
-        self.weight_files = tuple(weight_files)
+        self.weight_files = tuple(weight_files) + ((candidate_path,) if candidate_path is not None else ())
+        self.recognizer_checkpoint_sha256 = candidate_sha or None
         self.device = validated_device
         self.languages = tuple(languages)
         self.crop_view = validated_crop_view

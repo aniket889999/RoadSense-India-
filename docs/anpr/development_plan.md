@@ -120,10 +120,30 @@ remain unverified until the required local packages and assets are available.
   `0.94681` (`0.947` fused), `mAP50` `0.99217` (`0.992` fused) and `mAP50-95`
   `0.84655` (`0.847` fused); final epoch 50 (`weights/last.pt`) recorded `val`
   precision `0.97894`, recall `0.98893`, `mAP50` `0.99347` and `mAP50-95`
-  `0.83607`. Held-out `test` split evaluation was not performed, and OCR /
-  end-to-end plate reading remain blocked by the absent `easyocr` package and
-  offline OCR weights. See
+  `0.83607`. See
   [Witvix detector baseline results](witvix_detector_baseline_results.md).
+- Module 4 offline runtime provisioning and validation-split OCR evaluation
+  completed: `easyocr==1.7.2` installed in `.venv` alongside unmodified
+  `torch==2.13.0`, `torchvision==0.28.0`, `ultralytics==8.4.124` and
+  `opencv-python-headless==5.0.0.93`; trained detector staged at
+  `models/anpr/anpr_witvix_detector_mps_v1_best.pt` and official EasyOCR English
+  assets staged at `models/easyocr/craft_mlt_25k.pth` and
+  `models/easyocr/english_g2.pth` (`download_enabled=False`). Across all 71
+  validation images (`94` `publisher_mixed` plates), the composed pipeline
+  (`scripts/generate_anpr_predictions.py` + `scripts/evaluate_anpr_predictions.py`)
+  achieved detection precision `0.9681` (`91/94`), detection recall `0.9681`
+  (`91/94`), read coverage `0.9574` (`90/94`), end-to-end exact plate agreement
+  `0.0319` (`3/94`), character error rate `0.4584` (`419/914`), `0` wrong
+  accepted reads (`91` plates routed to `NEEDS_REVIEW`, `3` `UNREADABLE`), and
+  mean latency `324.61 ms/image`. Held-out `test` split remains untouched. See
+  [Witvix validation OCR results](witvix_validation_ocr_results.md).
+- Module 4 web dashboard integration: `AnprInspectionPanel` is connected to
+  `POST /api/v1/anpr/images/recognize` via `recognizeAnprImage` in
+  `apps/web/src/lib/api.ts` (raw JPEG/PNG bytes with matching `Content-Type`)
+  and exposed under the `ANPR Inspection` tab in `Sidebar.tsx` and `page.tsx`.
+  `npm run typecheck` passes (`0` errors); live Next.js browser serving (`next dev`
+  / `next build`) remains blocked by the pre-existing absent
+  `next-swc.darwin-arm64.node` binary in `@next/swc-darwin-arm64`.
 
 ## Module 1 shared result contract
 

@@ -206,3 +206,36 @@ artefacts. The conservative aggregate confidence policy (`min` across spans ≥
 detected plates to `NEEDS_REVIEW` and `3 / 94` to `UNREADABLE` (`0` wrong
 accepted reads), preventing noisy OCR outputs from being silently accepted as
 `COMPLETE`.
+
+---
+
+## 4. Connected Dashboard Integration and Live API Verification
+
+- **Frontend wiring**:
+  - `recognizeAnprImage(file: File): Promise<AnprImageResult>` in
+    `apps/web/src/lib/api.ts` sends raw `file` bytes (`body: file`, no
+    `FormData`) with `Content-Type: image/jpeg` or `image/png` to
+    `POST /api/v1/anpr/images/recognize`.
+  - `apps/web/src/components/Sidebar.tsx` adds the `ANPR Inspection` navigation
+    item (`ActiveTab = ... | 'anpr'`).
+  - `apps/web/src/app/page.tsx` renders
+    `<AnprInspectionPanel onAnalyze={recognizeAnprImage} />` when the
+    `ANPR Inspection` tab is selected.
+- **TypeScript verification**: `cd apps/web && npm run typecheck` (`tsc --noEmit`)
+  passes with `0` errors.
+- **Live HTTP API verification**: Starting `uvicorn services.api.app.main:app`
+  with the four `ROADSENSE_ANPR_*` environment variables and submitting raw PNG
+  bytes of validation image `witvix-img_0137.png` (`1200×1600`, `low_light`,
+  `single_line`) to `POST http://127.0.0.1:8000/api/v1/anpr/images/recognize`
+  returned HTTP `200` with `schema_version: "1.0"`, `status: "NEEDS_REVIEW"`,
+  `plate-1` bounding box `(130.10, 475.30) -> (1034.92, 725.21)`,
+  `detection_confidence: 0.8959`, `ocr_confidence: 0.4888`,
+  `format_status: "NO_MATCH"`, and
+  `reason_codes: ["LOW_OCR_CONFIDENCE", "FORMAT_NOT_SUPPORTED"]`.
+- **Browser server SWC blocker**: Launching `npm run dev` (`next dev -p 3000`)
+  exits immediately with
+  `Failed to load SWC binary for darwin/arm64` because
+  `apps/web/node_modules/@next/swc-darwin-arm64/` is missing the native
+  `next-swc.darwin-arm64.node` binary (and no pre-built `.next/server` bundle
+  exists). Per module rules, no unauthorized frontend compiler download was
+  performed.

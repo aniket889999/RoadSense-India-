@@ -6,8 +6,41 @@ import {
   RoadEvent,
   SystemHealth,
 } from './types';
+import { AnprImageResult } from './anprTypes';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+
+export async function recognizeAnprImage(file: File): Promise<AnprImageResult> {
+  const nameLower = file.name.toLowerCase();
+  const contentType =
+    file.type === 'image/jpeg' || file.type === 'image/png'
+      ? file.type
+      : nameLower.endsWith('.png')
+      ? 'image/png'
+      : 'image/jpeg';
+
+  const res = await fetch(`${API_BASE}/api/v1/anpr/images/recognize`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+    },
+    body: file,
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const errorData = await res
+      .json()
+      .catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
+    throw new Error(
+      typeof errorData?.detail === 'string' && errorData.detail
+        ? errorData.detail
+        : `Plate recognition request failed (HTTP ${res.status}).`
+    );
+  }
+
+  return res.json();
+}
 
 export async function fetchSystemHealth(): Promise<SystemHealth> {
   const res = await fetch(`${API_BASE}/health/system`, { cache: 'no-store' });

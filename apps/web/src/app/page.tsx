@@ -9,6 +9,7 @@ import { SessionsList } from '../components/SessionsList';
 import { MapView } from '../components/MapView';
 import { LiveCameraView } from '../components/LiveCameraView';
 import { ParkingLayoutView } from '../components/ParkingLayoutView';
+import { AnprInspectionPanel } from '../components/anpr/AnprInspectionPanel';
 import { UploadModal } from '../components/UploadModal';
 import { SystemHealthModal } from '../components/SystemHealthModal';
 import {
@@ -17,6 +18,7 @@ import {
   fetchSessionDetail,
   fetchSessions,
   fetchSystemHealth,
+  recognizeAnprImage,
 } from '../lib/api';
 import { DriveSession, RawDetection, RoadEvent, SystemHealth } from '../lib/types';
 import { useSessionWebSocket } from '../hooks/useWebSocket';
@@ -238,6 +240,12 @@ export default function OperationsDashboard() {
           {activeTab === 'parking' && (
             <div className="h-[calc(100vh-8.5rem)]">
               <ParkingLayoutView />
+            </div>
+          )}
+
+          {activeTab === 'anpr' && (
+            <div className="min-h-[calc(100vh-8.5rem)]">
+              <AnprInspectionPanel onAnalyze={recognizeAnprImage} />
             </div>
           )}
         </main>

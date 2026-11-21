@@ -7,10 +7,10 @@ import {
   MapPin,
   Camera,
   Layers,
-  FileSpreadsheet,
+  ScanLine,
 } from 'lucide-react';
 
-export type ActiveTab = 'command' | 'sessions' | 'map' | 'live' | 'parking';
+export type ActiveTab = 'command' | 'sessions' | 'map' | 'live' | 'parking' | 'anpr';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -25,6 +25,11 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
       label: 'Command Center',
       icon: <LayoutDashboard className="w-4 h-4" />,
       badge: pendingReviewsCount > 0 ? pendingReviewsCount : undefined,
+    },
+    {
+      id: 'anpr',
+      label: 'ANPR Inspection',
+      icon: <ScanLine className="w-4 h-4" />,
     },
     {
       id: 'parking',

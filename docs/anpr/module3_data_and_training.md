@@ -156,11 +156,14 @@ prepared Witvix pilot (`data/processed/witvix_anpr_pilot_v1`), the 50-epoch MPS
 plate-detector baseline (`anpr_witvix_detector_mps_v1`) has completed `train`/`val`
 optimization and validation logging; see
 [Witvix detector baseline results](witvix_detector_baseline_results.md).
-Held-out `test` split evaluation has not been run. Real image OCR and end-to-end
-plate text accuracy measurement still require the `easyocr` package and local
-OCR model files under `models/`. Downloads and installation are not performed by
-these tools. The earlier missing frontend SWC compiler is an independent
-environment issue and is not repaired by this module.
+In Module 4, `easyocr==1.7.2` and offline English weights (`craft_mlt_25k.pth`
+and `english_g2.pth`) were staged under `models/easyocr/` and evaluated across
+all 71 `val` images via `scripts/generate_anpr_predictions.py` and
+`scripts/evaluate_anpr_predictions.py`; see
+[Witvix validation OCR results](witvix_validation_ocr_results.md).
+Held-out `test` split evaluation has still not been run. The earlier missing
+frontend SWC compiler (`next-swc.darwin-arm64.node`) remains an independent
+environment blocker for `next dev`/`next build` and is not repaired here.
 
 The downloaded Witvix sample is audited separately in
 [Witvix intake results](witvix_intake_results.md); its annotations and source

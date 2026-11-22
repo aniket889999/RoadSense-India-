@@ -11,7 +11,9 @@ from pydantic import ValidationError
 
 from src.anpr.contracts import AnprImageResult, PlateBox, ReadStatus, ResultStatus
 from src.anpr.dataset import PreparedRecord, summarize_evidence_assurance
-from src.anpr.validation import check_plate_format, derive_candidate_text, normalize_plate_text
+from src.anpr.validation import (
+    assess_plate_format_v2, check_plate_format, derive_candidate_text, normalize_plate_text,
+)
 
 TEXT_SOURCES = ("normalized", "candidate")
 
@@ -193,6 +195,11 @@ def evaluate_predictions(
                 or check_plate_format(plate.candidate_text) != plate.candidate_format_status
             ):
                 raise EvaluationError("Prediction candidate text is not derived from its raw OCR evidence.")
+            if plate.plate_format is not None:
+                source = "candidate" if plate.candidate_text is not None else "normalized"
+                text = plate.candidate_text if plate.candidate_text is not None else plate.normalized_text
+                if assess_plate_format_v2(text, source) != plate.plate_format:
+                    raise EvaluationError("Prediction plate_format is not derived from its review text.")
 
     conditions = sorted({condition for record in records for condition in record.conditions})
     assurance = summarize_evidence_assurance([record.model_dump(mode="json") for record in records])

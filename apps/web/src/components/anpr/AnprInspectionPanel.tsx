@@ -29,6 +29,7 @@ import {
   ResultStatus,
   QUALITY_GUIDANCE,
   TEXT_CLEANUP_LABELS,
+  PLATE_PATTERN_LABELS,
 } from '../../lib/anprTypes';
 import { createAnnotatedImage, createReviewReport, downloadBlob } from '../../lib/anprExports';
 import { ViewportBox, computeContainViewport } from '../../lib/canvasTransform';
@@ -825,6 +826,65 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                             </div>
                           </div>
                         </div>
+
+                        {plate.plate_format && (
+                          <div className="p-2 rounded bg-command-surface/60 border border-command-border space-y-1">
+                            <span className="block text-[10px] uppercase text-command-muted">
+                              Plate format check ({plate.plate_format.profile}, {plate.plate_format.assessed_text_source} text)
+                            </span>
+                            <div className="text-[11px] text-command-text">
+                              {plate.plate_format.pattern
+                                ? PLATE_PATTERN_LABELS[plate.plate_format.pattern]
+                                : 'No supported pattern'}
+                              {plate.plate_format.state_code && (
+                                <span className="ml-2">
+                                  State code {plate.plate_format.state_code}:{' '}
+                                  {plate.plate_format.state_code_known ? 'known' : 'not a known code'}
+                                </span>
+                              )}
+                            </div>
+                            {plate.plate_format.lookalike_suggestions.length > 0 && (
+                              <div className="text-[11px] text-command-muted">
+                                Possible readings (look-alike hints, not applied):{' '}
+                                <span className="font-bold tracking-wider text-command-text">
+                                  {plate.plate_format.lookalike_suggestions.join(', ')}
+                                </span>
+                              </div>
+                            )}
+                            {plate.plate_format.registration_origin && (
+                              <div className="text-[11px] text-command-text">
+                                Issued by:{' '}
+                                <span className="font-bold">
+                                  {plate.plate_format.registration_origin.state_name ?? plate.plate_format.registration_origin.state_code}
+                                  {' · '}
+                                  {plate.plate_format.registration_origin.rto_code}
+                                  {plate.plate_format.registration_origin.rto_office
+                                    ? ` · ${plate.plate_format.registration_origin.rto_office}`
+                                    : ''}
+                                </span>
+                                {!plate.plate_format.registration_origin.rto_in_table && (
+                                  <span className="ml-1 text-command-muted">(RTO not in table)</span>
+                                )}
+                                {plate.plate_format.registration_origin.rto_jurisdiction && (
+                                  <div className="text-[10px] text-command-muted">
+                                    {plate.plate_format.registration_origin.rto_jurisdiction}
+                                  </div>
+                                )}
+                                {plate.plate_format.registration_origin.rto_notes && (
+                                  <div className="text-[10px] text-command-muted">
+                                    {plate.plate_format.registration_origin.rto_notes}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            <p className="text-[10px] text-command-muted">
+                              A supported pattern or known state code does not verify a registration. Issuing office
+                              comes from a public RTO directory (Wikipedia rev{' '}
+                              {plate.plate_format.registration_origin?.source_revision ?? 'n/a'}, CC BY-SA 4.0); it is
+                              not a vehicle or owner record and is decoded from the unverified OCR text.
+                            </p>
+                          </div>
+                        )}
 
                         {plate.candidate_text && (
                           <div className="p-2 rounded bg-command-surface/80 border border-command-border">

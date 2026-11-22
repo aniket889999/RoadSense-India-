@@ -2757,10 +2757,11 @@
             "enum": [
               "1.0",
               "1.1",
-              "1.2"
+              "1.2",
+              "1.3"
             ],
             "title": "Schema Version",
-            "default": "1.2"
+            "default": "1.3"
           },
           "request_id": {
             "type": "string",
@@ -5164,6 +5165,89 @@
         "title": "PlateBox",
         "description": "Half-open x/y pixel bounds in the EXIF-normalized source image."
       },
+      "PlateFormatAssessment": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "const": "IN_PLATE_V2",
+            "title": "Profile",
+            "default": "IN_PLATE_V2"
+          },
+          "assessed_text_source": {
+            "type": "string",
+            "enum": [
+              "normalized",
+              "candidate"
+            ],
+            "title": "Assessed Text Source"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "STATE_SERIES",
+                  "BH_SERIES"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          },
+          "state_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Code"
+          },
+          "state_code_known": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Code Known"
+          },
+          "lookalike_suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Lookalike Suggestions"
+          },
+          "registration_origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegistrationOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessed_text_source",
+          "pattern"
+        ],
+        "title": "PlateFormatAssessment",
+        "description": "Advisory IN_PLATE_V2 check of the review text; never registry verification.\n\n``lookalike_suggestions`` are alternative readings formed by swapping look-alike\ncharacters (for example O/0) so the text fits a supported pattern. They are hints\nfor the reviewer and are never applied to any text field."
+      },
       "PlateImageQuality": {
         "properties": {
           "method": {
@@ -5272,6 +5356,16 @@
             },
             "type": "array",
             "title": "Text Cleanup"
+          },
+          "plate_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlateFormatAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ocr_confidence": {
             "anyOf": [
@@ -5484,9 +5578,93 @@
           "LOW_OCR_CONFIDENCE",
           "FORMAT_NOT_SUPPORTED",
           "OCR_REVIEW_ONLY",
-          "TEXT_CLEANED"
+          "TEXT_CLEANED",
+          "UNKNOWN_STATE_CODE"
         ],
         "title": "ReasonCode"
+      },
+      "RegistrationOrigin": {
+        "properties": {
+          "state_code": {
+            "type": "string",
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State Code"
+          },
+          "state_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Name"
+          },
+          "rto_code": {
+            "type": "string",
+            "maxLength": 5,
+            "minLength": 4,
+            "title": "Rto Code"
+          },
+          "rto_in_table": {
+            "type": "boolean",
+            "title": "Rto In Table"
+          },
+          "rto_office": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rto Office"
+          },
+          "rto_jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rto Jurisdiction"
+          },
+          "rto_notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rto Notes"
+          },
+          "source_revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Source Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state_code",
+          "rto_code",
+          "rto_in_table",
+          "source_revision"
+        ],
+        "title": "RegistrationOrigin",
+        "description": "Where a state-series code was issued, from a pinned public RTO directory.\n\nDescribes the issuing office of the code only; it is not a vehicle or owner record.\n``rto_in_table`` is false when the code is absent from the directory (never guessed)."
       },
       "ResultStatus": {
         "type": "string",

@@ -39,6 +39,7 @@ class ReasonCode(str, Enum):
     FORMAT_NOT_SUPPORTED = "FORMAT_NOT_SUPPORTED"
     OCR_REVIEW_ONLY = "OCR_REVIEW_ONLY"
     TEXT_CLEANED = "TEXT_CLEANED"
+    UNKNOWN_STATE_CODE = "UNKNOWN_STATE_CODE"
 
 
 class TextCleanup(str, Enum):
@@ -86,6 +87,53 @@ class PlateImageQuality(AnprContract):
     warnings: list[QualityFlag] = Field(default_factory=list)
 
 
+class RegistrationOrigin(AnprContract):
+    """Where a state-series code was issued, from a pinned public RTO directory.
+
+    Describes the issuing office of the code only; it is not a vehicle or owner record.
+    ``rto_in_table`` is false when the code is absent from the directory (never guessed).
+    """
+
+    state_code: str = Field(min_length=2, max_length=2)
+    state_name: str | None = Field(default=None, max_length=120)
+    rto_code: str = Field(min_length=4, max_length=5)
+    rto_in_table: bool
+    rto_office: str | None = Field(default=None, max_length=240)
+    rto_jurisdiction: str | None = Field(default=None, max_length=240)
+    rto_notes: str | None = Field(default=None, max_length=240)
+    source_revision: int = Field(strict=True, gt=0)
+
+
+class PlateFormatAssessment(AnprContract):
+    """Advisory IN_PLATE_V2 check of the review text; never registry verification.
+
+    ``lookalike_suggestions`` are alternative readings formed by swapping look-alike
+    characters (for example O/0) so the text fits a supported pattern. They are hints
+    for the reviewer and are never applied to any text field.
+    """
+
+    profile: Literal["IN_PLATE_V2"] = "IN_PLATE_V2"
+    assessed_text_source: Literal["normalized", "candidate"]
+    pattern: Literal["STATE_SERIES", "BH_SERIES"] | None
+    state_code: str | None = Field(default=None, min_length=2, max_length=2)
+    state_code_known: bool | None = None
+    lookalike_suggestions: list[str] = Field(default_factory=list, max_length=5)
+    registration_origin: RegistrationOrigin | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_pattern(self) -> "PlateFormatAssessment":
+        if self.registration_origin is not None and (
+            self.pattern != "STATE_SERIES" or self.registration_origin.state_code != self.state_code
+        ):
+            raise ValueError("A registration origin requires a STATE_SERIES with the same state code.")
+        if self.pattern == "STATE_SERIES":
+            if self.state_code is None or self.state_code_known is None:
+                raise ValueError("STATE_SERIES requires a state code and its known flag.")
+        elif self.state_code is not None or self.state_code_known is not None:
+            raise ValueError("Only STATE_SERIES carries a state code.")
+        return self
+
+
 class OcrAssessment(AnprContract):
     """An OCR candidate and its review decision, never registry verification.
 
@@ -101,6 +149,7 @@ class OcrAssessment(AnprContract):
     candidate_text: str | None = Field(default=None, min_length=1, max_length=256)
     candidate_format_status: FormatStatus | None = None
     text_cleanup: list[TextCleanup] = Field(default_factory=list)
+    plate_format: PlateFormatAssessment | None = None
     ocr_confidence: Confidence | None
     format_profile: Literal["IN_COMMON_V1"] = "IN_COMMON_V1"
     format_status: FormatStatus
@@ -136,6 +185,10 @@ class OcrAssessment(AnprContract):
                 raise ValueError("A cleaned candidate requires the TEXT_CLEANED review reason.")
         elif ReasonCode.TEXT_CLEANED in self.reason_codes:
             raise ValueError("TEXT_CLEANED requires a cleaned candidate.")
+        unknown_state = (self.plate_format is not None and self.plate_format.pattern == "STATE_SERIES"
+                         and self.plate_format.state_code_known is False)
+        if unknown_state != (ReasonCode.UNKNOWN_STATE_CODE in self.reason_codes):
+            raise ValueError("UNKNOWN_STATE_CODE must accompany exactly an unknown STATE_SERIES code.")
         return self
 
 
@@ -147,7 +200,7 @@ class PlateResult(OcrAssessment):
 
 
 class AnprImageResult(AnprContract):
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     request_id: Identifier
     status: ResultStatus
     image_width: int = Field(strict=True, gt=0)

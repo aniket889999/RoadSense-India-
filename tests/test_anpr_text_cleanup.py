@@ -59,7 +59,7 @@ def test_contract_rejects_inconsistent_cleanup_fields():
         OcrAssessment(**{**plain, "reason_codes": [ReasonCode.OCR_REVIEW_ONLY, ReasonCode.TEXT_CLEANED]})
 
 
-def test_schema_12_is_default_and_saved_10_11_results_remain_readable():
+def test_current_schema_is_default_and_saved_10_11_results_remain_readable():
     plate = {
         "raw_text": "MH12AB1234", "normalized_text": "MH12AB1234", "ocr_confidence": None,
         "format_status": "MATCHED", "recognition_status": "NEEDS_REVIEW",
@@ -73,7 +73,7 @@ def test_schema_12_is_default_and_saved_10_11_results_remain_readable():
         })
         assert old.schema_version == version and old.plates[0].candidate_text is None
     assert AnprImageResult(request_id="r", status="NO_PLATE", image_width=4, image_height=4,
-                           processing_ms=0.0).schema_version == "1.2"
+                           processing_ms=0.0).schema_version == "1.3"
 
 
 def test_evaluation_scores_candidate_only_when_asked_and_rejects_tampered_candidates():

@@ -7,7 +7,7 @@ the effect of a text-policy change is measured on exactly the same reads.
 
 The validation split is hard-coded; predictions containing any other image are refused.
 
-Writes two new files under ``outputs/``: re-assessed predictions (schema 1.2, contains
+Writes two new files under ``outputs/``: re-assessed predictions (current schema, contains
 OCR strings, keep out of Git) and a string-free JSON report comparing scoring of
 ``normalized_text`` and ``candidate_text``.
 """
@@ -28,24 +28,10 @@ SPLIT = "val"
 
 
 def reassess(result, *, minimum_confidence: float, review_only: bool):
-    """Return a schema-1.2 result with only the text assessment recomputed."""
-    from src.anpr.contracts import AnprImageResult, PlateResult, ReadStatus, ResultStatus
-    from src.anpr.validation import assess_ocr_read
+    """Return the result with only the text assessment recomputed (current schema)."""
+    from src.anpr.reassessment import reassess_result
 
-    plates = []
-    for plate in result.plates:
-        assessment = assess_ocr_read(plate.raw_text, plate.ocr_confidence,
-                                     minimum_confidence=minimum_confidence, review_only=review_only)
-        plates.append(PlateResult(**assessment.model_dump(), plate_id=plate.plate_id, bbox=plate.bbox,
-                                  detection_confidence=plate.detection_confidence,
-                                  image_quality=plate.image_quality))
-    status = result.status
-    if status not in (ResultStatus.UNAVAILABLE, ResultStatus.NO_PLATE):
-        status = (ResultStatus.COMPLETE if all(p.recognition_status == ReadStatus.READ for p in plates)
-                  else ResultStatus.NEEDS_REVIEW)
-    return AnprImageResult(schema_version="1.2", request_id=result.request_id, status=status,
-                           image_width=result.image_width, image_height=result.image_height, plates=plates,
-                           processing_ms=result.processing_ms, warnings=list(result.warnings))
+    return reassess_result(result, minimum_confidence=minimum_confidence, review_only=review_only)
 
 
 def cleanup_effects(records, frozen, reassessed, normalize) -> dict:

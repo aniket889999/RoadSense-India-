@@ -15,8 +15,13 @@ Every RapidOCR result requires review, and the held-out test split is untouched.
 With the existing ANPR dependencies and staged, hash-pinned local model assets:
 
 ```bash
+.venv/bin/python scripts/anpr_preflight.py   # read-only readiness check; exit 1 on any FAIL
 .venv/bin/python scripts/serve_anpr_local.py
 ```
+
+`requirements-anpr.txt` records the package versions of the working environment
+used for the reported results; it is compared by the preflight, not installed over
+the existing `.venv`.
 
 Start the dashboard from `apps/web` with `npm run start` after `npm run build`,
 then select **ANPR Inspection**. Use `--engine easyocr` for the adapted EasyOCR

@@ -22,7 +22,22 @@ rather than claiming it was trained from scratch in this project.
 
 ## Reproduce the local demo
 
-From the repository root, with the existing local assets and dependencies:
+Before a demonstration, run the read-only preflight from the repository root:
+
+```bash
+.venv/bin/python scripts/anpr_preflight.py          # add --engine easyocr / --device cpu to match the launch
+```
+
+It loads no model and opens no dataset image. It hashes every pinned model
+file, compares installed packages with `requirements-anpr.txt` (the recorded
+working environment, not an install instruction), confirms the requested
+detector device is available, reads the prepared dataset's metadata, and
+reports existing listeners on ports 8000/3000 and the frontend build state.
+Any `FAIL` means the launcher is expected to return `UNAVAILABLE` or not start;
+`WARN` marks drift from the recorded state. If MPS reports unavailable inside a
+sandboxed tool, rerun in a normal Terminal before changing device settings.
+
+Then, with the existing local assets and dependencies:
 
 ```bash
 .venv/bin/python scripts/serve_anpr_local.py

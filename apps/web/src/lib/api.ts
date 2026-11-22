@@ -8,7 +8,9 @@ import {
 } from './types';
 import { AnprImageResult } from './anprTypes';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+// Same-origin by default: next.config.mjs proxies /api/v1 and /health to the local API, so the browser
+// talks to one origin (no CORS, works behind a single reverse proxy). Set NEXT_PUBLIC_API_URL to call the API directly.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 export async function recognizeAnprImage(file: File): Promise<AnprImageResult> {
   const nameLower = file.name.toLowerCase();

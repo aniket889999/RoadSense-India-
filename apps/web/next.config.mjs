@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Large video uploads and occupancy jobs go through the /api/v1 proxy below.
+  experimental: { proxyTimeout: 600_000 },
   async rewrites() {
     return [
       {

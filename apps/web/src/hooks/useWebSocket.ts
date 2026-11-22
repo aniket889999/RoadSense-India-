@@ -15,7 +15,9 @@ export function useSessionWebSocket(sessionId: string | null) {
       return;
     }
 
-    const wsUrl = `ws://127.0.0.1:8000/api/v1/sessions/${sessionId}/events`;
+    // Next.js rewrites do not proxy WebSocket upgrades, so progress events connect to the API directly.
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
+    const wsUrl = `${wsBase}/api/v1/sessions/${sessionId}/events`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
 

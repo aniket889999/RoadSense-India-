@@ -25,7 +25,7 @@ import { useSessionWebSocket } from '../hooks/useWebSocket';
 import { Activity, AlertCircle, CheckCircle2, Film, Loader2, Radio } from 'lucide-react';
 
 export default function OperationsDashboard() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('command');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('anpr');
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [sessions, setSessions] = useState<DriveSession[]>([]);
   const [activeSession, setActiveSession] = useState<DriveSession | null>(null);
@@ -135,7 +135,7 @@ export default function OperationsDashboard() {
         />
 
         {/* Central Operations Workspace */}
-        <main className="flex-1 p-5 overflow-y-auto space-y-4">
+        <main className="flex-1 p-6 lg:p-8 overflow-y-auto space-y-5">
           {/* Active Job Progress Banner (Shown during inference) */}
           {activeSession &&
             activeSession.processing_state !== 'complete' &&
@@ -196,15 +196,15 @@ export default function OperationsDashboard() {
               ) : (
                 <div className="flex flex-col items-center justify-center h-[calc(100vh-10rem)] rounded-xl glass-panel border border-command-border p-8 text-center space-y-4">
                   <Film className="w-16 h-16 text-command-muted animate-pulse" />
-                  <h3 className="text-base font-bold text-command-text">
-                    No Active Drive Session Selected
+                  <h3 className="text-3xl font-medium text-white">
+                    No drive session selected
                   </h3>
                   <p className="text-xs font-mono text-command-muted max-w-md">
                     Upload a dashcam video recording to start hardware-accelerated local inference, temporal event fusion, and human inspection review.
                   </p>
                   <button
                     onClick={() => setIsUploadOpen(true)}
-                    className="px-5 py-2 rounded-md bg-radar-bright hover:bg-radar-green text-command-bg font-bold text-xs font-mono transition-all shadow-radar"
+                    className="px-6 py-3 rounded-full bg-brand hover:bg-brand-bright text-white font-medium text-sm transition-colors shadow-brand"
                   >
                     Upload Dashcam Video
                   </button>

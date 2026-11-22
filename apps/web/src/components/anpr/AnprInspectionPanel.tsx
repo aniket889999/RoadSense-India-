@@ -32,6 +32,7 @@ import {
   PLATE_PATTERN_LABELS,
 } from '../../lib/anprTypes';
 import { createAnnotatedImage, createReviewReport, downloadBlob } from '../../lib/anprExports';
+import { RegistrationCard } from './RegistrationCard';
 import { ViewportBox, computeContainViewport } from '../../lib/canvasTransform';
 
 export interface AnprInspectionPanelProps {
@@ -357,29 +358,66 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
   return (
     <section
       aria-label="ANPR Image Inspection"
-      className="space-y-4 font-mono text-xs text-command-text"
+      className="space-y-5 font-sans text-xs text-command-text"
     >
+      {/* Brand hero: what the tool does, with honestly labelled measured results */}
+      <div className="relative overflow-hidden rounded-4xl bg-brand text-white px-7 py-9 lg:px-12 lg:py-12">
+        <div className="absolute inset-0 brand-grain opacity-60 pointer-events-none" aria-hidden="true" />
+        <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-8 items-end reveal">
+          <div className="lg:col-span-7 space-y-5">
+            <p className="text-[13px] font-medium text-white/80">Number plate recognition · India</p>
+            <h1 className="text-[40px] leading-[1.02] lg:text-[60px] font-medium tracking-[-0.035em]">
+              Find the plate.
+              <br />
+              Read it. Check it.
+              <br />
+              <span className="text-brand-ink">Let a person decide.</span>
+            </h1>
+            <p className="max-w-xl text-[15px] leading-relaxed text-white/85">
+              A trained detector finds the plate, OCR reads it, the format and issuing RTO are checked, and every
+              uncertain reading goes to review with a reason. Everything runs on this machine.
+            </p>
+          </div>
+          <dl className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-3">
+            {[
+              { value: '58 / 94', label: 'validation plates read exactly' },
+              { value: '33 · 0 wrong', label: 'auto-accepted with the opt-in policy' },
+              { value: '1,302', label: 'RTO codes decoded offline' },
+            ].map((stat) => (
+              <div key={stat.label} className="flex flex-col-reverse rounded-3xl bg-brand-ink/90 px-5 py-4">
+                <dt className="mt-1.5 text-[12px] leading-snug text-white/70">{stat.label}</dt>
+                <dd className="text-[26px] font-medium tracking-[-0.02em] leading-none">{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+        <p className="relative mt-8 text-[11px] text-white/75">
+          Validation results on mostly truck images with publisher labels; the held-out test is pending. Not a
+          registration lookup or toll system.
+        </p>
+      </div>
+
       {/* Header & Controls Bar */}
-      <div className="p-4 rounded-xl glass-panel border border-command-border space-y-3">
+      <div id="anpr-workspace" className="scroll-mt-24 p-6 rounded-xl glass-panel border border-command-border space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-command-border pb-3">
           <div className="flex items-center space-x-2">
-            <Camera className="w-4 h-4 text-radar-bright shrink-0" />
+            <Camera className="w-5 h-5 text-brand shrink-0" />
             <div>
-              <h2 className="text-sm font-bold tracking-wide text-command-text uppercase">
-                ANPR Still-Image Inspection
+              <h2 className="text-[22px] leading-tight font-medium text-white">
+                Inspect an image
               </h2>
-              <p className="text-[11px] font-sans text-command-muted">
-                Local plate detection, raw/normalized OCR readout, and IN_COMMON_V1 shape check
+              <p className="mt-1 text-[13px] leading-snug text-command-muted">
+                Plate detection, raw and normalized OCR, format check and issuing office
               </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
-            <span className="px-2.5 py-1 rounded bg-command-bg border border-command-border text-[10px] text-command-muted">
-              Profile: <strong className="text-command-text">IN_COMMON_V1</strong>
+            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-white/5 text-[12px] text-command-muted">
+              Profile <strong className="font-medium text-white">IN_COMMON_V1</strong>
             </span>
-            <span className="px-2.5 py-1 rounded bg-command-bg border border-command-border text-[10px] text-command-muted">
-              JPEG / PNG • Max 10 MiB
+            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-white/5 text-[12px] text-command-muted">
+              JPEG / PNG · max 10 MiB
             </span>
           </div>
         </div>
@@ -411,10 +449,10 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                 fileInputRef.current?.click();
               }
             }}
-            className={`lg:col-span-8 border-2 border-dashed rounded-lg p-3.5 flex items-center justify-between gap-3 cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-radar-bright ${
+            className={`lg:col-span-8 border-2 border-dashed rounded-3xl p-5 flex items-center justify-between gap-3 cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-brand ${
               selectedFile
-                ? 'border-radar-bright/70 bg-radar-dim/10'
-                : 'border-command-border hover:border-command-subtle bg-command-surface/60'
+                ? 'border-brand/70 bg-brand-soft'
+                : 'border-command-border hover:border-command-subtle bg-command-bg/60'
             }`}
           >
             <input
@@ -429,14 +467,14 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
 
             <div className="flex items-center space-x-3 min-w-0">
               {selectedFile ? (
-                <FileImage className="w-6 h-6 text-radar-bright shrink-0" />
+                <FileImage className="w-6 h-6 text-brand shrink-0" />
               ) : (
                 <UploadCloud className="w-6 h-6 text-command-muted shrink-0" />
               )}
               <div className="min-w-0">
                 {selectedFile ? (
                   <>
-                    <div className="text-xs font-semibold text-command-text truncate">
+                    <div className="text-[14px] font-medium text-white truncate">
                       {selectedFile.name}
                     </div>
                     <div className="text-[11px] text-command-muted">
@@ -448,9 +486,9 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                   </>
                 ) : (
                   <>
-                    <div className="text-xs font-medium text-command-text">
-                      Drop vehicle or gate image here, or{' '}
-                      <span className="text-radar-bright underline">Browse</span>
+                    <div className="text-[14px] font-medium text-white">
+                      Drop a vehicle or gate image here, or{' '}
+                      <span className="text-brand underline underline-offset-2">browse</span>
                     </div>
                     <div className="text-[11px] text-command-muted">
                       Single JPEG or PNG image up to 10 MiB (local preview only)
@@ -468,7 +506,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                   handleClearImage();
                 }}
                 disabled={isAnalyzing}
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded bg-command-elevated hover:bg-command-border border border-command-border text-command-muted hover:text-command-text text-[11px] shrink-0 transition-colors disabled:opacity-40"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-full bg-command-elevated hover:bg-command-border border border-white/5 text-command-muted hover:text-white text-[12px] shrink-0 transition-colors disabled:opacity-40"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Clear</span>
@@ -482,17 +520,17 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
               onClick={handleAnalyze}
               disabled={!canRunRecognition}
               aria-busy={isAnalyzing}
-              className="w-full h-full min-h-[44px] flex items-center justify-center space-x-2 px-4 py-2.5 rounded-lg bg-radar-bright hover:bg-radar-green text-command-bg font-bold text-xs shadow-radar transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full h-full min-h-[56px] flex items-center justify-center space-x-2 px-6 py-3 rounded-full bg-brand hover:bg-brand-bright text-white font-medium text-[15px] shadow-brand transition-colors disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed"
             >
               {isAnalyzing ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-                  <span>Inspecting Plate...</span>
+                  <span>Inspecting plate…</span>
                 </>
               ) : (
                 <>
                   <ScanLine className="w-4 h-4 shrink-0" />
-                  <span>Run Plate Recognition</span>
+                  <span>Run plate recognition</span>
                 </>
               )}
             </button>
@@ -512,13 +550,13 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
       </div>
 
       {result && !isAnalyzing && (
-        <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl glass-panel border border-command-border">
+        <div className="flex flex-wrap items-center gap-3 p-4 rounded-xl glass-panel border border-command-border">
           <button type="button" onClick={handleAnnotatedExport} disabled={!previewUrl || isExporting}
-            className="px-3 py-2 rounded border border-command-border bg-command-elevated hover:border-radar-bright disabled:opacity-40">
+            className="px-5 py-2.5 rounded-full bg-white text-command-bg font-medium text-[13px] hover:bg-white/90 transition-colors disabled:opacity-40">
             {isExporting ? 'Preparing image…' : 'Download annotated PNG'}
           </button>
           <button type="button" disabled={isExporting} onClick={() => downloadBlob(createReviewReport(result), `roadsense-anpr-${result.request_id.replace(/[^a-zA-Z0-9_-]/g, '')}.json`)}
-            className="px-3 py-2 rounded border border-command-border bg-command-elevated hover:border-radar-bright disabled:opacity-40">
+            className="px-5 py-2.5 rounded-full bg-command-elevated border border-white/10 text-white text-[13px] hover:bg-command-border transition-colors disabled:opacity-40">
             Download review JSON
           </button>
           <span className="font-sans text-command-muted">Exports stay in your browser. Readings are not human verified.</span>
@@ -526,12 +564,12 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
       )}
 
       {/* Main Split Grid: Image Viewport + Plate Inspection Details */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left: Local Preview & Bounding Box Overlay */}
-        <div className="lg:col-span-7 p-4 rounded-xl glass-panel border border-command-border flex flex-col space-y-3">
+        <div className="lg:col-span-7 p-6 rounded-xl glass-panel border border-command-border flex flex-col space-y-4">
           <div className="flex items-center justify-between">
-            <span className="font-bold uppercase tracking-wider text-command-muted text-[11px]">
-              Source Image & Plate Bounding Boxes
+            <span className="text-[17px] leading-snug font-medium text-white">
+              Image and detected plates
             </span>
             {result && (
               <span className="text-[11px] text-command-muted">
@@ -662,10 +700,10 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
         </div>
 
         {/* Right: Result Status & Per-Plate OCR Readouts */}
-        <div className="lg:col-span-5 p-4 rounded-xl glass-panel border border-command-border flex flex-col space-y-3">
-          <div className="flex items-center justify-between border-b border-command-border pb-2">
-            <span className="font-bold uppercase tracking-wider text-command-muted text-[11px]">
-              Recognition & Format Assessment
+        <div className="lg:col-span-5 p-6 rounded-xl glass-panel border border-command-border flex flex-col space-y-4">
+          <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            <span className="text-[17px] leading-snug font-medium text-white">
+              Reading and checks
             </span>
             {result && (
               <span className="flex items-center space-x-1 text-[11px] text-command-muted">
@@ -697,7 +735,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                     {!isServiceConnected
                       ? 'Recognition service is not connected yet.'
                       : selectedFile
-                      ? 'Click "Run Plate Recognition" to inspect the selected image.'
+                      ? 'Select "Run plate recognition" to inspect the selected image.'
                       : 'Choose a JPEG or PNG image to begin inspection.'}
                   </p>
                 </>
@@ -989,6 +1027,13 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
           )}
         </div>
       </div>
+
+      {/* Registration card for the selected plate: real issuing office + simulated demo owner section */}
+      {result && !isAnalyzing && result.plates.length > 0 && (
+        <RegistrationCard
+          plate={result.plates.find((p) => p.plate_id === selectedPlateId) ?? result.plates[0]}
+        />
+      )}
     </section>
   );
 }

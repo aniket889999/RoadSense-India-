@@ -11,18 +11,25 @@ advisory blur/illumination/tilt cues, annotated PNG export and a JSON review rep
 The ANPR screen is available in the existing local dashboard.
 
 The trained YOLOv8n plate detector is paired with pretrained RapidOCR PP-OCRv4;
-a locally adapted EasyOCR recognizer is preserved as a comparison. Schema 1.2
-now exposes explicit cleanup as separate reviewed `candidate_text`, while raw
-and normalized OCR evidence remain unchanged.
+a locally adapted EasyOCR recognizer is preserved as a comparison. ANPR schema
+1.3 exposes explicit cleanup as separate reviewed `candidate_text` (raw and
+normalized OCR evidence unchanged), an `IN_PLATE_V2` format check with state/UT
+codes, BH series and look-alike hints, and the issuing state/RTO office decoded
+from a pinned public directory (no owner or vehicle data).
 
 On the same **71 validation images / 94 plates**, the applied candidate policy
 has **58/94 (61.7%) exact agreement, 18.38% CER, and 21 fixed / 0 broken reads**.
 The original normalized-text baseline remains 37/94 (39.36%) and 24.07% CER.
 The policy was derived from these validation failures, so this is an optimistic
 validation agreement with `publisher_mixed` labels, mainly trucks, **not an
-independent accuracy estimate**. Cleaned candidates are never auto-accepted;
-all RapidOCR readings require human review. The ANPR held-out test is pending.
-Source: [candidate cleanup policy results](docs/anpr/text_cleanup_policy_results.md).
+independent accuracy estimate**. Cleaned candidates are never auto-accepted.
+By default every RapidOCR reading requires human review; the opt-in
+`--auto-accept` policy accepted 33/94 validation plates with 0 wrong (95% upper
+bound ≈ 8.7%) and routed the rest to review. The ANPR held-out test is pending.
+Sources: [candidate cleanup](docs/anpr/text_cleanup_policy_results.md),
+[acceptance policy](docs/anpr/acceptance_policy_results.md).
+
+**Full write-up for the jury: [ANPR final report](docs/anpr/final_report.md).**
 
 With the existing ANPR dependencies and staged, hash-pinned local model assets:
 

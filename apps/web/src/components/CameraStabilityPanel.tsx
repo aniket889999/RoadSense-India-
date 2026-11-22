@@ -232,16 +232,16 @@ export function CameraStabilityPanel({
         id="camera-operational-gate-banner"
         className={`p-3.5 rounded-xl border flex flex-col space-y-2 transition-all ${
           isGateAllowed
-            ? 'bg-emerald-950/30 border-emerald-600/50 text-emerald-300'
-            : 'bg-rose-950/40 border-rose-600/60 text-rose-300'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+            : 'bg-rose-50 border-rose-200 text-rose-700'
         }`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             {isGateAllowed ? (
-              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
             ) : (
-              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 animate-pulse" />
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 animate-pulse" />
             )}
             <div>
               <span className="font-bold text-xs tracking-wider uppercase">
@@ -257,7 +257,7 @@ export function CameraStabilityPanel({
           <button
             onClick={loadStabilityData}
             disabled={isLoading}
-            className="p-1 rounded bg-black/40 hover:bg-black/60 border border-command-border text-command-muted hover:text-white"
+            className="p-1 rounded bg-black/40 hover:bg-black/60 border border-white/20 text-white/80 hover:text-white"
             title="Refresh Gate Status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -267,14 +267,14 @@ export function CameraStabilityPanel({
         {/* Prominent Fail-Closed Notice */}
         <div className={`p-2 rounded text-[11px] font-sans font-medium border ${
           isGateAllowed
-            ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-200'
-            : 'bg-rose-900/40 border-rose-700/60 text-rose-100'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+            : 'bg-rose-50 border-rose-200 text-rose-800'
         }`}>
           {isGateAllowed ? (
             <span>Camera stability verified. Geometry matches reference and verified layout.</span>
           ) : (
             <span className="flex items-center space-x-1.5 font-bold">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
               <span>Parking occupancy is blocked until camera geometry is verified stable</span>
             </span>
           )}
@@ -304,7 +304,7 @@ export function CameraStabilityPanel({
         </div>
 
         {!hasReferenceImage ? (
-          <div className="p-2.5 rounded bg-amber-950/30 border border-amber-600/40 text-amber-300 text-[11px]">
+          <div className="p-2.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[11px]">
             A reference frame must be uploaded to this camera before running stability checks.
           </div>
         ) : (
@@ -328,7 +328,7 @@ export function CameraStabilityPanel({
                   onClick={() => fileInputRef.current?.click()}
                   className={`flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded border text-xs transition-all ${
                     selectedFile
-                      ? 'bg-blue-900/40 border-blue-500 text-blue-200'
+                      ? 'bg-blue-50 border-blue-500 text-blue-700'
                       : 'bg-command-elevated border-command-border hover:border-radar-bright text-command-text'
                   }`}
                 >
@@ -339,7 +339,7 @@ export function CameraStabilityPanel({
             </div>
 
             {assessmentError && (
-              <div className="p-2 rounded bg-rose-950/40 border border-rose-600/50 text-rose-300 text-[11px]">
+              <div className="p-2 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[11px]">
                 {assessmentError}
               </div>
             )}
@@ -367,16 +367,16 @@ export function CameraStabilityPanel({
 
       {/* 3. In-Progress Job Progress Banner */}
       {isJobRunning && selectedAssessment && (
-        <div className="p-3.5 rounded-xl bg-blue-950/30 border border-blue-600/50 space-y-2">
-          <div className="flex items-center justify-between text-blue-300">
+        <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-2">
+          <div className="flex items-center justify-between text-blue-700">
             <div className="flex items-center space-x-2 font-bold">
-              <Activity className="w-4 h-4 animate-pulse text-blue-400" />
+              <Activity className="w-4 h-4 animate-pulse text-blue-600" />
               <span>Assessment Job In Progress ({selectedAssessment.status})</span>
             </div>
             <button
               onClick={handleCancelAssessment}
               disabled={isCancelling}
-              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-900/50 border border-rose-600 text-rose-200 text-[10px] hover:bg-rose-900"
+              className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-50 border border-rose-600 text-rose-700 text-[10px] hover:bg-rose-50"
             >
               <Ban className="w-3 h-3" />
               <span>{isCancelling ? 'Cancelling...' : 'Cancel Job'}</span>
@@ -390,7 +390,7 @@ export function CameraStabilityPanel({
             />
           </div>
 
-          <div className="flex items-center justify-between text-[10px] text-blue-200/80">
+          <div className="flex items-center justify-between text-[10px] text-blue-700">
             <span>{selectedAssessment.stage_message || 'Processing frames...'}</span>
             <span className="font-bold">{selectedAssessment.progress_pct.toFixed(0)}%</span>
           </div>
@@ -408,8 +408,8 @@ export function CameraStabilityPanel({
             <span
               className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                 selectedAssessment.aggregate_decision === 'STABLE'
-                  ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-600'
-                  : 'bg-rose-900/60 text-rose-300 border border-rose-600'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-600'
+                  : 'bg-rose-50 text-rose-700 border border-rose-600'
               }`}
             >
               {selectedAssessment.aggregate_decision}
@@ -464,9 +464,9 @@ export function CameraStabilityPanel({
               {selectedAssessment.video_sha256 && (
                 <div>Video SHA: <span className="text-command-text text-[9px] break-all">{selectedAssessment.video_sha256.slice(0, 16)}...</span></div>
               )}
-              <div>Config: <span className="text-white">v{selectedAssessment.config_version || '1.0.0'}</span> ({selectedAssessment.config_sha256 ? selectedAssessment.config_sha256.slice(0, 8) : 'default'})</div>
-              <div>Engine: <span className="text-white">{selectedAssessment.algorithm_version}</span> (OpenCV {selectedAssessment.opencv_version})</div>
-              <div>Completed: <span className="text-white">{new Date(selectedAssessment.created_at).toLocaleString()}</span></div>
+              <div>Config: <span className="text-command-text">v{selectedAssessment.config_version || '1.0.0'}</span> ({selectedAssessment.config_sha256 ? selectedAssessment.config_sha256.slice(0, 8) : 'default'})</div>
+              <div>Engine: <span className="text-command-text">{selectedAssessment.algorithm_version}</span> (OpenCV {selectedAssessment.opencv_version})</div>
+              <div>Completed: <span className="text-command-text">{new Date(selectedAssessment.created_at).toLocaleString()}</span></div>
             </div>
           </div>
 
@@ -497,7 +497,7 @@ export function CameraStabilityPanel({
                         <td className="p-1">
                           <span
                             className={`px-1 py-0.2 rounded text-[9px] font-bold ${
-                              s.decision === 'STABLE' ? 'text-emerald-400' : 'text-rose-400'
+                              s.decision === 'STABLE' ? 'text-emerald-600' : 'text-rose-600'
                             }`}
                           >
                             {s.decision}
@@ -521,7 +521,7 @@ export function CameraStabilityPanel({
                 setAckTriggerInvalidation(false);
                 setIsAckModalOpen(true);
               }}
-              className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-amber-600/20 border border-amber-600/50 hover:bg-amber-600/30 text-amber-300 font-bold transition-all"
+              className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded bg-amber-600/20 border border-amber-200 hover:bg-amber-600/30 text-amber-700 font-bold transition-all"
             >
               <AlertTriangle className="w-3.5 h-3.5" />
               <span>Record Operator Acknowledgement</span>
@@ -544,14 +544,14 @@ export function CameraStabilityPanel({
                 className="p-2 rounded bg-command-bg border border-command-border text-[10px] space-y-0.5"
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-white uppercase">{evt.event_type}</span>
+                  <span className="font-bold text-command-text uppercase">{evt.event_type}</span>
                   <span className="text-[9px] text-command-muted">{new Date(evt.created_at).toLocaleTimeString()}</span>
                 </div>
                 <div className="text-command-muted">
                   Operator: <span className="text-command-text">{evt.operator_identity}</span>
                 </div>
                 <div className="text-command-muted">
-                  Reason: <span className="text-amber-300 italic">{evt.explicit_reason}</span>
+                  Reason: <span className="text-amber-700 italic">{evt.explicit_reason}</span>
                 </div>
                 {evt.note && <div className="text-[9px] text-command-muted italic">"{evt.note}"</div>}
               </div>
@@ -574,7 +574,7 @@ export function CameraStabilityPanel({
                 onClick={() => setSelectedAssessment(a)}
                 className={`w-full text-left p-1.5 rounded flex items-center justify-between border text-[10px] transition-all ${
                   selectedAssessment?.id === a.id
-                    ? 'bg-command-elevated border-radar-bright text-white'
+                    ? 'bg-command-elevated border-radar-bright text-command-text'
                     : 'bg-command-bg border-command-border text-command-muted hover:text-command-text'
                 }`}
               >
@@ -596,16 +596,16 @@ export function CameraStabilityPanel({
 
       {/* 7. Acknowledge Assessment Modal */}
       {isAckModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4 font-mono text-xs">
             <div className="flex items-center space-x-2 text-command-text font-bold text-sm">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
               <span>Operator Stability Review & Acknowledgement</span>
             </div>
 
             <form onSubmit={handleAcknowledgeConfirm} className="space-y-3">
               {ackError && (
-                <div className="p-2 rounded bg-rose-950/40 border border-rose-600/50 text-rose-300 text-[11px]">
+                <div className="p-2 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[11px]">
                   {ackError}
                 </div>
               )}
@@ -632,7 +632,7 @@ export function CameraStabilityPanel({
               </div>
 
               {selectedAssessment?.aggregate_decision === 'UNSTABLE' ? (
-                <div className="p-3 rounded bg-rose-950/30 border border-rose-600/40 space-y-2">
+                <div className="p-3 rounded bg-rose-50 border border-rose-200 space-y-2">
                   <label className="flex items-center space-x-2 cursor-pointer">
                     <input
                       type="checkbox"
@@ -640,13 +640,13 @@ export function CameraStabilityPanel({
                       onChange={(e) => setAckTriggerInvalidation(e.target.checked)}
                       className="rounded border-command-border bg-command-bg text-radar-bright focus:ring-0"
                     />
-                    <span className="font-bold text-rose-300 text-xs">
+                    <span className="font-bold text-rose-700 text-xs">
                       Trigger Audited Layout Invalidation
                     </span>
                   </label>
 
                   {ackTriggerInvalidation && (
-                    <div className="space-y-2 pt-1 border-t border-rose-800/40">
+                    <div className="space-y-2 pt-1 border-t border-rose-200">
                       <div>
                         <label className="block text-[10px] text-command-muted uppercase mb-1">
                           Invalidation Reason (Required)
@@ -668,7 +668,7 @@ export function CameraStabilityPanel({
                           required
                           className="rounded border-command-border bg-command-bg text-radar-bright focus:ring-0"
                         />
-                        <span className="text-[10px] text-rose-200 font-bold">
+                        <span className="text-[10px] text-rose-700 font-bold">
                           I explicitly confirm camera geometry is compromised and must be invalidated.
                         </span>
                       </label>
@@ -685,7 +685,7 @@ export function CameraStabilityPanel({
                 <button
                   type="button"
                   onClick={() => setIsAckModalOpen(false)}
-                  className="px-3 py-1.5 rounded bg-command-elevated text-command-muted hover:text-white"
+                  className="px-3 py-1.5 rounded bg-command-elevated text-command-muted hover:text-command-text"
                 >
                   Cancel
                 </button>

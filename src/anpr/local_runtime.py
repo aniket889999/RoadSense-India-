@@ -8,11 +8,18 @@ local ``AnprRuntime``.
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Optional
 
+from src.anpr.acceptance_policy import ENV_ACCEPTANCE, resolve_acceptance
 from src.anpr.detector import UltralyticsPlateDetector
-from src.anpr.ocr import EasyOcrPlateRecognizer
-from src.anpr.runtime_contracts import AnprRuntime
+from src.anpr.ocr import (
+    ENV_OCR_ENGINE,
+    EasyOcrPlateRecognizer,
+    RapidOcrPlateRecognizer,
+    SUPPORTED_OCR_ENGINES,
+)
+from src.anpr.runtime_contracts import AnprRuntime, PlateRecognizer, RuntimeUnavailable
 
 
 def build_local_runtime(
@@ -20,6 +27,8 @@ def build_local_runtime(
     weights_path: Optional[str] = None,
     expected_sha256: Optional[str] = None,
     ocr_model_dir: Optional[str] = None,
+    ocr_engine: Optional[str] = None,
+    ocr_crop_view: Optional[str] = None,
     device: Optional[str] = None,
     repo_root: Optional[Path] = None,
 ) -> AnprRuntime:
@@ -27,17 +36,40 @@ def build_local_runtime(
 
     Raises ``RuntimeUnavailable`` if any required environment setting, local
     weight file, SHA-256 digest, single-class ``license_plate`` schema, or
-    optional dependency (Ultralytics / EasyOCR) is missing or incompatible.
+    optional dependency (Ultralytics / EasyOCR / RapidOCR) is missing or
+    incompatible. Defaults to ``ocr_engine='easyocr'`` so the deployed
+    application runtime remains unchanged unless explicitly configured.
+    ``ROADSENSE_ANPR_ACCEPTANCE`` selects a named acceptance policy (default
+    ``review_only``; see ``src.anpr.acceptance_policy``).
     """
+    raw_engine = os.environ.get(ENV_OCR_ENGINE, "easyocr") if ocr_engine is None else ocr_engine
+    if not isinstance(raw_engine, str) or raw_engine.strip().lower() not in SUPPORTED_OCR_ENGINES:
+        raise RuntimeUnavailable(
+            f"Unsupported {ENV_OCR_ENGINE} {raw_engine!r}. Supported values: {SUPPORTED_OCR_ENGINES}."
+        )
+    normalized_engine = raw_engine.strip().lower()
+    acceptance = resolve_acceptance(normalized_engine, os.environ.get(ENV_ACCEPTANCE))
+
     detector = UltralyticsPlateDetector(
         weights_path=weights_path,
         expected_sha256=expected_sha256,
         device=device,
         repo_root=repo_root,
     )
-    recognizer = EasyOcrPlateRecognizer(
-        model_dir=ocr_model_dir,
-        device=device,
-        repo_root=repo_root,
-    )
-    return AnprRuntime(detector=detector, recognizer=recognizer)
+    recognizer: PlateRecognizer
+    if normalized_engine == "rapidocr":
+        recognizer = RapidOcrPlateRecognizer(
+            model_dir=ocr_model_dir,
+            repo_root=repo_root,
+            crop_view=ocr_crop_view,
+            review_only=acceptance.review_only,
+        )
+    else:
+        recognizer = EasyOcrPlateRecognizer(
+            model_dir=ocr_model_dir,
+            device=device,
+            repo_root=repo_root,
+            crop_view=ocr_crop_view,
+        )
+    return AnprRuntime(detector=detector, recognizer=recognizer,
+                       minimum_confidence=acceptance.minimum_confidence)

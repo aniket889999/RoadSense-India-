@@ -2,15 +2,47 @@
 ## Multi-Modal Spatio-Temporal Architecture, Entity Data Model & Geometry Calibration
 
 > **Classification:** System Architecture & Data Engineering Specification
-> **Status:** Architecture Baseline (Pre-Implementation)
+> **Historical status:** Original pre-implementation architecture baseline; see current inventory below.
 > **Repository:** `RoadSense-India-`
 > **Branch:** `feat/hazard-aware-parking-research`
+
+## Current status
+
+The branch above identifies the historical design milestone. The current
+academic deliverable is [ANPR inspection](../anpr/model_card.md), with applied,
+review-only schema 1.2 candidate cleanup. ANPR is a separate workflow; it is
+not associated with a specific parking bay or an owner's registration record.
+
+| Proposed area | Status | Implemented boundary or remaining target |
+| --- | --- | --- |
+| Human-verified camera reference/layout, bays and approach polygons | Implemented | Local normalized image geometry and revision/audit lifecycle |
+| Camera stability gate and recorded occupancy | Implemented | Bounded local jobs; blocked/unknown evidence fails closed |
+| Mobile recorded inspection and manual hazard-to-bay/approach links | Implemented | Explicit operator-reviewed associations, not automatic cross-camera projection |
+| Safe usable capacity | Implemented | Evidence-based policy/snapshot; not proof of physical safety or motorist navigation |
+| Continuous RTSP ingress and server WebRTC inference | Not implemented | Browser MediaDevices preview is implemented; no server live inference contract |
+| Interactive MapLibre/lot routing | Partial | Road-event map with GPS track import exists for drive sessions; parking lots still use image-space ROI geometry, with no world map or routing |
+| PostgreSQL/PostGIS data model below | Partial | Configurable PostgreSQL and a PostGIS-capable image; SQLite default and JSON/scalar geometry in the actual ORM |
+| PostGIS world geometry, spatial queries and calibrated multi-camera fusion | Not implemented | Proposed `Polygon`/`Point` fields are target schema, not current columns/queries |
+| Maintenance opportunity forecasting, work-order dispatch and repair scheduling | Not implemented | Research/product hypotheses, not operational integrations |
+| ANPR-to-parking-bay association | Not implemented | No identity matching, payment or barrier control |
+| Deployment identity/access and uniform automatic retention | Not implemented | Application audit labels and proposed retention windows are not RBAC or an enforced scheduler |
+
+Implementation sources are linked in the
+[system status matrix](system_overview.md#current-status), including actual
+[ORM entities](../../services/api/app/models/entities.py) and
+[capacity policy](../../src/parking/capacity_policy.py).
+The numbered diagrams/entity specifications below preserve the original research
+targets. Proposed fields, permanent/rolling retention periods, hardware metadata,
+RTSP/forecasting flows and world-coordinate transforms must not be advertised
+as implemented solely because they appear in this specification. Section 7
+records later implemented policy boundaries; independent field validation of
+the wider design is not established.
 
 ---
 
 ## 1. System Overview & Dual-Stream Fusion Architecture
 
-RoadSense SiteOps integrates two asynchronous visual telemetry streams into a unified site spatial coordinate layer:
+The historical target architecture proposes two visual streams in a shared site layer; the current implementation does not establish automatic world-coordinate fusion:
 1. **Fixed Overhead CCTV Stream (High Temporal Frequency, Static Perspective):** Monitors parking stall occupancy dynamics, vehicle dwell times, and aisle blockage via continuous video feeds.
 2. **Mobile Inspection Dashcam Stream (Low Temporal Frequency, High Pavement Resolution):** Captures high-detail pavement condition data from mobile vehicles or carts traversing facility aisles.
 
@@ -52,7 +84,9 @@ flowchart TD
 
 ## 2. Relational & Spatial Entity Data Model
 
-The persistence layer organizes data into 14 distinct entities stored in PostgreSQL/PostGIS.
+The historical design proposes 14 entities and PostGIS fields. This is not an
+inventory of the implemented schema: current persistence uses the ORM linked
+above, with normalized JSON geometry rather than PostGIS geometry columns.
 
 ```
 ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────────┐
@@ -187,6 +221,11 @@ The persistence layer organizes data into 14 distinct entities stored in Postgre
 
 ## 3. Geometric Reasoning, Polygon Calibration & Fusion Boundaries
 
+**Implemented:** Reference/layout identity checks and an operational visual
+stability gate. **Not implemented:** Surveyed world-coordinate calibration,
+automatic cross-camera projection and PostGIS geometric fusion. A verified
+human layout is not proof of a surveyed camera's metric calibration.
+
 ### 3.1 Strict Geometric Fusion Boundaries
 To ensure geometric validity and prevent erroneous spatial assumptions:
 1. **No Automatic Cross-Camera Video Mapping:** Mobile dashcam pothole detections **cannot** automatically map to CCTV parking polygons from video appearance alone.
@@ -208,19 +247,19 @@ To ensure geometric validity and prevent erroneous spatial assumptions:
 ## 4. MVP Architecture & Boundary Definition
 
 ### 4.1 MVP Scope (Phase 1)
-1. **Single Fixed Camera:** Ingest 1 RTSP or local video stream covering 10–30 bays.
-2. **Manual Space Configuration:** UI polygon tool for human-verified parking space and approach zone boundaries.
-3. **Tracking & Factored State Engine:** YOLO vehicle detection + stream-local ByteTrack + factored occupancy state machine.
-4. **Mobile Pavement Ingest:** Upload and processing of mobile cart inspection video.
-5. **Frozen Pothole Detection:** Pinned YOLOv8n D40 baseline execution.
-6. **Human Review Queue:** Interactive defect confirmation and manual hazard-to-space linking.
-7. **Safe Usable Capacity Dashboard:** Live counter ($SUC$), factored state lot map, and state summary.
-8. **Annotated Local MP4 Replay:** Generated locally via FFmpeg subprocess.
-9. **Append-Only Review History:** Application-level audit logging of review actions and state changes.
-10. **100% Local Execution:** Subprocess-hardened, zero outbound cloud calls.
+1. **Partial — Single fixed camera:** Recorded local-video jobs are implemented; continuous RTSP is not. The original 10–30-bay target is not a measured capacity guarantee.
+2. **Implemented — Manual space configuration:** Human-verified parking/approach polygon UI.
+3. **Implemented — Recorded-job tracking/occupancy:** Local detector, session-local ByteTrack and conservative state transitions; not a continuous service.
+4. **Implemented — Mobile pavement ingest:** Recorded inspection upload/processing.
+5. **Implemented — Frozen pothole detection:** Pinned D40 research baseline with limited held-out performance.
+6. **Implemented — Human review:** Defect confirmation and manual hazard association, without automatic cross-camera mapping.
+7. **Partial — Capacity dashboard:** Operator-facing policy/snapshots exist; an interactive world lot map, live guidance feed and motorist routing are not implemented.
+8. **Implemented — Annotated local MP4:** FFmpeg replay in the recorded workflow.
+9. **Implemented — Application audit history:** Not a certified immutable ledger or authenticated-identity guarantee.
+10. **Partial — Local inference design:** Inspected model paths use local assets; no complete zero-outbound/telemetry audit is established.
 
 ### 4.2 System Exclusions (Deferred to Future Research)
-- License plate recognition (ALPR), vehicle re-identification across lots, facial recognition, payment/fines, automated work order contractor dispatch, and automated 3D volumetric depth reconstruction.
+- The original parking MVP excluded plate recognition. A separate ANPR image-inspection module is now implemented; **ANPR-to-bay association remains Not implemented**. Vehicle re-identification, facial recognition, payment/fines, automated contractor dispatch and volumetric depth reconstruction remain excluded/not implemented.
 
 ---
 

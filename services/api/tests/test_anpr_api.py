@@ -44,7 +44,7 @@ async def test_real_decode_and_injected_recognition_return_versioned_result(anpr
     )
     assert response.status_code == 200, response.text
     result = response.json()
-    assert result["schema_version"] == "1.0"
+    assert result["schema_version"] == "1.3"
     assert result["status"] == "COMPLETE"
     assert (result["image_width"], result["image_height"]) == (80, 40)
     assert result["plates"][0]["normalized_text"] == "MH12AB1234"

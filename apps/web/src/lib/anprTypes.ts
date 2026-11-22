@@ -19,7 +19,63 @@ export type ReasonCode =
   | 'NO_TEXT'
   | 'OCR_CONFIDENCE_MISSING'
   | 'LOW_OCR_CONFIDENCE'
-  | 'FORMAT_NOT_SUPPORTED';
+  | 'FORMAT_NOT_SUPPORTED'
+  | 'OCR_REVIEW_ONLY'
+  | 'TEXT_CLEANED'
+  | 'UNKNOWN_STATE_CODE';
+
+/**
+ * Advisory IN_PLATE_V2 check of the review text (schema 1.3). Look-alike suggestions
+ * are reviewer hints and are never applied to any text field.
+ */
+/**
+ * Issuing state/UT and RTO office of a state-series code, from a pinned public RTO
+ * directory (Wikipedia, CC BY-SA 4.0). Not a vehicle or owner record.
+ */
+export interface RegistrationOrigin {
+  state_code: string;
+  state_name: string | null;
+  rto_code: string;
+  rto_in_table: boolean;
+  rto_office: string | null;
+  rto_jurisdiction: string | null;
+  rto_notes: string | null;
+  source_revision: number;
+}
+
+export interface PlateFormatAssessment {
+  profile: 'IN_PLATE_V2';
+  assessed_text_source: 'normalized' | 'candidate';
+  pattern: 'STATE_SERIES' | 'BH_SERIES' | null;
+  state_code: string | null;
+  state_code_known: boolean | null;
+  lookalike_suggestions: string[];
+  registration_origin?: RegistrationOrigin | null;
+}
+
+/** Explicit removal steps that derive `candidate_text` from `normalized_text`. */
+export type TextCleanup = 'PUNCTUATION_REMOVED' | 'LEADING_EMBLEM_REMOVED';
+
+export type QualityFlag = 'SMALL_CROP' | 'LOW_SHARPNESS' | 'DARK_CROP' | 'CLIPPED_HIGHLIGHTS' | 'TILT_OBSERVED';
+
+export interface PlateImageQuality {
+  method: 'opencv_review_v1';
+  crop_width: number;
+  crop_height: number;
+  sharpness_score: number;
+  mean_brightness: number;
+  clipped_highlight_fraction: number;
+  observed_line_tilt_degrees: number | null;
+  warnings: QualityFlag[];
+}
+
+export const QUALITY_GUIDANCE: Record<QualityFlag, string> = {
+  SMALL_CROP: 'Small plate crop: move closer or use a higher-resolution source.',
+  LOW_SHARPNESS: 'Low detail, possibly blur: hold the camera steady and check focus.',
+  DARK_CROP: 'Dark crop: improve lighting and check that characters remain visible.',
+  CLIPPED_HIGHLIGHTS: 'Many bright clipped pixels: check for glare hiding characters.',
+  TILT_OBSERVED: 'Slanted edges observed: try a straight-on capture and inspect both text lines.',
+};
 
 /**
  * Half-open x/y pixel bounds in the EXIF-normalized source image.
@@ -37,6 +93,12 @@ export interface PlateBox {
 export interface OcrAssessment {
   raw_text: string;
   normalized_text: string;
+  /** Present only when explicit cleanup removed non-registration marks (schema 1.2). */
+  candidate_text?: string | null;
+  /** Format check of `candidate_text`; `format_status` always describes `normalized_text`. */
+  candidate_format_status?: FormatStatus | null;
+  text_cleanup?: TextCleanup[];
+  plate_format?: PlateFormatAssessment | null;
   ocr_confidence: number | null;
   format_profile: FormatProfile;
   format_status: FormatStatus;
@@ -51,13 +113,14 @@ export interface PlateResult extends OcrAssessment {
   plate_id: string;
   bbox: PlateBox;
   detection_confidence: number;
+  image_quality?: PlateImageQuality | null;
 }
 
 /**
  * Complete single-image ANPR inspection result.
  */
 export interface AnprImageResult {
-  schema_version: '1.0';
+  schema_version: '1.0' | '1.1' | '1.2' | '1.3';
   request_id: string;
   status: ResultStatus;
   image_width: number;
@@ -95,4 +158,17 @@ export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   OCR_CONFIDENCE_MISSING: 'OCR confidence score missing',
   LOW_OCR_CONFIDENCE: 'OCR score below review threshold',
   FORMAT_NOT_SUPPORTED: 'Normalized text does not match IN_COMMON_V1 shape',
+  OCR_REVIEW_ONLY: 'This engine provides review suggestions. Confirm the characters against the crop.',
+  TEXT_CLEANED: 'Non-registration marks were removed to form the candidate. Compare it with the raw text and crop.',
+  UNKNOWN_STATE_CODE: 'The first two letters are not a known state/UT code. Check them against the crop.',
+};
+
+export const PLATE_PATTERN_LABELS: Record<'STATE_SERIES' | 'BH_SERIES', string> = {
+  STATE_SERIES: 'State series (e.g. state code, district, series, number)',
+  BH_SERIES: 'Bharat series (YY BH #### XX)',
+};
+
+export const TEXT_CLEANUP_LABELS: Record<TextCleanup, string> = {
+  PUNCTUATION_REMOVED: 'Dot-like marks removed (. , : · • °)',
+  LEADING_EMBLEM_REMOVED: 'Leading IND country code removed',
 };

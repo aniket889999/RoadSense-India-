@@ -17,6 +17,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # Optional ANPR API container (CPU). Not started by a plain `docker compose up`:
+  #   docker compose -f infra/docker-compose.yml --profile api up --build api
+  # Models are mounted read-only; nothing is downloaded at runtime. Bound to localhost only.
+  # Set ROADSENSE_API_KEY / ROADSENSE_ANPR_RATE_LIMIT_PER_MINUTE before exposing it further.
+  api:
+    profiles: ["api"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: roadsense_anpr_api
+    restart: "no"
+    environment:
+      ROADSENSE_API_KEY: ${ROADSENSE_API_KEY:-}
+      ROADSENSE_ANPR_RATE_LIMIT_PER_MINUTE: ${ROADSENSE_ANPR_RATE_LIMIT_PER_MINUTE:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ../models:/app/models:ro
+      - ../outputs:/app/outputs
+
 volumes:
   postgres_data:
     driver: local

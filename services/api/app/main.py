@@ -12,7 +12,7 @@ from services.api.app.core.config import settings
 from services.api.app.core.logging import logger
 from services.api.app.db.base import Base
 from services.api.app.db.session import engine
-from services.api.app.routers import anpr, health, live, parking, road_events, sessions
+from services.api.app.routers import anpr, geo, health, live, parking, road_events, sessions
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -143,3 +143,4 @@ app.include_router(road_events.router)
 app.include_router(live.router)
 app.include_router(parking.router)
 app.include_router(anpr.router)
+app.include_router(geo.router)

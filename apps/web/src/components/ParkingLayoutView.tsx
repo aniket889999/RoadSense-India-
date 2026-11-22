@@ -28,6 +28,7 @@ import {
   verifyLayout,
 } from '../lib/parkingApi';
 import { DrawingMode, ParkingCanvas } from './ParkingCanvas';
+import { ParkingSetupGuide } from './ParkingSetupGuide';
 import { LayoutVerificationModal } from './LayoutVerificationModal';
 import { LayoutSubmitModal } from './LayoutSubmitModal';
 import { ReferenceImageReplaceModal } from './ReferenceImageReplaceModal';
@@ -88,6 +89,12 @@ export function ParkingLayoutView() {
   const [isBranchingDraft, setIsBranchingDraft] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [activeRightTab, setActiveRightTab] = useState<'editor' | 'stability' | 'occupancy'>('editor');
+  const [guideRefreshKey, setGuideRefreshKey] = useState(0);
+
+  // Refresh the setup guide after any action that reports feedback or switches the working panel.
+  useEffect(() => {
+    setGuideRefreshKey((k) => k + 1);
+  }, [feedbackMessage, activeRightTab]);
 
   // Modals
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
@@ -449,29 +456,19 @@ export function ParkingLayoutView() {
   const selectedApproach = approachZones.find((a) => a.parking_space_id === selectedSpaceId) || null;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8.5rem)] space-y-3 font-mono">
-      {/* Disclaimer Banner */}
-      <div className="flex items-center justify-between px-4 py-2 rounded-lg bg-command-elevated border border-command-border text-xs">
-        <div className="flex items-center space-x-2 text-radar-bright font-bold">
-          <Layers className="w-4 h-4" />
-          <span>RoadSense SiteOps: Parking Geometry & ROI Configuration</span>
-        </div>
-        <div className="flex items-center space-x-3 text-command-muted text-[11px]">
-          <span className="flex items-center space-x-1.5">
-            <span className="w-2 h-2 rounded-full bg-accent-amber animate-pulse" />
-            <span>Layout configuration only — occupancy inference is not connected.</span>
-          </span>
-          <button
-            id="stability-gate-shortcut-btn"
-            onClick={() => setActiveRightTab('stability')}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-950/60 border border-rose-600/60 text-rose-300 hover:text-white font-bold transition-all"
-            title="Inspect Fail-Closed Stability Gate"
-          >
-            <ShieldAlert className="w-3 h-3 text-rose-400" />
-            <span>Stability Gate</span>
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col space-y-3 font-mono">
+      {/* Guided setup and live lot status */}
+      <ParkingSetupGuide
+        site={sites.find((x) => x.id === selectedSiteId) ?? null}
+        camera={activeCamera ?? null}
+        layout={activeLayout}
+        layouts={layouts}
+        refreshKey={guideRefreshKey}
+        onGoTo={setActiveRightTab}
+        onCreateSite={() => setIsNewSiteModalOpen(true)}
+        onCreateCamera={() => setIsNewCameraModalOpen(true)}
+        onUploadReference={() => fileInputRef.current?.click()}
+      />
 
       {/* Top Controls Bar */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 p-3 rounded-xl glass-panel border border-command-border text-xs">
@@ -583,7 +580,7 @@ export function ParkingLayoutView() {
       </div>
 
       {/* Main Workspace Stage */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-[calc(100vh-10rem)] min-h-[560px] overflow-hidden">
         {/* Canvas & Drawing Tools (8 Cols) */}
         <div className="lg:col-span-8 flex flex-col h-full space-y-2">
           {/* Drawing Toolbar */}
@@ -716,10 +713,10 @@ export function ParkingLayoutView() {
             <div
               className={`px-3 py-2 rounded-lg text-xs flex items-center justify-between ${
                 feedbackMessage.type === 'success'
-                  ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                  ? 'bg-emerald-500/10 border border-emerald-200 text-emerald-600'
                   : feedbackMessage.type === 'error'
-                  ? 'bg-red-500/10 border border-red-500/30 text-red-400'
-                  : 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+                  ? 'bg-red-500/10 border border-red-200 text-red-600'
+                  : 'bg-blue-500/10 border border-blue-200 text-blue-600'
               }`}
             >
               <span>{feedbackMessage.text}</span>
@@ -759,7 +756,7 @@ export function ParkingLayoutView() {
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'editor'
                   ? 'bg-command-surface text-radar-bright shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
@@ -770,8 +767,8 @@ export function ParkingLayoutView() {
               onClick={() => setActiveRightTab('stability')}
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'stability'
-                  ? 'bg-command-surface text-amber-400 shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  ? 'bg-command-surface text-amber-600 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <ShieldAlert className="w-3.5 h-3.5" />
@@ -782,8 +779,8 @@ export function ParkingLayoutView() {
               onClick={() => setActiveRightTab('occupancy')}
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'occupancy'
-                  ? 'bg-command-surface text-cyan-400 shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  ? 'bg-command-surface text-cyan-600 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <Car className="w-3.5 h-3.5" />
@@ -877,7 +874,7 @@ export function ParkingLayoutView() {
                 <div className="p-2.5 rounded bg-command-elevated/70 border border-command-border space-y-1">
                   <div className="flex justify-between text-[11px]">
                     <span className="text-command-muted">Approach Zone:</span>
-                    <span className={selectedApproach ? 'text-purple-400 font-bold' : 'text-command-muted'}>
+                    <span className={selectedApproach ? 'text-purple-600 font-bold' : 'text-command-muted'}>
                       {selectedApproach ? 'Attached' : 'None'}
                     </span>
                   </div>
@@ -1003,7 +1000,7 @@ export function ParkingLayoutView() {
                     )}
                     {ev.local_operator_label && (
                       <div className="text-[10px] text-command-muted">
-                        Operator: <span className="text-white font-mono">{ev.local_operator_label}</span>
+                        Operator: <span className="text-command-text font-mono">{ev.local_operator_label}</span>
                       </div>
                     )}
                     {ev.note && <div className="text-[10px] text-command-muted italic">{ev.note}</div>}
@@ -1056,7 +1053,7 @@ export function ParkingLayoutView() {
 
       {/* New Site Modal */}
       {isNewSiteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
             <h3 className="font-bold text-sm text-command-text">Create New Site</h3>
             <form onSubmit={handleCreateSite} className="space-y-3 text-xs">
@@ -1094,7 +1091,7 @@ export function ParkingLayoutView() {
 
       {/* New Camera Modal */}
       {isNewCameraModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
             <h3 className="font-bold text-sm text-command-text">Create New Camera</h3>
             <form onSubmit={handleCreateCamera} className="space-y-3 text-xs">

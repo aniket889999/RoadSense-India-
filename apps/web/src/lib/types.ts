@@ -103,7 +103,7 @@ export interface DriveSession {
     iou_threshold: number;
     privacy_masked?: boolean;
   } | null;
-  route_telemetry?: Array<{ lat: number; lon: number; timestamp: number }> | null;
+  route_telemetry?: Array<{ lat: number; lon: number; timestamp: number; utc?: string | null }> | null;
 }
 
 export interface Artifact {

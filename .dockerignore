@@ -1,0 +1,19 @@
+# Never send local data, models, outputs, environments or secrets into the build context.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.DS_Store
+.env
+.env.*
+data/raw
+data/interim
+data/processed
+models
+outputs
+runs
+apps/web/node_modules
+apps/web/.next
+.agents
+.claude

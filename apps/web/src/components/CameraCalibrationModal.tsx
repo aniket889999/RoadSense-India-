@@ -48,7 +48,7 @@ export function CameraCalibrationModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-100 backdrop-blur-sm p-4">
       <div className="w-full max-w-lg rounded-xl glass-panel-elevated border border-accent-red/40 bg-command-surface p-6 shadow-2xl space-y-5">
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-command-border pb-3">

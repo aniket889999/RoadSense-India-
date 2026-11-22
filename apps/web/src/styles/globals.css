@@ -3,52 +3,107 @@
 @tailwind utilities;
 
 :root {
-  --background: #0b0f14;
-  --foreground: #f1f5f9;
+  --background: #f6f7f9;
+  --foreground: #0f172a;
+  --brand: #4f46e5;
 }
 
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-feature-settings: "ss01", "cv11";
+  letter-spacing: -0.005em;
   overflow-x: hidden;
 }
 
-/* Custom Operations Scrollbars */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: var(--brand);
+  color: #ffffff;
+}
+
+/* Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #111822;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1f2e40;
-  border-radius: 3px;
+  background: #d5d9e0;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #33455e;
+  background: #b4bac4;
 }
 
-/* Glassmorphism Card Style */
+/* Panels: white, large-radius cards with a soft shadow. Declared after utilities so the radius applies everywhere. */
 .glass-panel {
-  background: rgba(17, 24, 34, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(31, 46, 64, 0.8);
+  background: #ffffff;
+  border: 1px solid #e4e7ec;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px -14px rgba(15, 23, 42, 0.12);
+  border-radius: 1.5rem;
 }
 
 .glass-panel-elevated {
-  background: rgba(24, 34, 48, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(51, 69, 94, 0.6);
+  background: #ffffff;
+  border: 1px solid #e4e7ec;
+  box-shadow: 0 12px 32px -12px rgba(15, 23, 42, 0.18);
+  border-radius: 1.5rem;
 }
 
-/* Radar Pulse Animations */
+/* Soft indigo glow and dot grid behind the hero */
+.hero-glow {
+  background:
+    radial-gradient(60% 80% at 100% 0%, rgba(99, 102, 241, 0.14), transparent 70%),
+    radial-gradient(40% 60% at 0% 100%, rgba(14, 165, 233, 0.08), transparent 70%),
+    radial-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1px) 0 0 / 18px 18px;
+}
+
+/* Kept for compatibility */
+.brand-grain {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+/* Staggered entrance (respects reduced motion) */
+.reveal > * {
+  animation: rise 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.reveal > *:nth-child(2) { animation-delay: 80ms; }
+.reveal > *:nth-child(3) { animation-delay: 160ms; }
+.reveal > *:nth-child(4) { animation-delay: 240ms; }
+
+@keyframes rise {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal > *,
+  .animate-rise,
+  .animate-radar-pulse,
+  .animate-scan-line {
+    animation: none !important;
+  }
+}
+
+/* Radar Pulse Animations (status indicators) */
 @keyframes radar-pulse {
   0% {
     transform: scale(0.95);

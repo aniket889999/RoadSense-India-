@@ -24,8 +24,11 @@ from src.anpr.detector import (
 from src.anpr.local_runtime import build_local_runtime
 from src.anpr.pipeline import AnprImageService
 from src.anpr.ocr import (
+    ENV_OCR_ENGINE,
     ENV_OCR_MODEL_DIR,
     EasyOcrPlateRecognizer,
+    RAPIDOCR_REQUIRED_ONNX_FILES,
+    RapidOcrPlateRecognizer,
     order_and_merge_ocr_detections,
 )
 from src.anpr.preprocessing import (
@@ -285,7 +288,7 @@ def test_ocr_requires_local_assets_and_disables_downloads(monkeypatch, tmp_path)
             reader_calls.append((lang_list, kwargs))
 
         def readtext(self, image, detail=1, paragraph=False):
-            assert image.ndim == 2
+            assert image.ndim == 3 and image.shape[2] == 3
             return [
                 ([[50, 8], [140, 8], [140, 36], [50, 36]], "12 AB 1234", 0.86),
                 ([[4, 8], [44, 8], [44, 36], [4, 36]], "MH", 0.94),
@@ -307,8 +310,17 @@ def test_ocr_requires_local_assets_and_disables_downloads(monkeypatch, tmp_path)
 
     plate_crop = np.full((28, 120, 3), 180, dtype=np.uint8)
     result = recognizer.recognize(plate_crop)
+    assert recognizer.crop_view == "original_bgr"
     assert result.raw_text == "MH 12 AB 1234"
     assert result.confidence == pytest.approx(0.86)
+
+    with pytest.raises(ValueError, match="crop_view"):
+        EasyOcrPlateRecognizer(
+            model_dir=rel_ocr_dir,
+            device="cpu",
+            repo_root=repo_root,
+            crop_view="invalid_view",
+        )
 
 
 def test_ocr_rejects_empty_or_symlinked_model_dir(monkeypatch, tmp_path):
@@ -386,7 +398,7 @@ def test_composed_adapters_integrate_with_the_image_pipeline(monkeypatch, tmp_pa
             assert kwargs["download_enabled"] is False
 
         def readtext(self, image, **kwargs):
-            assert image.ndim == 2
+            assert image.ndim == 3 and image.shape[2] == 3
             return [([[2, 2], [120, 2], [120, 35], [2, 35]], "MH 12 AB 1234", 0.91)]
 
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
@@ -410,3 +422,70 @@ def test_composed_adapters_integrate_with_the_image_pipeline(monkeypatch, tmp_pa
     assert result.plates[0].raw_text == "MH 12 AB 1234"
     assert result.plates[0].normalized_text == "MH12AB1234"
     assert result.plates[0].format_status == "MATCHED"
+
+
+def test_rapidocr_recognizer_orders_two_line_boxes_and_keeps_review_only_confidence_none(
+    monkeypatch, tmp_path
+):
+    repo_root, rel_weights, sha256, _ = _setup_fake_repo(tmp_path)
+    rapid_dir = repo_root / "models" / "rapidocr"
+    rapid_dir.mkdir(parents=True)
+    for fname in RAPIDOCR_REQUIRED_ONNX_FILES:
+        (rapid_dir / fname).write_bytes(b"fake-onnx-model-bytes")
+    monkeypatch.setattr("src.anpr.ocr.RAPIDOCR_EXPECTED_SHA256", {
+        fname: hashlib.sha256(b"fake-onnx-model-bytes").hexdigest()
+        for fname in RAPIDOCR_REQUIRED_ONNX_FILES
+    })
+
+    init_calls = []
+
+    class FakeRapidOCR:
+        def __init__(self, **kwargs):
+            init_calls.append(kwargs)
+
+        def __call__(self, image, **kwargs):
+            return (
+                [
+                    ([[60, 42], [130, 42], [130, 72], [60, 72]], "1234", 0.96),
+                    ([[6, 4], [50, 4], [50, 32], [6, 32]], "MH12", 0.98),
+                    ([[8, 40], [54, 40], [54, 70], [8, 70]], "AB", 0.94),
+                ],
+                [0.01, 0.01, 0.01],
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "rapidocr_onnxruntime",
+        types.SimpleNamespace(RapidOCR=FakeRapidOCR),
+    )
+
+    recognizer = RapidOcrPlateRecognizer(
+        model_dir="models/rapidocr",
+        repo_root=repo_root,
+        review_only=True,
+    )
+    assert len(init_calls) == 1
+    assert init_calls[0]["det_model_path"] == str(rapid_dir / "ch_PP-OCRv4_det_infer.onnx")
+
+    crop = np.full((32, 120, 3), 200, dtype=np.uint8)
+    read = recognizer.recognize(crop)
+    assert read.raw_text == "MH12\nAB 1234"
+    assert read.confidence is None
+
+    # Also verify build_local_runtime selects RapidOcrPlateRecognizer when ENV_OCR_ENGINE=rapidocr
+    class FakeYOLO:
+        def __init__(self, path):
+            self.names = {0: "license_plate"}
+
+        def predict(self, **kwargs):
+            return []
+
+    monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO))
+    monkeypatch.setenv(ENV_PLATE_WEIGHTS, rel_weights)
+    monkeypatch.setenv(ENV_PLATE_SHA256, sha256)
+    monkeypatch.setenv(ENV_OCR_MODEL_DIR, "models/rapidocr")
+    monkeypatch.setenv(ENV_OCR_ENGINE, "rapidocr")
+
+    rt = build_local_runtime(repo_root=repo_root)
+    assert isinstance(rt.recognizer, RapidOcrPlateRecognizer)
+    assert rt.recognizer.recognize(crop).confidence is None

@@ -6,8 +6,43 @@ import {
   RoadEvent,
   SystemHealth,
 } from './types';
+import { AnprImageResult } from './anprTypes';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+// Same-origin by default: next.config.mjs proxies /api/v1 and /health to the local API, so the browser
+// talks to one origin (no CORS, works behind a single reverse proxy). Set NEXT_PUBLIC_API_URL to call the API directly.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+export async function recognizeAnprImage(file: File): Promise<AnprImageResult> {
+  const nameLower = file.name.toLowerCase();
+  const contentType =
+    file.type === 'image/jpeg' || file.type === 'image/png'
+      ? file.type
+      : nameLower.endsWith('.png')
+      ? 'image/png'
+      : 'image/jpeg';
+
+  const res = await fetch(`${API_BASE}/api/v1/anpr/images/recognize`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': contentType,
+    },
+    body: file,
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const errorData = await res
+      .json()
+      .catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
+    throw new Error(
+      typeof errorData?.detail === 'string' && errorData.detail
+        ? errorData.detail
+        : `Plate recognition request failed (HTTP ${res.status}).`
+    );
+  }
+
+  return res.json();
+}
 
 export async function fetchSystemHealth(): Promise<SystemHealth> {
   const res = await fetch(`${API_BASE}/health/system`, { cache: 'no-store' });
@@ -159,4 +194,68 @@ export async function fetchArtifacts(sessionId: string): Promise<Artifact[]> {
 
 export function getArtifactDownloadUrl(sessionId: string, artifactType: string): string {
   return `${API_BASE}/api/v1/sessions/${sessionId}/artifacts/${artifactType}/download`;
+}
+
+// ---------------------------------------------------------------- Map & GPS
+
+export interface GeoFeature {
+  type: 'Feature';
+  geometry: { type: 'Point' | 'LineString'; coordinates: number[] | number[][] };
+  properties: Record<string, unknown>;
+}
+
+export interface GeoFeatureCollection {
+  type: 'FeatureCollection';
+  features: GeoFeature[];
+  properties?: Record<string, unknown>;
+}
+
+export interface GpsTrackUploadResult {
+  session_id: string;
+  source_format: string;
+  absolute_time: boolean;
+  dropped_points: number;
+  events_total: number;
+  events_placed: number;
+  location_method: string;
+  warnings: string[];
+  point_count: number;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  length_m: number;
+}
+
+async function errorDetail(res: Response, fallback: string): Promise<string> {
+  const body = await res.json().catch(() => null);
+  return typeof body?.detail === 'string' && body.detail ? body.detail : `${fallback} (HTTP ${res.status}).`;
+}
+
+export async function uploadGpsTrack(sessionId: string, file: File, offsetSeconds: number): Promise<GpsTrackUploadResult> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('offset_seconds', String(offsetSeconds));
+  const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/gps-track`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(await errorDetail(res, 'GPS track upload failed'));
+  return res.json();
+}
+
+export async function deleteGpsTrack(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/gps-track`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await errorDetail(res, 'Failed to remove GPS track'));
+}
+
+export async function fetchSessionGeoJson(sessionId: string): Promise<GeoFeatureCollection> {
+  const res = await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/geojson`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load session map data'));
+  return res.json();
+}
+
+export async function fetchLocatedRoadEvents(): Promise<GeoFeatureCollection> {
+  const res = await fetch(`${API_BASE}/api/v1/geo/road-events`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load mapped road events'));
+  return res.json();
+}
+
+export function getSessionGeoJsonUrl(sessionId: string): string {
+  return `${API_BASE}/api/v1/sessions/${sessionId}/geojson`;
 }

@@ -1,0 +1,35 @@
+# RoadSense ANPR — recorded working environment (Apple Silicon M4, macOS arm64, Python 3.12.7)
+#
+# These are the versions observed in the project .venv on 22 Nov 2026, with which
+# the documented ANPR validation results and browser demo were produced.
+# scripts/anpr_preflight.py compares the active interpreter against this file
+# (version drift = WARN; missing required package = FAIL).
+#
+# This records an existing environment. Do not run `pip install -r` over the working
+# .venv; torch/torchvision/OpenCV/Ultralytics must not be casually replaced.
+# Models and data are NOT installed by pip: see docs/anpr/demo_and_jury_guide.md.
+
+# Detector and tensors
+torch==2.13.0
+torchvision==0.28.0
+ultralytics==8.4.124
+numpy==2.5.2
+opencv-python==5.0.0.93
+opencv-python-headless==5.0.0.93
+
+# OCR engines (RapidOCR selected; EasyOCR kept for the adapted comparison)
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.32.0
+easyocr==1.7.2
+
+# Local API
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.4
+sqlalchemy==2.0.52
+aiosqlite==0.22.1
+alembic==1.19.1
+
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0

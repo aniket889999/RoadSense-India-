@@ -13,6 +13,8 @@ parking occupancy and human-reviewed hazards provide the application context.
   stage, commit, push, install packages, or edit Codex-owned paths.
 - Run focused checks after a module. Run the complete test suite and frontend
   production build at integration milestones, without duplicate concurrent runs.
+- After reviewing a completed module, Codex pushes its verified commits to
+  `https://github.com/aniket889999/RoadSense-India-` on the feature branch.
 - Preserve `.agents/`, `.claude/`, existing stashes, media, datasets and weights.
 - Keep models and sample images local. No dependency downloads or training are
   part of Module 1. Training/download needs are assessed in the model module.
@@ -75,6 +77,32 @@ remain unverified until the required local packages and assets are available.
 
 ## Verified progress
 
+Latest OCR updates:
+- [Demonstration and jury guide](demo_and_jury_guide.md): crop-quality review cues,
+  enlarged plate preview, annotated PNG and review JSON downloads, and explicit
+  review-only policy. ANPR schema 1.1 adds advisory measurements while the reader
+  still accepts saved 1.0 results. The held-out test split remains untouched.
+- [Recognition model comparison (EasyOCR vs. RapidOCR PP-OCRv4 ONNX)](ocr_model_comparison_results.md):
+  Off-the-shelf `rapidocr_onnxruntime==1.4.4` (`PP-OCRv4` ONNX staged offline
+  under `models/rapidocr/`, selected on the 40-image training subset where exact
+  reads rose from `5/50` to `19/50`) achieved **`37/94` (`39.36%`)** exact
+  full-plate agreement and **`24.07%` CER** (`220/914` character edits; `15/31`
+  = `48.39%` exact on `single_line`, `22/63` = `34.92%` on `two_line`, `30/65` =
+  `46.15%` on `other`/day, `7/29` = `24.14%` on `low_light`) across all 71
+  validation images in review-only mode (`confidence=None`, `0` wrong accepted
+  reads).
+- [Local recognizer adaptation](ocr_adaptation_results.md):
+  Fine-tuning the existing EasyOCR `english_g2` checkpoint on single-line
+  training crops increased validation complete-read agreement from `3/94` to
+  `22/94` (`23.40%`) and reduced CER from `45.19%` to `30.09%`. The detector is
+  unchanged; the held-out test split remains untouched. Use
+  `scripts/serve_anpr_local.py --engine easyocr` to launch the API with the pinned adapted
+  EasyOCR checkpoint already staged locally. The launcher defaults to review-only
+  RapidOCR with `resized_bgr` crops; manual configuration can also set
+  `ROADSENSE_ANPR_OCR_ENGINE=rapidocr` with
+  `ROADSENSE_ANPR_OCR_MODEL_DIR=models/rapidocr` to use the review-only
+  RapidOCR adapter.
+
 - Module 1 backend: `aaf9162`, 18 focused tests passed.
 - Module 1 frontend: reviewed against the Python contract and independently
   typechecked; committed as `6e4893f`.
@@ -92,6 +120,72 @@ remain unverified until the required local packages and assets are available.
   and no configured plate-detector checkpoint. Tests with fake ML engines
   establish orchestration correctness, not ANPR accuracy or a completed real-image
   recognition demonstration.
+- Module 3 implementation and usage are documented in
+  [Data, training and evaluation](module3_data_and_training.md). Codex implements
+  grouped dataset preparation and offline metrics; Gemini supplies the dedicated
+  detector training wrapper.
+- Module 3 combined verification passes 93 focused tests and Python compilation.
+  The local base checkpoint SHA matches its training config. A real project
+  dry-run initially stopped before training because `anpr_india_v1` had not been
+  prepared.
+- Witvix intake now prepares a real, limited truck-plate pilot:
+  329 train / 71 val / 70 test images, with 408 / 94 / 87 plate annotations.
+  Real training preflight passes using the pinned local base checkpoint. Dataset
+  schema 1.1 records mixed publisher labels and unverified capture-session
+  independence explicitly; these are not certified ground-truth labels or capture
+  groups. See [Witvix intake results](witvix_intake_results.md).
+- Combined ANPR/intake/API/OpenAPI verification after this intake: 102 tests
+  passed, changed Python modules compiled, and whitespace checks passed.
+- Module 3B real plate-detector baseline training completed on Apple M4 MPS
+  (`configs/training/anpr_witvix_mps_baseline_v1.yaml`, run
+  `outputs/training/anpr/anpr_witvix_detector_mps_v1`, 50/50 epochs in
+  `2107.23s`). The trained single-class `license_plate` checkpoint
+  `weights/best.pt` (SHA-256
+  `37eae626c753e3742bc27437f6c7671898315a4591e2d0cf92e98d996b0421db`, peak
+  epoch 36) recorded `val` box precision `0.99752` (`0.998` fused), recall
+  `0.94681` (`0.947` fused), `mAP50` `0.99217` (`0.992` fused) and `mAP50-95`
+  `0.84655` (`0.847` fused); final epoch 50 (`weights/last.pt`) recorded `val`
+  precision `0.97894`, recall `0.98893`, `mAP50` `0.99347` and `mAP50-95`
+  `0.83607`. See
+  [Witvix detector baseline results](witvix_detector_baseline_results.md).
+- Module 4 offline runtime provisioning and validation-split OCR evaluation
+  completed: `easyocr==1.7.2` installed in `.venv` alongside unmodified
+  `torch==2.13.0`, `torchvision==0.28.0`, `ultralytics==8.4.124` and
+  `opencv-python-headless==5.0.0.93`; trained detector staged at
+  `models/anpr/anpr_witvix_detector_mps_v1_best.pt` and official EasyOCR English
+  assets staged at `models/easyocr/craft_mlt_25k.pth` and
+  `models/easyocr/english_g2.pth` (`download_enabled=False`). Across all 71
+  validation images (`94` `publisher_mixed` plates), the composed pipeline
+  (`scripts/generate_anpr_predictions.py` + `scripts/evaluate_anpr_predictions.py`)
+  achieved detection precision `0.9681` (`91/94`), detection recall `0.9681`
+  (`91/94`), read coverage `0.9574` (`90/94`), end-to-end exact plate agreement
+  `0.0319` (`3/94`), character error rate `0.4584` (`419/914`), `0` wrong
+  accepted reads (`91` plates routed to `NEEDS_REVIEW`, `3` `UNREADABLE`), and
+  mean latency `324.61 ms/image`. Held-out `test` split remains untouched. See
+  [Witvix validation OCR results](witvix_validation_ocr_results.md).
+- Module 4 web dashboard integration and corrective OCR audit:
+  `AnprInspectionPanel` is connected to `POST /api/v1/anpr/images/recognize` via
+  `recognizeAnprImage` in `apps/web/src/lib/api.ts` (raw JPEG/PNG bytes with
+  matching `Content-Type`) and exposed under the `ANPR Inspection` tab in
+  `Sidebar.tsx` and `page.tsx`. The missing local
+  `apps/web/node_modules/@next/swc-darwin-arm64/next-swc.darwin-arm64.node`
+  binary (`@next/swc-darwin-arm64@14.2.18`) was restored from the lockfile's
+  exact URL and verified against its lockfile SHA-512 integrity hash; both
+  `npm run typecheck` and `npm run build` pass, and the live browser workflow
+  (`http://localhost:3000` -> `http://127.0.0.1:8000`) was verified end-to-end
+  with real validation images (`witvix-img_0137.png` and `witvix-img_0003.png`).
+  A 40-image (`50`-plate) training-subset diagnosis showed that detector box
+  crops are not the primary bottleneck (reference boxes scored identically to
+  predicted boxes at `2/50` exact match under `enhanced_grayscale`), while
+  pre-applying bilateral filtering + CLAHE amplified border/bolt noise. Switching
+  EasyOCR's default view to `original_bgr` (`C4_original_bgr`, selected on the
+  training subset where CER dropped from `0.5052` to `0.4062`) reduced
+  validation-split (`71` images, `94` plates) CER from `0.4584` (`419/914`) to
+  `0.4519` (`413/914`) and produced `1` accepted `READ` (`0` wrong accepted
+  reads), while overall validation exact plate agreement remained `3/94`
+  (`0.0319`) due to generic `english_g2` character confusions on two-line
+  commercial truck plates. See
+  [Witvix validation OCR results](witvix_validation_ocr_results.md).
 
 ## Module 1 shared result contract
 

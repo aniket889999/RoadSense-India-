@@ -3,6 +3,16 @@
 ## Status
 Accepted
 
+## Current status
+
+**Implemented:** [Event fusion](../../../services/api/app/services/event_fusion.py)
+groups session-local tracks and uses temporal/box heuristics for untracked
+detections. **Not implemented:** verified physical-world identity, interactive
+MapLibre geolocation, PostGIS spatial matching, or association of an ANPR reading
+with a road event/parking bay. Reduction in physical-incident overcounting has
+not been established by a field benchmark. See the
+[current architecture inventory](../system_overview.md#current-status).
+
 ## Context
 When a vehicle drives over or past a pothole at 30 km/h, the detector may fire across 5 to 20 consecutive video frames. Treating every bounding box as an individual pothole would severely inflate incident counts, overwhelm human reviewers, and produce duplicate repair work-orders.
 
@@ -22,5 +32,5 @@ We establish a two-tiered data model:
 - **Review Status**: The proposed `RoadEvent` starts in `PENDING_REVIEW` and can be transitioned to `CONFIRMED`, `REJECTED`, or `NEEDS_REVISIT` only by explicit human reviewer action.
 
 ## Consequences
-- Prevents 10-fold overcounting of the same physical road feature.
+- Intended to reduce repeated review items; a numerical reduction or unique physical-feature count is not established by this heuristic.
 - Transparent heuristics avoid false claims of GPS triangulation or 3D object tracking.

@@ -1,0 +1,37 @@
+# Dedicated single-class YOLO license-plate detector training configuration.
+# Base weights are strictly local and verified by SHA-256 before loading.
+# Text-mirroring flips (fliplr, flipud) and aggressive perspective/shear/copy-paste
+# augmentations are disabled so plate character geometry remains realistic.
+
+experiment:
+  name: anpr_plate_detector_v1
+  seed: 42
+
+model:
+  base_weights: models/yolov8n.pt
+  base_weights_sha256: f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36
+  image_size: 640
+  class_name: license_plate
+
+training:
+  epochs: 50
+  batch: 8
+  patience: 15
+  device: cpu
+  workers: 2
+
+augmentation:
+  fliplr: 0.0
+  flipud: 0.0
+  degrees: 3.0
+  translate: 0.05
+  scale: 0.15
+  shear: 0.0
+  perspective: 0.0
+  mosaic: 0.0
+  mixup: 0.0
+  copy_paste: 0.0
+  erasing: 0.0
+  hsv_h: 0.01
+  hsv_s: 0.25
+  hsv_v: 0.25

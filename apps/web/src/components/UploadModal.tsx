@@ -72,7 +72,7 @@ export function UploadModal({ isOpen, onClose, onSessionCreated }: UploadModalPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-100 backdrop-blur-sm p-4">
       <div className="w-full max-w-lg rounded-xl glass-panel-elevated p-6 space-y-5 shadow-2xl border border-command-border">
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-command-border pb-3">

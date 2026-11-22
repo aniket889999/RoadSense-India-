@@ -17,7 +17,8 @@ import {
   ParkingValidationEvidenceReport,
 } from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Same-origin by default (proxied by next.config.mjs); set NEXT_PUBLIC_API_URL to call the API directly.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export async function fetchSites(): Promise<Site[]> {
   const res = await fetch(`${API_BASE_URL}/api/v1/sites`);

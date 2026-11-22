@@ -29,6 +29,7 @@ class PlateDetection:
 class OcrRead:
     raw_text: str
     confidence: float | None
+    review_only: bool = False
 
 
 class PlateDetector(Protocol):
@@ -47,3 +48,5 @@ class PlateRecognizer(Protocol):
 class AnprRuntime:
     detector: PlateDetector
     recognizer: PlateRecognizer
+    # Engine-specific acceptance threshold from a named policy; None keeps the service default.
+    minimum_confidence: float | None = None

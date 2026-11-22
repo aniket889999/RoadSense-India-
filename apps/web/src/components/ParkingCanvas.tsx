@@ -38,11 +38,11 @@ interface ParkingCanvasProps {
 }
 
 const STATUS_COLORS: Record<LayoutRevisionStatus, { stroke: string; fill: string; badge: string }> = {
-  DRAFT: { stroke: '#3B82F6', fill: 'rgba(59, 130, 246, 0.20)', badge: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  PENDING_REVIEW: { stroke: '#F59E0B', fill: 'rgba(245, 158, 11, 0.20)', badge: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
-  VERIFIED: { stroke: '#10B981', fill: 'rgba(16, 185, 129, 0.20)', badge: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
-  SUPERSEDED: { stroke: '#6B7280', fill: 'rgba(107, 114, 128, 0.15)', badge: 'bg-gray-500/20 text-gray-400 border-gray-500/30' },
-  INVALIDATED: { stroke: '#EF4444', fill: 'rgba(239, 68, 68, 0.20)', badge: 'bg-red-500/20 text-red-400 border-red-500/30' },
+  DRAFT: { stroke: '#3B82F6', fill: 'rgba(59, 130, 246, 0.20)', badge: 'bg-blue-500/20 text-blue-600 border-blue-200' },
+  PENDING_REVIEW: { stroke: '#F59E0B', fill: 'rgba(245, 158, 11, 0.20)', badge: 'bg-amber-500/20 text-amber-600 border-amber-200' },
+  VERIFIED: { stroke: '#10B981', fill: 'rgba(16, 185, 129, 0.20)', badge: 'bg-emerald-500/20 text-emerald-600 border-emerald-200' },
+  SUPERSEDED: { stroke: '#6B7280', fill: 'rgba(107, 114, 128, 0.15)', badge: 'bg-gray-500/20 text-gray-500 border-gray-500/30' },
+  INVALIDATED: { stroke: '#EF4444', fill: 'rgba(239, 68, 68, 0.20)', badge: 'bg-red-500/20 text-red-600 border-red-200' },
 };
 
 const SELECTED_COLOR = { stroke: '#06B6D4', fill: 'rgba(6, 182, 212, 0.35)' };

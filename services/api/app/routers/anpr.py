@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from services.api.app.core.auth import require_anpr_access
 from src.anpr.contracts import AnprImageResult
 from src.anpr.pipeline import (
     ALLOWED_MEDIA_TYPES,
@@ -33,10 +34,13 @@ def get_anpr_service() -> AnprImageService:
 @router.post(
     "/images/recognize",
     response_model=AnprImageResult,
+    dependencies=[Depends(require_anpr_access)],
     responses={
         400: {"description": "Empty, corrupt or invalid image."},
+        401: {"description": "Only when ROADSENSE_API_KEY is configured: missing or wrong X-API-Key."},
         413: {"description": "Encoded bytes or decoded dimensions exceed the image limits."},
         415: {"description": "Unsupported image type or mismatched Content-Type."},
+        429: {"description": "Only when ROADSENSE_ANPR_RATE_LIMIT_PER_MINUTE is configured: limit exceeded."},
         503: {"description": "Recognition is busy or an adapter failed to complete."},
     },
     openapi_extra={

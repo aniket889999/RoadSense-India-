@@ -2688,11 +2688,17 @@
           "400": {
             "description": "Empty, corrupt or invalid image."
           },
+          "401": {
+            "description": "Only when ROADSENSE_API_KEY is configured: missing or wrong X-API-Key."
+          },
           "413": {
             "description": "Encoded bytes or decoded dimensions exceed the image limits."
           },
           "415": {
             "description": "Unsupported image type or mismatched Content-Type."
+          },
+          "429": {
+            "description": "Only when ROADSENSE_ANPR_RATE_LIMIT_PER_MINUTE is configured: limit exceeded."
           },
           "503": {
             "description": "Recognition is busy or an adapter failed to complete."

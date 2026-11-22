@@ -28,6 +28,7 @@ import {
   verifyLayout,
 } from '../lib/parkingApi';
 import { DrawingMode, ParkingCanvas } from './ParkingCanvas';
+import { ParkingSetupGuide } from './ParkingSetupGuide';
 import { LayoutVerificationModal } from './LayoutVerificationModal';
 import { LayoutSubmitModal } from './LayoutSubmitModal';
 import { ReferenceImageReplaceModal } from './ReferenceImageReplaceModal';
@@ -88,6 +89,12 @@ export function ParkingLayoutView() {
   const [isBranchingDraft, setIsBranchingDraft] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [activeRightTab, setActiveRightTab] = useState<'editor' | 'stability' | 'occupancy'>('editor');
+  const [guideRefreshKey, setGuideRefreshKey] = useState(0);
+
+  // Refresh the setup guide after any action that reports feedback or switches the working panel.
+  useEffect(() => {
+    setGuideRefreshKey((k) => k + 1);
+  }, [feedbackMessage, activeRightTab]);
 
   // Modals
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
@@ -449,29 +456,19 @@ export function ParkingLayoutView() {
   const selectedApproach = approachZones.find((a) => a.parking_space_id === selectedSpaceId) || null;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8.5rem)] space-y-3 font-mono">
-      {/* Disclaimer Banner */}
-      <div className="flex items-center justify-between px-4 py-2 rounded-lg bg-command-elevated border border-command-border text-xs">
-        <div className="flex items-center space-x-2 text-radar-bright font-bold">
-          <Layers className="w-4 h-4" />
-          <span>RoadSense SiteOps: Parking Geometry & ROI Configuration</span>
-        </div>
-        <div className="flex items-center space-x-3 text-command-muted text-[11px]">
-          <span className="flex items-center space-x-1.5">
-            <span className="w-2 h-2 rounded-full bg-accent-amber animate-pulse" />
-            <span>Layout configuration only — occupancy inference is not connected.</span>
-          </span>
-          <button
-            id="stability-gate-shortcut-btn"
-            onClick={() => setActiveRightTab('stability')}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 hover:text-command-text font-bold transition-all"
-            title="Inspect Fail-Closed Stability Gate"
-          >
-            <ShieldAlert className="w-3 h-3 text-rose-600" />
-            <span>Stability Gate</span>
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col space-y-3 font-mono">
+      {/* Guided setup and live lot status */}
+      <ParkingSetupGuide
+        site={sites.find((x) => x.id === selectedSiteId) ?? null}
+        camera={activeCamera ?? null}
+        layout={activeLayout}
+        layouts={layouts}
+        refreshKey={guideRefreshKey}
+        onGoTo={setActiveRightTab}
+        onCreateSite={() => setIsNewSiteModalOpen(true)}
+        onCreateCamera={() => setIsNewCameraModalOpen(true)}
+        onUploadReference={() => fileInputRef.current?.click()}
+      />
 
       {/* Top Controls Bar */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 p-3 rounded-xl glass-panel border border-command-border text-xs">
@@ -583,7 +580,7 @@ export function ParkingLayoutView() {
       </div>
 
       {/* Main Workspace Stage */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-[calc(100vh-10rem)] min-h-[560px] overflow-hidden">
         {/* Canvas & Drawing Tools (8 Cols) */}
         <div className="lg:col-span-8 flex flex-col h-full space-y-2">
           {/* Drawing Toolbar */}

@@ -228,7 +228,13 @@ export default function OperationsDashboard() {
 
           {activeTab === 'map' && (
             <div className="h-[calc(100vh-8.5rem)]">
-              <MapView session={activeSession} roadEvents={roadEvents} />
+              <MapView
+                session={activeSession}
+                roadEvents={roadEvents}
+                onTrackChanged={() => {
+                  if (activeSession) loadSessionData(activeSession.id);
+                }}
+              />
             </div>
           )}
 
@@ -239,7 +245,7 @@ export default function OperationsDashboard() {
           )}
 
           {activeTab === 'parking' && (
-            <div className="h-[calc(100vh-8.5rem)]">
+            <div className="min-h-[calc(100vh-8.5rem)]">
               <ParkingLayoutView />
             </div>
           )}

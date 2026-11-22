@@ -20,7 +20,7 @@ not associated with a specific parking bay or an owner's registration record.
 | Mobile recorded inspection and manual hazard-to-bay/approach links | Implemented | Explicit operator-reviewed associations, not automatic cross-camera projection |
 | Safe usable capacity | Implemented | Evidence-based policy/snapshot; not proof of physical safety or motorist navigation |
 | Continuous RTSP ingress and server WebRTC inference | Not implemented | Browser MediaDevices preview is implemented; no server live inference contract |
-| Interactive MapLibre/lot routing | Not implemented | Telemetry placeholder and image-space ROI editor are not interactive world maps |
+| Interactive MapLibre/lot routing | Partial | Road-event map with GPS track import exists for drive sessions; parking lots still use image-space ROI geometry, with no world map or routing |
 | PostgreSQL/PostGIS data model below | Partial | Configurable PostgreSQL and a PostGIS-capable image; SQLite default and JSON/scalar geometry in the actual ORM |
 | PostGIS world geometry, spatial queries and calibrated multi-camera fusion | Not implemented | Proposed `Polygon`/`Point` fields are target schema, not current columns/queries |
 | Maintenance opportunity forecasting, work-order dispatch and repair scheduling | Not implemented | Research/product hypotheses, not operational integrations |

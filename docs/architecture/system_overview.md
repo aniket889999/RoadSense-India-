@@ -21,8 +21,8 @@ Neither code presence nor a synthetic test proves field accuracy or readiness.
 | Hazard-aware capacity policy | Implemented | [Policy](../../src/parking/capacity_policy.py); conservative operator-facing evidence fusion, not structural safety certification |
 | Browser camera preview | Implemented | [Camera hook](../../apps/web/src/hooks/useCamera.ts); MediaDevices preview only |
 | Server-side WebRTC inference | Not implemented | [Offer endpoint](../../services/api/app/routers/live.py) returns `supported=false`, `not_connected` |
-| Interactive MapLibre map | Not implemented | [Map view](../../apps/web/src/components/MapView.tsx) displays presence/absence of telemetry; it does not instantiate a map |
-| GPS/NMEA pipeline | Partial | Optional [JSON/scalar fields](../../services/api/app/models/entities.py) exist; automatic NMEA extraction and geolocation of detections are **Not implemented** |
+| Interactive MapLibre map | Implemented (prototype) | [Map view](../../apps/web/src/components/MapView.tsx) draws the session route and road events on OpenStreetMap tiles with status filters and popups; tiles need internet, all other data stays local |
+| GPS/NMEA pipeline | Partial | [GPS track import](../../services/api/app/services/gps_track.py) accepts GPX, NMEA (RMC/GGA) and CSV logs, aligns them by a user offset and places events by linear interpolation; GeoJSON export. Extraction of GPS embedded inside video files is not implemented |
 | PostgreSQL persistence | Partial | [Config](../../services/api/app/core/config.py), [engine](../../services/api/app/db/session.py), [DB Compose service](../../infra/docker-compose.yml); configurable, not an automatically selected fallback or a deployment verified in this task |
 | PostGIS spatial columns/queries | Not implemented | Compose offers a PostGIS-capable image; current ORM/migrations use JSON/scalar coordinates, without geometry types or `ST_*` query integration |
 | ANPR-to-parking-bay association | Not implemented | Still-image ANPR returns a reading response; no registration lookup, identity linkage, payment or barrier control |
@@ -98,7 +98,7 @@ integration has been delivered.
 - **Framework — Implemented**: Next.js 14.2.18 App Router with TypeScript.
 - **Styling**: Tailored Dark Graphite/Green Command Center palette (`#0B0F12` background, `#10B981` / `#22C55E` detection green, high-contrast typography via Inter/Geist).
 - **Video Canvas — Implemented**: Synchronized suggestion overlays over sampled frames; this does not establish localization accuracy.
-- **Map View — Not implemented as a map**: Current UI reports telemetry presence/absence. Installing `maplibre-gl` does not instantiate a MapLibre map.
+- **Map View — Prototype**: MapLibre map with OpenStreetMap tiles. Positions come only from an uploaded GPS log, interpolated at each event's video time; events outside the track or in GPS gaps over 30 s stay unplaced. Accuracy depends on the logger and the time offset.
 
 ### Service Layer (`services/api`)
 - **Framework**: FastAPI with Pydantic v2 schemas.

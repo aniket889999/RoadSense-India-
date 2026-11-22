@@ -19,7 +19,7 @@ pending. Source: [cleanup policy results](../anpr/text_cleanup_policy_results.md
 | ANPR inspection and candidate export | Implemented | Local operator-assisted prototype, not registration verification |
 | Recorded dashcam review, parking gates and capacity snapshots | Implemented | Earlier research workflows; field accuracy and facility acceptance remain unestablished |
 | Browser camera preview | Implemented | Server-side WebRTC inference is **Not implemented** |
-| MapLibre interaction and automatic GPS/NMEA extraction | Not implemented | Telemetry fields and an absence/presence placeholder are **Partial** |
+| MapLibre map and GPS track import | Implemented (prototype) | GPX/NMEA/CSV upload, interpolated event positions, GeoJSON export; GPS embedded in video files is **Not implemented** |
 | PostgreSQL deployment | Partial | Configurable backend and DB Compose service; SQLite is the code default |
 | PostGIS spatial query integration | Not implemented | Available DB image does not establish spatial column/query use |
 | ANPR-to-bay association, registry lookup, toll/barrier control | Not implemented | Separate inspection workflows only |
@@ -82,7 +82,7 @@ To prevent misuse, misleading claims, and safety hazards, RoadSense India enforc
 | **Depth & Severity** | Identifies 2D surface bounding boxes (`x_min, y_min, x_max, y_max`). | **Never claims pothole depth, volumetric severity, or structural axle hazard.** Single monocular dashcam video cannot measure depth without calibrated stereoscopy or LiDAR. |
 | **Accident / Hazard Risk** | Highlights visual surface irregularities. | **Never generates driving risk scores, driver warnings, or collision predictions.** RoadSense is an offline review tool, not an Advanced Driver Assistance System (ADAS). |
 | **Repair Priority** | Groups detections temporally via ByteTrack. | **Never calculates automated repair priority, municipal budgeting, or engineering urgency.** |
-| **GPS Geolocation — Partial** | Optional metadata fields and a telemetry presence/absence view. Automatic NMEA extraction and interactive mapping are **Not implemented**. | Do not invent coordinates or claim verified geolocation from video alone. |
+| **GPS Geolocation — Partial** | Event positions interpolated from an uploaded GPS log (GPX/NMEA/CSV) and shown on a MapLibre map. Extraction of GPS embedded in video is **Not implemented**. | Do not invent coordinates or claim verified geolocation from video alone; positions are only as accurate as the uploaded log and its time alignment. |
 | **Real-Time Performance** | Displays actual measured frame processing latency. | **Never claims real-time performance unless directly measured on host hardware.** |
 | **Coverage Guarantee** | Evaluates on trained distribution (RDD2022 India). | **Does not claim complete detection coverage.** Reviewers must be aware that weather, glare, camera blur, and novel asphalt textures will produce false negatives and false positives. |
 

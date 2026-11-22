@@ -2705,6 +2705,199 @@
           }
         }
       }
+    },
+    "/api/v1/sessions/{session_id}/gps-track": {
+      "post": {
+        "tags": [
+          "Map & GPS"
+        ],
+        "summary": "Upload Gps Track",
+        "description": "Attach a GPS track (GPX, NMEA or CSV) to a session and place its road events on the map.\n\n``offset_seconds`` is the video time at which the track's first point was recorded.",
+        "operationId": "upload_gps_track_api_v1_sessions__session_id__gps_track_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_gps_track_api_v1_sessions__session_id__gps_track_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Map & GPS"
+        ],
+        "summary": "Delete Gps Track",
+        "description": "Remove a session's GPS track and the event positions derived from it.",
+        "operationId": "delete_gps_track_api_v1_sessions__session_id__gps_track_delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/geojson": {
+      "get": {
+        "tags": [
+          "Map & GPS"
+        ],
+        "summary": "Session Geojson",
+        "description": "GeoJSON FeatureCollection: the session route plus every placed road event.",
+        "operationId": "session_geojson_api_v1_sessions__session_id__geojson_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/geo/road-events": {
+      "get": {
+        "tags": [
+          "Map & GPS"
+        ],
+        "summary": "All Located Events",
+        "description": "All placed road events across sessions, as GeoJSON, for the overview map.",
+        "operationId": "all_located_events_api_v1_geo_road_events_get",
+        "parameters": [
+          {
+            "name": "review_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by review status",
+              "title": "Review Status"
+            },
+            "description": "Filter by review status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20000,
+              "minimum": 1,
+              "default": 5000,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3074,6 +3267,25 @@
           "file"
         ],
         "title": "Body_submit_parking_occupancy_job_api_v1_cameras__camera_id__occupancy_jobs_post"
+      },
+      "Body_upload_gps_track_api_v1_sessions__session_id__gps_track_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "offset_seconds": {
+            "type": "number",
+            "title": "Offset Seconds",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_gps_track_api_v1_sessions__session_id__gps_track_post"
       },
       "Body_upload_reference_image_api_v1_cameras__camera_id__reference_image_post": {
         "properties": {

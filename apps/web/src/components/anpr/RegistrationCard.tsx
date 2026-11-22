@@ -15,6 +15,18 @@ import { PlateResult } from '../../lib/anprTypes';
 
 const SIMULATED_CLASSES = ['Goods carrier (simulated)', 'Motor car (simulated)', 'Bus (simulated)', 'Tractor-trailer (simulated)'];
 
+// Common given names and surnames from several regions, combined at random. Any match with a real
+// person is coincidental; the UI always marks the result as fictional.
+const FIRST_NAMES = [
+  'Aarav', 'Ananya', 'Rohan', 'Priya', 'Vikram', 'Sneha', 'Arjun', 'Kavya', 'Rahul', 'Meera',
+  'Karthik', 'Divya', 'Siddharth', 'Pooja', 'Amit', 'Lakshmi', 'Imran', 'Fatima', 'Harpreet', 'Gurpreet',
+  'Suresh', 'Anjali', 'Nikhil', 'Neha', 'Joseph', 'Mary', 'Ravi', 'Sunita', 'Deepak', 'Asha',
+];
+const SURNAMES = [
+  'Sharma', 'Verma', 'Patel', 'Reddy', 'Iyer', 'Nair', 'Singh', 'Gupta', 'Das', 'Mukherjee',
+  'Kulkarni', 'Joshi', 'Khan', 'Fernandes', 'Rao', 'Pillai', 'Chauhan', 'Mehta', 'Bose', 'Yadav',
+];
+
 function stableHash(text: string): number {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i += 1) {
@@ -26,8 +38,10 @@ function stableHash(text: string): number {
 
 export function simulatedRecord(plateText: string, bhYear: number | null) {
   const hash = stableHash(plateText || 'unknown');
+  const second = stableHash(`${plateText}|name`);
   return {
-    owner: `Demo Owner #${String(hash % 10000).padStart(4, '0')}`,
+    owner: `${FIRST_NAMES[hash % FIRST_NAMES.length]} ${SURNAMES[second % SURNAMES.length]}`,
+    recordId: `DEMO-${String(hash % 10000).padStart(4, '0')}`,
     year: bhYear ?? 2008 + (hash % 17),
     yearSource: bhYear ? 'from the BH code on the plate' : 'simulated',
     vehicleClass: SIMULATED_CLASSES[hash % SIMULATED_CLASSES.length],
@@ -135,7 +149,18 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
               >
                 SIMULATED
               </span>
-              <Row label="Owner" value={sim.owner} />
+              <Row
+                label="Owner (fictional)"
+                value={
+                  <span>
+                    {sim.owner}
+                    <span className="ml-2 px-2 py-0.5 rounded-full bg-brand/20 text-brand text-[10px] font-semibold align-middle">
+                      FICTIONAL
+                    </span>
+                  </span>
+                }
+              />
+              <Row label="Demo record" value={sim.recordId} muted />
               <Row label="Registration year" value={`${sim.year} (${sim.yearSource})`} />
               <Row label="Vehicle class" value={sim.vehicleClass} />
               <Row label="Source" value="Generated in this browser for the demo" muted />
@@ -145,7 +170,8 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
           )}
 
           <p className="mt-5 text-[11px] leading-relaxed text-command-muted">
-            Placeholder values derived from the reading so the demo is repeatable. RoadSense performs no
+            Fictional name and values derived from the reading so the demo is repeatable; any resemblance to a
+            real person is coincidental. RoadSense performs no
             registry (VAHAN) lookup and holds no owner data. These values are not sent anywhere and are not part of the
             JSON report or annotated PNG.
           </p>

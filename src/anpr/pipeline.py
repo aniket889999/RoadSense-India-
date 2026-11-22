@@ -173,8 +173,10 @@ class AnprImageService:
             ocr = self._runtime.recognizer.recognize(crop)
             if not isinstance(ocr, OcrRead):
                 raise TypeError("Recognizer returned an incompatible OCR result.")
+            runtime_threshold = getattr(self._runtime, "minimum_confidence", None)
             assessment = assess_ocr_read(
-                ocr.raw_text, ocr.confidence, minimum_confidence=self.minimum_confidence,
+                ocr.raw_text, ocr.confidence,
+                minimum_confidence=self.minimum_confidence if runtime_threshold is None else runtime_threshold,
                 review_only=ocr.review_only,
             )
             from src.anpr.quality import assess_plate_quality

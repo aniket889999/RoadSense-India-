@@ -220,7 +220,13 @@ def generate_split_predictions(
         "images_processed": len(records),
         "total_detected_plates": total_detected_plates,
         "result_status_counts": status_counts,
-        "minimum_ocr_confidence_threshold": minimum_confidence,
+        # Effective threshold: a named runtime acceptance policy overrides the service default.
+        "minimum_ocr_confidence_threshold": (
+            active_runtime_Holder[0].minimum_confidence
+            if active_runtime_Holder and getattr(active_runtime_Holder[0], "minimum_confidence", None) is not None
+            else minimum_confidence
+        ),
+        "acceptance_policy": os.environ.get("ROADSENSE_ANPR_ACCEPTANCE") or "review_only",
         "predictions_path": str(target_jsonl),
         "predictions_sha256": predictions_sha256,
         "provenance_path": str(provenance_path),

@@ -17,9 +17,11 @@ DEFAULTS = {
 }
 
 
-def build_environment(engine: str, device: str, inherited=None):
+def build_environment(engine: str, device: str, inherited=None, auto_accept: bool = False):
     if engine not in ("rapidocr", "easyocr"):
         raise ValueError("Select rapidocr or easyocr explicitly.")
+    if auto_accept and engine != "rapidocr":
+        raise ValueError("--auto-accept applies only to the rapidocr engine.")
     env = {**(os.environ if inherited is None else inherited), **DEFAULTS,
            "ROADSENSE_ANPR_DEVICE": device, "ROADSENSE_ANPR_OCR_ENGINE": engine}
     if engine == "rapidocr":
@@ -27,6 +29,10 @@ def build_environment(engine: str, device: str, inherited=None):
         env["ROADSENSE_ANPR_OCR_CROP_VIEW"] = "resized_bgr"
         env.pop("ROADSENSE_ANPR_OCR_RECOGNIZER_WEIGHTS", None)
         env.pop("ROADSENSE_ANPR_OCR_RECOGNIZER_SHA256", None)
+    # Never inherit an acceptance policy from the shell: it must be chosen explicitly here.
+    env.pop("ROADSENSE_ANPR_ACCEPTANCE", None)
+    if auto_accept:
+        env["ROADSENSE_ANPR_ACCEPTANCE"] = "rapidocr_gated_v1"
     return env
 
 
@@ -36,7 +42,10 @@ if __name__ == "__main__":
     parser.add_argument("--device", choices=("mps", "cpu", "cuda"), default="mps")
     parser.add_argument("--engine", choices=("rapidocr", "easyocr"), default="rapidocr",
                         help="RapidOCR uses CPU OCR and keeps every read for human review; device selects the plate detector.")
+    parser.add_argument("--auto-accept", action="store_true",
+                        help="Opt-in rapidocr_gated_v1: accept reads with RapidOCR score >= 0.90, a supported format, "
+                             "a known state code and no text cleanup; all others stay in review. Validation-derived.")
     args = parser.parse_args()
-    env = build_environment(args.engine, args.device)
+    env = build_environment(args.engine, args.device, auto_accept=args.auto_accept)
     os.chdir(ROOT)
     os.execve(str(ROOT / ".venv/bin/python"), [str(ROOT / ".venv/bin/python"), "-m", "uvicorn", "services.api.app.main:app", "--host", "127.0.0.1", "--port", str(args.port)], env)

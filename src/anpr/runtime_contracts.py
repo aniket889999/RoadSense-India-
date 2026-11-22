@@ -48,3 +48,5 @@ class PlateRecognizer(Protocol):
 class AnprRuntime:
     detector: PlateDetector
     recognizer: PlateRecognizer
+    # Engine-specific acceptance threshold from a named policy; None keeps the service default.
+    minimum_confidence: float | None = None

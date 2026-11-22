@@ -3,8 +3,38 @@
 
 > **Working Name:** RoadSense SiteOps — Hazard-Aware Parking and Pavement Intelligence
 > **Classification:** Applied Research & Product Architecture Specification
-> **Status:** Research Foundation Baseline (Pre-Implementation)
+> **Historical status:** Original pre-implementation research foundation; current scope is qualified below.
 > **Integrity Notice:** This specification documents a defensible research and product architecture. It makes no claims of unverified patentability, academic novelty, or production readiness without rigorous empirical validation.
+
+## Current status
+
+ANPR image inspection is now the main academic deliverable, with a trained plate
+detector, pretrained OCR, preserved raw evidence and applied reviewed candidate
+cleanup. The [model card](../anpr/model_card.md) separates validation-derived
+candidate agreement from independent accuracy. Parking remains an earlier
+platform/research track; no plate-to-bay association has been implemented.
+
+| Area of the proposal below | Status | Evidence boundary |
+| --- | --- | --- |
+| Verified ROI editor, camera-stability guard and recorded occupancy replay | Implemented | Local gated research workflow; synthetic validation does not establish site accuracy |
+| Manual hazard/bay/approach associations and capacity snapshot policy | Implemented | Explicit, fresh reviewed evidence; not structural pavement certification |
+| Continuous RTSP/WebRTC monitoring and motorist guidance feed | Not implemented | Browser camera preview alone is implemented |
+| Interactive MapLibre map and surveyed cross-camera mapping | Not implemented | Image-space geometry and optional coordinate fields are only part of the proposed system |
+| PostgreSQL/PostGIS spatial modeling | Partial | Configurable relational backend; PostGIS spatial types and queries are **Not implemented** |
+| Maintenance Opportunity Score, forecasting, dispatch and work-order/repair integrations | Not implemented | Proposed hypotheses/workflows, not measured operational capabilities |
+| ANPR-to-bay association, registry lookup and automatic toll/barrier control | Not implemented | ANPR candidates remain a separate operator-review output |
+| Deployment RBAC, uniform privacy masking and automatic retention windows | Not implemented | Route-specific controls/optional media masking do not establish the proposed facility-wide policy |
+| H1–H4 field benefits and formal novelty | Not implemented as validation | Prospective research questions; no numerical benefit, novelty or patent claim is established |
+
+Sources and more precise status labels are in the
+[architecture inventory](../architecture/system_overview.md#current-status)
+and [current capacity boundary](#12-implemented-safe-usable-capacity-boundary).
+Sections 1–11 preserve the original product targets, hypothetical personas,
+comparison assumptions, state tables and retention examples. They are not a
+record of delivered features or measured competitor/field outcomes. In
+particular, the historical `FREE` truth table and time constants are not the
+current API policy; rejecting a candidate alone does not prove safe pavement.
+Section 12 and the implemented policy take precedence.
 
 ---
 
@@ -225,7 +255,7 @@ The system enforces six distinct temporal policies:
 10. **Local Persistence & Append-Only Audit History:** PostgreSQL/PostGIS storage of review decisions, sessions, and state intervals.
 
 ### 8.2 Excluded Scope (Out of Scope for MVP)
-- **Automated License Plate Recognition (ALPR / ANPR):** Strictly excluded to preserve privacy and reduce regulatory risk.
+- **Historical parking exclusion:** ANPR was excluded from this original MVP. A separate operator-assisted ANPR image module is now implemented; plate-to-bay identity linkage remains **Not implemented**.
 - **Payment Processing & Automatic Parking Fines:** No commercial billing or penalty enforcement.
 - **Facial Recognition or Biometric Capture:** Strictly prohibited.
 - **City-Wide / Multi-Tenant Scaling:** Limited to single controlled facility deployments.
@@ -239,14 +269,18 @@ The system enforces six distinct temporal policies:
 
 ## 9. Privacy, Data Sovereignty, and Retention Policy
 
-### 9.1 Honest Privacy Engineering
+### 9.1 Proposed Facility Privacy Controls — Partial / Not implemented
 - **Minimise Incidental Capture:** Configure camera angles and fields of view to focus on pavement and vehicle geometry rather than pedestrian walkways.
-- **No Intentional Identification:** The system does not attempt to identify individuals or vehicles.
+- **Current identity boundary:** ANPR now intentionally reads candidate plate strings, which can be sensitive. It does not establish owner identity, registration validity, or a bay association. See the [ANPR privacy card](../anpr/privacy_and_retention.md).
 - **Privacy Masking:** Non-facility regions, public thoroughfares, and known pedestrian pathways are masked prior to persistent recording where technically feasible.
 - **Documenting Limitations:** Camera mounting height and optical resolution do not provide absolute privacy guarantees. Potential masking failures or edge cases must be documented honestly.
-- **Access Control:** Role-based local access controls restrict video access to authorized facility personnel.
+- **Access control — Not implemented as RBAC:** Reviewer labels and local endpoints do not establish authenticated facility roles; this remains a deployment requirement.
 
-### 9.2 Layered Data Retention Policy
+### 9.2 Proposed Layered Retention Policy — Not implemented as a uniform scheduler
+
+The following periods are historical design examples, not observed defaults or
+enforced expiry promises. Current files require workflow-specific/operator
+retention; browser ANPR exports have no automatic deletion service.
 1. **Default Operational Raw Video Retention:** Disabled by default, or configured to a short rolling window (nominal pilot default: **24 to 72 hours**) solely for operational review, after which raw frames are deleted unless an operator flags a specific incident.
 2. **Research Benchmark Retention:** Video explicitly collected for research benchmarks requires separate site consent, documented study protocols, dedicated access controls, and a fixed deletion schedule upon project completion.
 3. **Derived Metadata Retention:** Anonymized bounding box coordinates, spatial polygons, and state interval logs are retained according to facility analytics requirements (e.g., 365 days).
@@ -272,7 +306,8 @@ The system enforces six distinct temporal policies:
 | **Heavy Vehicle Occlusion** | Large truck/SUV in foreground blocking adjacent space | False `OCCUPIED` or missed vehicle | Approach-zone visibility checks, conservative `UNKNOWN` transition when occlusion $> 50\%$. |
 
 ### 11.2 Go / No-Go Decision Criteria
-The RoadSense SiteOps research initiative will advance to prototype implementation **only if** the following gating criteria are satisfied:
+These original research gates are preserved as a historical checklist, not proof
+that a facility pilot, consent protocol or field evaluation has been completed:
 - [ ] **Gating Criterion 1 (Provenance & Reproducibility):** Pinned models, configuration files, and evaluation scripts reproduce documented baselines with zero hash mismatches.
 - [ ] **Gating Criterion 2 (Pipeline Defect Remediation):** Media pipeline correctness findings (H.264 streaming, fail-closed inspection, bounded memory queues) are fully resolved and passing automated unit tests.
 - [ ] **Gating Criterion 3 (Controlled Dataset Consent):** Facility permission, camera mounting consent, and privacy masking approvals are formally executed for the test campus.

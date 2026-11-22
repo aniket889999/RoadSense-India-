@@ -10,9 +10,10 @@ a supported-format match does not verify registration or identity. The current
 workflow and its problem-statement coverage are documented in the
 [demonstration and jury guide](demo_and_jury_guide.md).
 
-This card summarizes recorded evidence through commit `eef6db8`. It introduces
-no model, normalization, threshold or acceptance-policy changes. Validation
-results measure agreement with supplied `publisher_mixed` labels, not an
+This card summarizes recorded evidence through commit `21586e9`, including the
+applied schema 1.2 `candidate_cleanup_v1` policy. It documents existing behavior
+without changing model weights, original normalization or acceptance thresholds.
+Validation results measure agreement with supplied `publisher_mixed` labels, not an
 independent human-verified accuracy estimate. The ANPR held-out test split has
 not been evaluated. See the [data card](data_card.md).
 
@@ -44,47 +45,70 @@ milestone state, not today's launcher configuration.
 All results below use the same validation split: **71 images / 94 supplied plate
 annotations**. Missed reference plates remain in the end-to-end reading
 denominator. These are validation results; no held-out test result is claimed.
-Sources: [detector report](witvix_detector_baseline_results.md#validation-split-val-detection-metrics)
-and [OCR comparison](ocr_model_comparison_results.md).
+Sources: [detector report](witvix_detector_baseline_results.md#validation-split-val-detection-metrics),
+[original OCR comparison](ocr_model_comparison_results.md), and
+[applied candidate cleanup results](text_cleanup_policy_results.md).
 
 | Measurement | Recorded result | Interpretation |
 | --- | --- | --- |
 | Best detector checkpoint, fused validation | Precision 0.998; recall 0.947; mAP50 0.992; mAP50–95 0.847 | Plate-box metrics from Ultralytics, not plate-reading accuracy |
-| Selected RapidOCR exact full-plate agreement | **37/94 (39.36%)** | Complete normalized reading agrees with the supplied reference |
-| Selected RapidOCR character error rate | **220/914 character edits (24.07%)** | Character-level error, not a confidence probability |
+| RapidOCR original normalized-text agreement / CER | 37/94 (39.36%) / 220/914 edits (24.07%) | Preserved pre-cleanup baseline; these fields retain their original meaning |
+| RapidOCR with applied candidate policy: exact agreement | **58/94 (61.7%)** | Reviewed `candidate_text` when present, otherwise the unchanged normalized reading; validation-derived |
+| Applied candidate-policy character error rate | **168/914 edits (18.38%)** | Offline reassessment of the same frozen OCR reads, not improved OCR inference |
+| Cleanup effect on affected plates | **21 fixed / 0 broken** across 23 cleaned plates; 2 remain wrong | Observed on this validation set, not a guarantee for new images |
 | Adapted EasyOCR exact agreement / CER | 22/94 (23.40%) / 30.09% | Preserved comparison; not the selected default |
 
 The selected RapidOCR configuration has zero automatically accepted readings
 by design. This does not imply zero recognition errors. Its score scale is not
 treated as a calibrated probability or substituted into the EasyOCR acceptance
-threshold. See [review-only behavior](demo_and_jury_guide.md#results-to-present-honestly).
+threshold. Cleaned candidates additionally carry `TEXT_CLEANED` and can never
+be automatically accepted, regardless of engine or score. See
+[review-only behavior](demo_and_jury_guide.md#results-to-present-honestly) and the
+[candidate cleanup contract](text_cleanup_policy_results.md#policy).
+
+### Applied candidate cleanup, separate from raw evidence
+
+Schema 1.2 preserves `raw_text`, `normalized_text` and the original
+`format_status`. The policy removes only the specified dot-like marks
+(`. , : · • °`) and removes a leading `IND` token only if the remainder matches
+`IN_COMMON_V1`. It does not substitute look-alike letters/digits. Changes appear
+in separate `candidate_text`, `candidate_format_status` and `text_cleanup`
+fields, and the UI/export identifies cleaned text. The implementation and
+measurement are recorded in [candidate cleanup results](text_cleanup_policy_results.md).
+
+**The policy is now applied; the result is still validation-derived.** It was
+designed from these same validation failures and assessed by rescoring frozen
+predictions without new OCR inference. **58/94 (61.7%) and 18.38% CER are observed
+candidate-policy agreement on supplied labels, not independent accuracy or
+passenger-car performance.** The held-out ANPR test evaluation remains pending.
+All readings still require human review.
 
 ## Known failure areas
 
-The [frozen-prediction failure analysis](ocr_failure_analysis.md) reproduces the
-recorded validation totals without new inference:
+The [frozen-prediction failure analysis](ocr_failure_analysis.md) describes the
+**original normalized-text baseline**, before candidate cleanup:
 
 - **Extra characters:** 28 of the 57 non-exact readings contain the reference
   characters in order plus extra characters. The analysis identifies leading
   `IND` emblem text and punctuation/fastener or border marks as prominent
   sources. This is the largest measured failure category, not evidence that
   every error can be fixed by cleanup.
-- **Low light:** only 7/29 reference plates have exact agreement. Genuine mixed
-  character errors remain; text cleanup alone does not resolve poor capture.
-- **Two-line layouts:** 22/63 exact agreements. The analysis reports limited
+- **Low light:** original normalized-text agreement is 7/29; the applied
+  candidate policy raises it to 12/29 on the same reads. Genuine mixed character
+  errors remain; text cleanup alone does not resolve poor capture. Source:
+  [cleanup measurement](text_cleanup_policy_results.md#measurement).
+- **Two-line layouts:** the original baseline has 22/63 exact agreements; this
+  is not a post-cleanup subgroup result. The analysis reports limited
   pure reordering/fragment cases, so it does not justify assuming row splitting
   will solve the remaining errors.
 - **Missed plates:** 3/94 references lack a matching detection. OCR cannot read
   a crop the detector did not produce.
 
-**Unapplied diagnostic counterfactual:** the analysis explores a **37→58/94**
-change by removing punctuation and a leading `IND` token from the same frozen
-validation reads. **That policy is not applied to the pipeline. 58/94 is not
-achieved application accuracy, a new frozen-model result, or independent
-evaluation evidence.** The achieved selected-pipeline result remains 37/94.
-Any future change belongs to a separate raw-evidence-preserving policy,
-validation experiment and independent confirmation after settings are frozen.
-See the [counterfactual and its restrictions](ocr_failure_analysis.md#2-what-the-extra-characters-are).
+The earlier analysis's cleanup counterfactual is historical. The narrower,
+explicit reviewed-candidate policy has since been implemented and measured in
+[candidate cleanup results](text_cleanup_policy_results.md). That newer report
+supersedes the earlier "not applied" status, while retaining its requirement
+for independent confirmation after the final pipeline/settings freeze.
 
 Blur, glare and strong perspective remain capture risks. Quality cues suggest
 review or recapture; they do not reconstruct missing characters, invent plate

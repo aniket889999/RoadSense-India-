@@ -1,8 +1,35 @@
 # RoadSense India: Industry Readiness & Operating Boundaries
 
-> **Status:** Production-Grade Dashcam Operations Specification (Offline & Local Fleet Analysis)
-> **Model Stage:** Verified Research Baseline (`pothole_yolov8n_rdd2022_india_mps_baseline_v1`)
-> **Media Intelligence Engine:** FFmpeg 9.0.1 + OpenCV 5.0 + ByteTrack Multi-Object Tracking
+> **Status:** Local research/operations prototype; deployment readiness is not established.
+> **Current academic deliverable:** Operator-assisted still-image ANPR.
+> **Earlier platform:** Recorded dashcam review and gated parking/hazard workflows.
+
+## Current status
+
+The major project now addresses plate detection, OCR, limited format assessment,
+capture-quality review and explicit annotated-image/JSON exports. Applied schema
+1.2 cleanup preserves original OCR evidence and creates a reviewed candidate.
+Its **58/94 (61.7%) agreement, 18.38% CER and 21 fixed / 0 broken** are derived
+from the same validation reads used to design the rule; they are not independent
+accuracy. No cleaned reading is auto-accepted, and ANPR held-out testing is
+pending. Source: [cleanup policy results](../anpr/text_cleanup_policy_results.md).
+
+| Capability | Status | Operating boundary |
+| --- | --- | --- |
+| ANPR inspection and candidate export | Implemented | Local operator-assisted prototype, not registration verification |
+| Recorded dashcam review, parking gates and capacity snapshots | Implemented | Earlier research workflows; field accuracy and facility acceptance remain unestablished |
+| Browser camera preview | Implemented | Server-side WebRTC inference is **Not implemented** |
+| MapLibre interaction and automatic GPS/NMEA extraction | Not implemented | Telemetry fields and an absence/presence placeholder are **Partial** |
+| PostgreSQL deployment | Partial | Configurable backend and DB Compose service; SQLite is the code default |
+| PostGIS spatial query integration | Not implemented | Available DB image does not establish spatial column/query use |
+| ANPR-to-bay association, registry lookup, toll/barrier control | Not implemented | Separate inspection workflows only |
+| API Docker deployment, deployment RBAC, automated repair dispatch | Not implemented | Product/deployment targets, not current deliverables |
+
+Evidence and source links are centralized in the
+[architecture status matrix](../architecture/system_overview.md#current-status).
+The numbered sections below preserve earlier road-operations requirements and
+persona examples. They do not establish buyer outcomes, security certification,
+live throughput, repair-system integration or a complete deployment.
 
 ---
 
@@ -11,7 +38,7 @@
 Municipal road authorities, highway concessionaires, campus facilities teams, and infrastructure inspection contractors capture hundreds of hours of dashcam video from patrol vehicles, buses, and survey trucks. Today, identifying road degradation and potholes from this imagery requires labor-intensive manual inspection, leading to inspection backlogs, inconsistent reporting, and uncoordinated repair dispatches.
 
 **RoadSense India** provides a local-first, auditable operations platform that:
-1. Ingests local dashcam video recordings without cloud uploads.
+1. Accepts recorded dashcam files through the configured API for local-model processing; this is not an audit of all host/network traffic.
 2. Validates video containers, orientation, and streams with secure FFprobe intake.
 3. Streams frames boundedly through an OpenCV pipeline (preventing memory exhaustion).
 4. Runs local, hardware-accelerated computer vision suggestions (using a frozen, provenance-verified YOLOv8n detector on Apple MPS / CUDA).
@@ -39,8 +66,8 @@ Municipal road authorities, highway concessionaires, campus facilities teams, an
 - **Goal**: Audit road quality along recurring logistics routes or campus roads without leaking proprietary camera feeds to third-party cloud APIs.
 - **Pain Point**: Strict corporate data sovereignty rules prevent uploading dashcam video to external cloud providers.
 - **Workflow**:
-  1. Runs local Docker / on-premise RoadSense Command Center on Apple Silicon or Linux workstation.
-  2. Processes video streams completely offline.
+  1. Target: a local/on-premise deployment on Apple Silicon or Linux. A database Compose service exists; an API container deployment is not implemented.
+  2. Processes recorded video with local assets; continuous stream ingestion and an end-to-end offline guarantee are not established.
   3. Audits system health, model provenance hashes, and processing latency.
 
 ---
@@ -55,7 +82,7 @@ To prevent misuse, misleading claims, and safety hazards, RoadSense India enforc
 | **Depth & Severity** | Identifies 2D surface bounding boxes (`x_min, y_min, x_max, y_max`). | **Never claims pothole depth, volumetric severity, or structural axle hazard.** Single monocular dashcam video cannot measure depth without calibrated stereoscopy or LiDAR. |
 | **Accident / Hazard Risk** | Highlights visual surface irregularities. | **Never generates driving risk scores, driver warnings, or collision predictions.** RoadSense is an offline review tool, not an Advanced Driver Assistance System (ADAS). |
 | **Repair Priority** | Groups detections temporally via ByteTrack. | **Never calculates automated repair priority, municipal budgeting, or engineering urgency.** |
-| **GPS Geolocation** | Extracts GPS coordinates only when embedded in metadata or NMEA telemetry. | **Never invents, interpolates, or claims precise pothole GPS coordinates without explicit sensor data.** Shows "No GPS supplied" when telemetry is absent. |
+| **GPS Geolocation — Partial** | Optional metadata fields and a telemetry presence/absence view. Automatic NMEA extraction and interactive mapping are **Not implemented**. | Do not invent coordinates or claim verified geolocation from video alone. |
 | **Real-Time Performance** | Displays actual measured frame processing latency. | **Never claims real-time performance unless directly measured on host hardware.** |
 | **Coverage Guarantee** | Evaluates on trained distribution (RDD2022 India). | **Does not claim complete detection coverage.** Reviewers must be aware that weather, glare, camera blur, and novel asphalt textures will produce false negatives and false positives. |
 
@@ -85,7 +112,10 @@ To prevent misuse, misleading claims, and safety hazards, RoadSense India enforc
 
 ## 5. Model Provenance & Verifiable Engineering
 
-The offline inference engine strictly couples every prediction to a verifiable Git and artifact checksum:
+The earlier frozen pothole baseline records the following provenance. Its weak
+held-out results do not demonstrate reliable road coverage or driver-alert
+performance, and they must not be presented as ANPR results. Source:
+[frozen pothole baseline](../frozen_baseline_results.md).
 - **Baseline Model ID**: `pothole_yolov8n_rdd2022_india_mps_baseline_v1`
 - **Frozen Checkpoint SHA-256**: `bdf07ad81197ee15b795de635671d2ef75243492138d34c37d5352a9a777d430`
 - **ByteTrack Config SHA-256**: Pinned in `configs/tracking/bytetrack_default.yaml`

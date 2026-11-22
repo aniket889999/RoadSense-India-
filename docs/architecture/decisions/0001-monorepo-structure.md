@@ -3,6 +3,18 @@
 ## Status
 Accepted
 
+## Current status
+
+**Implemented:** The monorepo contains the Next.js dashboard, FastAPI API and
+shared Python modules; `src/anpr/` now supplies the main academic image-reading
+deliverable. Dashcam/parking remain earlier platform workflows.
+**Partial:** PostgreSQL configuration and a PostGIS-capable DB Compose service;
+SQLite is the default. **Not implemented:** PostGIS spatial types/queries, an
+API container deployment, server WebRTC inference, interactive MapLibre rendering
+and ANPR-to-bay association. See the source-linked
+[current inventory](../system_overview.md#current-status).
+The original decision below records architecture intent, not deployment proof.
+
 ## Context
 RoadSense India began as a standalone Python CLI and Streamlit prototype. To support professional municipal and fleet operations, the project requires:
 1. A rich, high-performance, responsive operator dashboard with frame-accurate video synchronization.

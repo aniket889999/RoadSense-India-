@@ -1,6 +1,49 @@
 # RoadSense India: System Architecture & Data Flow
 
-> **Architecture Style:** Monorepo Multi-Layer System (Next.js Dashboard + FastAPI Async Engine + PostgreSQL/PostGIS)
+> **Architecture Style:** Next.js dashboard + FastAPI + shared Python modules;
+> relational storage is SQLite by default, with configurable PostgreSQL.
+
+## Current status
+
+ANPR is the current major academic deliverable; road/dashcam and parking are
+earlier platform workflows. This inventory describes code at `21586e9`.
+**Implemented** means a local prototype path exists, **Partial** means only part
+of the proposed integration exists, and **Not implemented** identifies a target.
+Neither code presence nor a synthetic test proves field accuracy or readiness.
+
+| Capability | Status | Source and practical boundary |
+| --- | --- | --- |
+| Still-image ANPR | Implemented | [API](../../services/api/app/routers/anpr.py), [pipeline](../../src/anpr/pipeline.py); bounded image input, local detector/OCR, operator review |
+| Schema 1.2 candidate cleanup | Implemented | [Policy results](../anpr/text_cleanup_policy_results.md); separate candidate fields, raw evidence preserved, never auto-accepted; validation-derived |
+| Annotated PNG/review JSON | Implemented | [Browser exports](../../apps/web/src/lib/anprExports.ts); explicit downloads, not a server-side ANPR evidence database |
+| Recorded-video tracking/replay | Implemented | [Media worker](../../services/api/app/services/video_processor.py), [fusion](../../services/api/app/services/event_fusion.py); candidate review, not driver alerts |
+| Parking layout, stability gate and recorded occupancy | Implemented | [Parking routes](../../services/api/app/routers/parking.py); verified layouts and gated local jobs, not continuous RTSP service |
+| Hazard-aware capacity policy | Implemented | [Policy](../../src/parking/capacity_policy.py); conservative operator-facing evidence fusion, not structural safety certification |
+| Browser camera preview | Implemented | [Camera hook](../../apps/web/src/hooks/useCamera.ts); MediaDevices preview only |
+| Server-side WebRTC inference | Not implemented | [Offer endpoint](../../services/api/app/routers/live.py) returns `supported=false`, `not_connected` |
+| Interactive MapLibre map | Not implemented | [Map view](../../apps/web/src/components/MapView.tsx) displays presence/absence of telemetry; it does not instantiate a map |
+| GPS/NMEA pipeline | Partial | Optional [JSON/scalar fields](../../services/api/app/models/entities.py) exist; automatic NMEA extraction and geolocation of detections are **Not implemented** |
+| PostgreSQL persistence | Partial | [Config](../../services/api/app/core/config.py), [engine](../../services/api/app/db/session.py), [DB Compose service](../../infra/docker-compose.yml); configurable, not an automatically selected fallback or a deployment verified in this task |
+| PostGIS spatial columns/queries | Not implemented | Compose offers a PostGIS-capable image; current ORM/migrations use JSON/scalar coordinates, without geometry types or `ST_*` query integration |
+| ANPR-to-parking-bay association | Not implemented | Still-image ANPR returns a reading response; no registration lookup, identity linkage, payment or barrier control |
+| Surveyed world-coordinate/cross-camera fusion | Not implemented | Current hazard associations use explicit operator/layout links, not an automatic mobile-to-CCTV projection |
+| Maintenance forecasting, dispatch and motorist routing | Not implemented | Earlier product diagrams are research targets, not delivered work-order or navigation integrations |
+| API container deployment | Not implemented | Current Compose contains the database service only; no API container build/run is established |
+| Deployment RBAC and automatic ANPR export retention | Not implemented | See [ANPR privacy boundaries](../anpr/privacy_and_retention.md); CORS/reviewer labels are not authenticated roles |
+
+Current ANPR data flow:
+
+```text
+Permitted still image → bounded decode → local plate detector → OCR
+  → preserved raw/normalized text + explicit reviewed candidate cleanup
+  → operator crop/format/quality review → optional browser PNG/JSON download
+```
+
+See the [model card](../anpr/model_card.md) for measured results and the
+[data card](../anpr/data_card.md) for mixed labels and held-out-test limits.
+The numbered sections below retain the earlier road-operations design and must
+be interpreted with this status matrix; they are not a claim that every drawn
+integration has been delivered.
 
 ---
 
@@ -24,7 +67,7 @@
 │                                                                        │
 │  ┌──────────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │
 │  │   Session Service    │  │  RoadEvent Fusion│  │ Live Stream Bndry│  │
-│  │   (Upload / Storage) │  │ (Temporal Clust.)│  │ (WebRTC Ready)   │  │
+│  │   (Upload / Storage) │  │ (Temporal Clust.)│  │ (Preview Only)  │  │
 │  └──────────┬───────────┘  └─────────┬────────┘  └─────────┬────────┘  │
 │             │                        │                     │           │
 │             ▼                        ▼                     ▼           │
@@ -52,25 +95,25 @@
 ## 2. Technology Stack & Component Responsibilities
 
 ### Presentation Layer (`apps/web`)
-- **Framework**: Next.js 14/15 App Router with TypeScript.
+- **Framework — Implemented**: Next.js 14.2.18 App Router with TypeScript.
 - **Styling**: Tailored Dark Graphite/Green Command Center palette (`#0B0F12` background, `#10B981` / `#22C55E` detection green, high-contrast typography via Inter/Geist).
-- **Video Canvas**: Synchronized overlay canvas rendering mathematically exact bounding circles over sampled video frames.
-- **Map View**: MapLibre GL instance activated strictly when real GPS points exist in session telemetry.
+- **Video Canvas — Implemented**: Synchronized suggestion overlays over sampled frames; this does not establish localization accuracy.
+- **Map View — Not implemented as a map**: Current UI reports telemetry presence/absence. Installing `maplibre-gl` does not instantiate a MapLibre map.
 
 ### Service Layer (`services/api`)
 - **Framework**: FastAPI with Pydantic v2 schemas.
 - **Inference Lifecycle**: Reads `configs/inference/frozen_baseline.yaml`, verifies all 7 artifact hashes, creates private non-symlinked memory descriptor, and predicts via Ultralytics without network calls.
-- **Event Bus / WebSocket**: Dispatches real-time processing milestones (`queued`, `validating`, `sampling`, `model_loading`, `processing [N/M]`, `rendering`, `complete`).
+- **Event Bus / WebSocket — Implemented**: Dispatches recorded-job progress; this is not a live WebRTC inference service or a measured throughput guarantee.
 
 ### Persistence Layer (`services/api/app/db/`)
 - **Engine**: SQLAlchemy 2.0 (Async) + Alembic migrations.
-- **Database**: PostgreSQL with PostGIS extension (with automatic SQLite fallback for lightweight unit tests).
+- **Database — Partial integration**: SQLite is selected by the default `DATABASE_URL`; PostgreSQL is an explicit configuration. There is no automatic database fallback. PostGIS spatial use is **Not implemented**.
 - **Entities**:
   - `Device`: Registered capture hardware.
   - `DriveSession`: Recorded video processing run with checksums and execution timing.
   - `RawDetection`: Per-frame candidate boxes from YOLOv8n.
   - `RoadEvent`: Temporal cluster of detections representing one candidate pothole location.
-  - `ReviewAction`: Immutable audit log of human reviewer confirmations, rejections, and notes.
+  - `ReviewAction`: Application audit records of human decisions; not a cryptographically immutable ledger or proof of authenticated identity.
   - `Artifact`: Output videos, CSV manifests, and JSON summaries.
 
 ---
@@ -93,7 +136,6 @@
 
 ## 4. Live Camera & WebRTC Boundary
 
-- **Local-Only Policy**: Camera preview and streaming interact solely with `localhost` / local network.
-- **No External STUN/TURN**: By default, no third-party STUN/TURN servers are configured.
-- **Controlled Ingest**: Streams or frames are processed at a bounded cadence (e.g. 2 FPS) to avoid thermal throttling on edge devices.
-- **Explicit Operator Notice**: The UI displays `"Experimental operator review — not a driver alert"` continuously.
+- **Implemented:** User-initiated browser `getUserMedia` preview and a continuous operator-review notice.
+- **Not implemented:** Server peer negotiation, stream decoding/inference, and any live sampling/performance contract. The API reports an unsupported/disconnected boundary.
+- **Network qualification:** The inspected preview does not create a peer connection or configure STUN/TURN. This is not an audit of all browser/dependency/host network traffic.

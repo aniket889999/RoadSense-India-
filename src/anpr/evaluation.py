@@ -11,7 +11,9 @@ from pydantic import ValidationError
 
 from src.anpr.contracts import AnprImageResult, PlateBox, ReadStatus, ResultStatus
 from src.anpr.dataset import PreparedRecord, summarize_evidence_assurance
-from src.anpr.validation import normalize_plate_text
+from src.anpr.validation import check_plate_format, derive_candidate_text, normalize_plate_text
+
+TEXT_SOURCES = ("normalized", "candidate")
 
 
 class EvaluationError(ValueError):
@@ -69,7 +71,17 @@ def _ratio(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
-def _score(records: Sequence[PreparedRecord], predictions: Mapping[str, AnprImageResult], threshold: float) -> dict:
+def _observed_text(plate, text_source: str) -> str:
+    normalized = normalize_plate_text(plate.raw_text)
+    if text_source == "candidate" and plate.candidate_text is not None:
+        return plate.candidate_text
+    return normalized
+
+
+def _score(
+    records: Sequence[PreparedRecord], predictions: Mapping[str, AnprImageResult], threshold: float,
+    text_source: str = "normalized",
+) -> dict:
     counts = {
         "images": len(records), "ground_truth_plates": 0, "predicted_plates": 0,
         "matched_detections": 0, "correct_plate_reads": 0, "plates_with_text": 0,
@@ -110,7 +122,7 @@ def _score(records: Sequence[PreparedRecord], predictions: Mapping[str, AnprImag
         for gt_index, gt in enumerate(ground_truth):
             expected = normalize_plate_text(gt.text)
             plate = plates[matches[gt_index]] if gt_index in matches else None
-            observed = normalize_plate_text(plate.raw_text) if plate else ""
+            observed = _observed_text(plate, text_source) if plate else ""
             counts["expected_characters"] += len(expected)
             counts["character_errors"] += character_edit_distance(expected, observed)
             counts["plates_with_text"] += bool(observed)
@@ -146,6 +158,7 @@ def _score(records: Sequence[PreparedRecord], predictions: Mapping[str, AnprImag
 
 def evaluate_predictions(
     records: Sequence[PreparedRecord], predictions: Mapping[str, AnprImageResult], *, iou_threshold: float = 0.5,
+    text_source: str = "normalized",
 ) -> dict:
     """Score all labelled plates; absent/unavailable outputs remain misses.
 
@@ -157,6 +170,8 @@ def evaluate_predictions(
         raise EvaluationError("IoU threshold must be numeric.")
     if not math.isfinite(iou_threshold) or not 0 < iou_threshold <= 1:
         raise EvaluationError("IoU threshold must lie in (0, 1].")
+    if text_source not in TEXT_SOURCES:
+        raise EvaluationError(f"text_source must be one of {TEXT_SOURCES}.")
     if not records:
         raise EvaluationError("Evaluation requires at least one labelled image.")
     identities = {record.image_id for record in records}
@@ -173,20 +188,28 @@ def evaluate_predictions(
         for plate in result.plates:
             if plate.normalized_text != normalize_plate_text(plate.raw_text):
                 raise EvaluationError("Prediction normalized text differs from its raw OCR evidence.")
+            if plate.candidate_text is not None and (
+                derive_candidate_text(plate.normalized_text) != (plate.candidate_text, plate.text_cleanup)
+                or check_plate_format(plate.candidate_text) != plate.candidate_format_status
+            ):
+                raise EvaluationError("Prediction candidate text is not derived from its raw OCR evidence.")
 
     conditions = sorted({condition for record in records for condition in record.conditions})
     assurance = summarize_evidence_assurance([record.model_dump(mode="json") for record in records])
     return {
         "schema_version": "1.0", "iou_threshold": float(iou_threshold),
         "matching_policy": "greedy_descending_iou_without_text_v1",
+        "text_source": text_source,
         "reference_evidence": assurance,
         "metric_interpretation": (
             "accuracy_against_human_verified_labels"
             if assurance["all_plate_texts_human_verified"] else "agreement_with_supplied_labels"
         ),
-        "overall": _score(records, predictions, iou_threshold),
+        "overall": _score(records, predictions, iou_threshold, text_source),
         "by_condition": {
-            condition: _score([record for record in records if condition in record.conditions], predictions, iou_threshold)
+            condition: _score(
+                [record for record in records if condition in record.conditions], predictions, iou_threshold, text_source,
+            )
             for condition in conditions
         },
     }

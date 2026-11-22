@@ -38,7 +38,7 @@ export async function createAnnotatedImage(previewUrl: string, result: AnprImage
   ctx.font = `${font}px sans-serif`;
   const lines: string[] = [];
   const entries = result.plates.length ? result.plates.map((plate, index) =>
-    `#${index + 1} Candidate: ${plate.normalized_text || '(unreadable)'} | ${plate.recognition_status} | NOT HUMAN VERIFIED`
+    `#${index + 1} Candidate: ${plate.candidate_text || plate.normalized_text || '(unreadable)'}${plate.candidate_text ? ' (cleaned)' : ''} | ${plate.recognition_status} | NOT HUMAN VERIFIED`
   ) : [`${result.status}: no plate reading is available.`];
   for (const entry of entries) {
     let line = '';

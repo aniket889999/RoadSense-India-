@@ -2756,10 +2756,11 @@
             "type": "string",
             "enum": [
               "1.0",
-              "1.1"
+              "1.1",
+              "1.2"
             ],
             "title": "Schema Version",
-            "default": "1.1"
+            "default": "1.2"
           },
           "request_id": {
             "type": "string",
@@ -5242,6 +5243,36 @@
             "maxLength": 256,
             "title": "Normalized Text"
           },
+          "candidate_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Text"
+          },
+          "candidate_format_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormatStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text_cleanup": {
+            "items": {
+              "$ref": "#/components/schemas/TextCleanup"
+            },
+            "type": "array",
+            "title": "Text Cleanup"
+          },
           "ocr_confidence": {
             "anyOf": [
               {
@@ -5452,7 +5483,8 @@
           "OCR_CONFIDENCE_MISSING",
           "LOW_OCR_CONFIDENCE",
           "FORMAT_NOT_SUPPORTED",
-          "OCR_REVIEW_ONLY"
+          "OCR_REVIEW_ONLY",
+          "TEXT_CLEANED"
         ],
         "title": "ReasonCode"
       },
@@ -6576,6 +6608,15 @@
           "disk_free_gb"
         ],
         "title": "SystemHealthResponse"
+      },
+      "TextCleanup": {
+        "type": "string",
+        "enum": [
+          "PUNCTUATION_REMOVED",
+          "LEADING_EMBLEM_REMOVED"
+        ],
+        "title": "TextCleanup",
+        "description": "Explicit, recorded edits that derive ``candidate_text`` from ``normalized_text``."
       },
       "ValidationError": {
         "properties": {

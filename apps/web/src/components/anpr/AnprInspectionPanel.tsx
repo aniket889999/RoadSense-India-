@@ -28,6 +28,7 @@ import {
   ReadStatus,
   ResultStatus,
   QUALITY_GUIDANCE,
+  TEXT_CLEANUP_LABELS,
 } from '../../lib/anprTypes';
 import { createAnnotatedImage, createReviewReport, downloadBlob } from '../../lib/anprExports';
 import { ViewportBox, computeContainViewport } from '../../lib/canvasTransform';
@@ -606,7 +607,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                         const readStyle = getReadStatusStyle(plate.recognition_status);
                         const isSelected = plate.plate_id === selectedPlateId;
                         const displayLabel =
-                          plate.normalized_text || READ_STATUS_LABELS[plate.recognition_status];
+                          plate.candidate_text || plate.normalized_text || READ_STATUS_LABELS[plate.recognition_status];
 
                         return (
                           <button
@@ -824,6 +825,25 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                             </div>
                           </div>
                         </div>
+
+                        {plate.candidate_text && (
+                          <div className="p-2 rounded bg-command-surface/80 border border-command-border">
+                            <span className="block text-[10px] uppercase text-command-muted">
+                              Review Candidate (cleaned, not verified)
+                            </span>
+                            <div className="mt-0.5 text-xs font-bold text-radar-bright tracking-wider break-all">
+                              {plate.candidate_text}
+                            </div>
+                            <ul className="mt-1 text-[10px] text-command-muted list-disc list-inside">
+                              {(plate.text_cleanup ?? []).map((step) => (
+                                <li key={step}>{TEXT_CLEANUP_LABELS[step] ?? step}</li>
+                              ))}
+                              {plate.candidate_format_status && (
+                                <li>Candidate format: {FORMAT_STATUS_LABELS[plate.candidate_format_status]}</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
 
                         {/* Format Status & Uncalibrated Scores */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

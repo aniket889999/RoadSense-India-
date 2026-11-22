@@ -66,7 +66,7 @@ def test_pipeline_returns_quality_and_explicit_review_mode_and_accepts_legacy_re
         SimpleNamespace(recognize=lambda _: OcrRead("MH12AB1234", None, review_only=True)),
     )
     result = AnprImageService(lambda: runtime).recognize_bytes(payload.getvalue(), "image/png", "quality-check")
-    assert result.schema_version == "1.1"
+    assert result.schema_version == "1.2"
     assert result.plates[0].image_quality.crop_width == 80
     assert result.plates[0].reason_codes == ["OCR_REVIEW_ONLY"]
     legacy = result.model_dump(mode="json")

@@ -24,6 +24,8 @@ def main() -> int:
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--split", choices=("val", "test"), default="val")
     parser.add_argument("--iou-threshold", type=float, default=0.5)
+    parser.add_argument("--text-source", choices=("normalized", "candidate"), default="normalized",
+                        help="score normalized OCR text (default) or the cleaned review candidate when present")
     parser.add_argument("--output", type=Path, required=True, help="A new JSON file under outputs/.")
     args = parser.parse_args()
     try:
@@ -46,8 +48,10 @@ def main() -> int:
         records = [record for record in load_manifest(args.dataset / "manifest.jsonl", prepared=True)
                    if record.split == args.split]
         predictions = load_predictions(args.predictions)
-        result = evaluate_predictions(records, predictions, iou_threshold=args.iou_threshold)
+        result = evaluate_predictions(records, predictions, iou_threshold=args.iou_threshold, text_source=args.text_source)
         policy = {"split": args.split, "iou_threshold": args.iou_threshold, "normalization": "IN_COMMON_V1"}
+        if args.text_source != "normalized":
+            policy["text_source"] = args.text_source  # keeps the historical config hash for the default
         report = {
             **result,
             "split": args.split,

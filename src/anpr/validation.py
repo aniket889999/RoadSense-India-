@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 
-from src.anpr.contracts import FormatStatus, OcrAssessment, ReadStatus, ReasonCode
+from src.anpr.contracts import FormatStatus, OcrAssessment, ReadStatus, ReasonCode, TextCleanup
 
 
 # This is a shape profile, not a complete registry of Indian registration rules.
@@ -27,6 +27,39 @@ def normalize_plate_text(raw_text: str) -> str:
     if len(raw_text) > 256:
         raise ValueError("raw_text cannot exceed 256 characters.")
     return raw_text.translate(_NORMALIZATION_TABLE)
+
+
+# Indian high-security registration plates print this country code beside the
+# registration; it is not part of the registration itself.
+EMBLEM_TOKEN = "IND"
+# Marks with no resemblance to a letter or digit (bolts, borders, emblem dots). Any
+# other character, e.g. "!", "ß" or full-width letters, may be a misread character
+# and is never removed.
+REMOVABLE_MARKS = ".,:·•°"
+_REMOVABLE = str.maketrans("", "", REMOVABLE_MARKS)
+
+
+def derive_candidate_text(normalized_text: str) -> tuple[str | None, list[TextCleanup]]:
+    """Derive a review candidate by explicit removals only; never substitutes characters.
+
+    1. Remove the dot-like marks in ``REMOVABLE_MARKS`` (never letter/digit look-alikes).
+    2. Remove a leading ``IND`` token only when the remainder matches IN_COMMON_V1.
+
+    Returns ``(None, [])`` when nothing was removed or nothing would remain.
+    """
+    if not isinstance(normalized_text, str):
+        raise TypeError("normalized_text must be a string.")
+    steps: list[TextCleanup] = []
+    text = normalized_text.translate(_REMOVABLE)
+    if text != normalized_text:
+        steps.append(TextCleanup.PUNCTUATION_REMOVED)
+    remainder = text[len(EMBLEM_TOKEN):]
+    if text.startswith(EMBLEM_TOKEN) and _COMMON_INDIAN_SHAPE.fullmatch(remainder):
+        text = remainder
+        steps.append(TextCleanup.LEADING_EMBLEM_REMOVED)
+    if not steps or not text:
+        return None, []
+    return text, steps
 
 
 def check_plate_format(normalized_text: str) -> FormatStatus:
@@ -72,7 +105,9 @@ def assess_ocr_read(
         else _validate_confidence(ocr_confidence, "ocr_confidence")
     )
     normalized = normalize_plate_text(raw_text)
+    candidate, cleanup = derive_candidate_text(normalized)
     format_status = check_plate_format(normalized)
+    candidate_format = check_plate_format(candidate) if candidate is not None else None
     reasons: list[ReasonCode] = []
 
     if format_status == FormatStatus.EMPTY:
@@ -85,6 +120,8 @@ def assess_ocr_read(
             reasons.append(ReasonCode.OCR_CONFIDENCE_MISSING)
         elif confidence < threshold:
             reasons.append(ReasonCode.LOW_OCR_CONFIDENCE)
+        if cleanup:
+            reasons.append(ReasonCode.TEXT_CLEANED)
         if format_status == FormatStatus.NO_MATCH:
             reasons.append(ReasonCode.FORMAT_NOT_SUPPORTED)
         recognition_status = ReadStatus.NEEDS_REVIEW if reasons else ReadStatus.READ
@@ -92,6 +129,9 @@ def assess_ocr_read(
     return OcrAssessment(
         raw_text=raw_text,
         normalized_text=normalized,
+        candidate_text=candidate,
+        candidate_format_status=candidate_format,
+        text_cleanup=cleanup,
         ocr_confidence=confidence,
         format_status=format_status,
         recognition_status=recognition_status,

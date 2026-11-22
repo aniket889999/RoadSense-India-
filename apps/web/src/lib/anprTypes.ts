@@ -20,7 +20,11 @@ export type ReasonCode =
   | 'OCR_CONFIDENCE_MISSING'
   | 'LOW_OCR_CONFIDENCE'
   | 'FORMAT_NOT_SUPPORTED'
-  | 'OCR_REVIEW_ONLY';
+  | 'OCR_REVIEW_ONLY'
+  | 'TEXT_CLEANED';
+
+/** Explicit removal steps that derive `candidate_text` from `normalized_text`. */
+export type TextCleanup = 'PUNCTUATION_REMOVED' | 'LEADING_EMBLEM_REMOVED';
 
 export type QualityFlag = 'SMALL_CROP' | 'LOW_SHARPNESS' | 'DARK_CROP' | 'CLIPPED_HIGHLIGHTS' | 'TILT_OBSERVED';
 
@@ -59,6 +63,11 @@ export interface PlateBox {
 export interface OcrAssessment {
   raw_text: string;
   normalized_text: string;
+  /** Present only when explicit cleanup removed non-registration marks (schema 1.2). */
+  candidate_text?: string | null;
+  /** Format check of `candidate_text`; `format_status` always describes `normalized_text`. */
+  candidate_format_status?: FormatStatus | null;
+  text_cleanup?: TextCleanup[];
   ocr_confidence: number | null;
   format_profile: FormatProfile;
   format_status: FormatStatus;
@@ -80,7 +89,7 @@ export interface PlateResult extends OcrAssessment {
  * Complete single-image ANPR inspection result.
  */
 export interface AnprImageResult {
-  schema_version: '1.0' | '1.1';
+  schema_version: '1.0' | '1.1' | '1.2';
   request_id: string;
   status: ResultStatus;
   image_width: number;
@@ -119,4 +128,10 @@ export const REASON_CODE_LABELS: Record<ReasonCode, string> = {
   LOW_OCR_CONFIDENCE: 'OCR score below review threshold',
   FORMAT_NOT_SUPPORTED: 'Normalized text does not match IN_COMMON_V1 shape',
   OCR_REVIEW_ONLY: 'This engine provides review suggestions. Confirm the characters against the crop.',
+  TEXT_CLEANED: 'Non-registration marks were removed to form the candidate. Compare it with the raw text and crop.',
+};
+
+export const TEXT_CLEANUP_LABELS: Record<TextCleanup, string> = {
+  PUNCTUATION_REMOVED: 'Dot-like marks removed (. , : · • °)',
+  LEADING_EMBLEM_REMOVED: 'Leading IND country code removed',
 };

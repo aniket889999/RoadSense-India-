@@ -38,6 +38,14 @@ class ReasonCode(str, Enum):
     LOW_OCR_CONFIDENCE = "LOW_OCR_CONFIDENCE"
     FORMAT_NOT_SUPPORTED = "FORMAT_NOT_SUPPORTED"
     OCR_REVIEW_ONLY = "OCR_REVIEW_ONLY"
+    TEXT_CLEANED = "TEXT_CLEANED"
+
+
+class TextCleanup(str, Enum):
+    """Explicit, recorded edits that derive ``candidate_text`` from ``normalized_text``."""
+
+    PUNCTUATION_REMOVED = "PUNCTUATION_REMOVED"
+    LEADING_EMBLEM_REMOVED = "LEADING_EMBLEM_REMOVED"
 
 
 class AnprContract(BaseModel):
@@ -79,10 +87,20 @@ class PlateImageQuality(AnprContract):
 
 
 class OcrAssessment(AnprContract):
-    """An OCR candidate and its review decision, never registry verification."""
+    """An OCR candidate and its review decision, never registry verification.
+
+    ``raw_text``, ``normalized_text`` and ``format_status`` (which always describes
+    ``normalized_text``) keep their meaning. ``candidate_text`` is present only when an
+    explicit removal step (listed in ``text_cleanup``) dropped non-registration marks;
+    ``candidate_format_status`` describes it. A cleaned read always carries
+    ``TEXT_CLEANED`` and is therefore never automatically accepted.
+    """
 
     raw_text: str = Field(max_length=256)
     normalized_text: str = Field(max_length=256)
+    candidate_text: str | None = Field(default=None, min_length=1, max_length=256)
+    candidate_format_status: FormatStatus | None = None
+    text_cleanup: list[TextCleanup] = Field(default_factory=list)
     ocr_confidence: Confidence | None
     format_profile: Literal["IN_COMMON_V1"] = "IN_COMMON_V1"
     format_status: FormatStatus
@@ -106,6 +124,18 @@ class OcrAssessment(AnprContract):
             raise ValueError("A non-READ result requires a review reason.")
         if self.recognition_status == ReadStatus.UNREADABLE and self.normalized_text:
             raise ValueError("UNREADABLE requires empty normalized text.")
+        if not (bool(self.text_cleanup) == (self.candidate_text is not None)
+                == (self.candidate_format_status is not None)):
+            raise ValueError("candidate_text, candidate_format_status and text_cleanup must be present together.")
+        if self.candidate_format_status == FormatStatus.EMPTY:
+            raise ValueError("A cleaned candidate cannot be empty.")
+        if self.text_cleanup:
+            if self.candidate_text == self.normalized_text:
+                raise ValueError("A cleaned candidate must differ from the normalized text.")
+            if ReasonCode.TEXT_CLEANED not in self.reason_codes:
+                raise ValueError("A cleaned candidate requires the TEXT_CLEANED review reason.")
+        elif ReasonCode.TEXT_CLEANED in self.reason_codes:
+            raise ValueError("TEXT_CLEANED requires a cleaned candidate.")
         return self
 
 
@@ -117,7 +147,7 @@ class PlateResult(OcrAssessment):
 
 
 class AnprImageResult(AnprContract):
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     request_id: Identifier
     status: ResultStatus
     image_width: int = Field(strict=True, gt=0)

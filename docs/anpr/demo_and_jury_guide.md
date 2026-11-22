@@ -74,6 +74,15 @@ RapidOCR is review-only. Zero automatically accepted readings is intentional,
 not evidence of zero recognition errors. Its score scale is not substituted
 for the EasyOCR threshold. New results explain this with `OCR_REVIEW_ONLY`.
 
+**Candidate cleanup (schema 1.2).** The [failure analysis](ocr_failure_analysis.md)
+found that half the failures were the right plate plus the `IND` country code or dot
+marks. An explicit, auditable cleanup step now forms a separate `candidate_text`;
+re-scoring the same frozen validation reads gives **58/94 (61.7%) exact, 18.38% CER**,
+with 21 plates fixed and 0 broken. The rule was derived on validation, so present 58/94
+as a validation estimate until the frozen pipeline is evaluated once on the held-out
+test split. Raw and normalized text are unchanged and every cleaned read stays in
+review. Details: [cleanup policy results](text_cleanup_policy_results.md).
+
 Quality assessment and export do not change the frozen OCR benchmark. The
 model, thresholds and plate text remain unchanged. These results are agreement
 against `publisher_mixed` labels and are not a production accuracy guarantee.

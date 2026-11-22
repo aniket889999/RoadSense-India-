@@ -55,7 +55,7 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
 
 
   return (
-    <aside className="w-64 bg-command-bg flex flex-col justify-between px-4 py-6 min-h-[calc(100vh-5rem)] border-r border-white/5">
+    <aside className="w-64 bg-command-bg flex flex-col justify-between px-4 py-6 min-h-[calc(100vh-5rem)] border-r border-command-border">
       <div className="space-y-8">
         <div>
           <span className="text-[12px] text-command-muted px-3">Workspace</span>
@@ -69,8 +69,8 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
                   aria-current={active ? 'page' : undefined}
                   className={`w-full flex items-center justify-between pl-3.5 pr-3 py-2.5 rounded-full text-[14px] transition-all ${
                     active
-                      ? 'bg-white text-command-bg font-medium'
-                      : 'text-command-muted hover:bg-command-elevated hover:text-white'
+                      ? 'bg-brand-soft text-brand-deep font-medium'
+                      : 'text-command-muted hover:bg-command-elevated hover:text-command-text'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -88,8 +88,8 @@ export function Sidebar({ activeTab, onSelectTab, pendingReviewsCount }: Sidebar
           </nav>
         </div>
 
-        <div className="p-4 rounded-3xl bg-command-surface border border-white/5 text-[12px] text-command-muted space-y-2">
-          <div className="flex items-center gap-2 text-white font-medium">
+        <div className="p-4 rounded-3xl bg-command-surface border border-command-border text-[12px] text-command-muted space-y-2">
+          <div className="flex items-center gap-2 text-command-text font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-accent-amber" />
             <span>Human review first</span>
           </div>

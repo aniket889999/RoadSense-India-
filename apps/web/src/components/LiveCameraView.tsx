@@ -31,7 +31,7 @@ export function LiveCameraView() {
           {isActive ? (
             <button
               onClick={stopCamera}
-              className="px-3 py-1 rounded bg-accent-red/20 hover:bg-accent-red text-white text-[11px] font-bold border border-accent-red/30 flex items-center space-x-1 transition-colors"
+              className="px-3 py-1 rounded bg-accent-red/10 hover:bg-accent-red text-accent-red hover:text-white text-[11px] font-bold border border-accent-red/30 flex items-center space-x-1 transition-colors"
             >
               <Square className="w-3 h-3" />
               <span>Stop Camera</span>

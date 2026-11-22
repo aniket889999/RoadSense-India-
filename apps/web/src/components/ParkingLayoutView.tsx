@@ -464,10 +464,10 @@ export function ParkingLayoutView() {
           <button
             id="stability-gate-shortcut-btn"
             onClick={() => setActiveRightTab('stability')}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-950/60 border border-rose-600/60 text-rose-300 hover:text-white font-bold transition-all"
+            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 hover:text-command-text font-bold transition-all"
             title="Inspect Fail-Closed Stability Gate"
           >
-            <ShieldAlert className="w-3 h-3 text-rose-400" />
+            <ShieldAlert className="w-3 h-3 text-rose-600" />
             <span>Stability Gate</span>
           </button>
         </div>
@@ -716,10 +716,10 @@ export function ParkingLayoutView() {
             <div
               className={`px-3 py-2 rounded-lg text-xs flex items-center justify-between ${
                 feedbackMessage.type === 'success'
-                  ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                  ? 'bg-emerald-500/10 border border-emerald-200 text-emerald-600'
                   : feedbackMessage.type === 'error'
-                  ? 'bg-red-500/10 border border-red-500/30 text-red-400'
-                  : 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+                  ? 'bg-red-500/10 border border-red-200 text-red-600'
+                  : 'bg-blue-500/10 border border-blue-200 text-blue-600'
               }`}
             >
               <span>{feedbackMessage.text}</span>
@@ -759,7 +759,7 @@ export function ParkingLayoutView() {
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'editor'
                   ? 'bg-command-surface text-radar-bright shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
@@ -770,8 +770,8 @@ export function ParkingLayoutView() {
               onClick={() => setActiveRightTab('stability')}
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'stability'
-                  ? 'bg-command-surface text-amber-400 shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  ? 'bg-command-surface text-amber-600 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <ShieldAlert className="w-3.5 h-3.5" />
@@ -782,8 +782,8 @@ export function ParkingLayoutView() {
               onClick={() => setActiveRightTab('occupancy')}
               className={`flex-1 flex items-center justify-center space-x-1.5 py-1.5 rounded transition-all font-bold ${
                 activeRightTab === 'occupancy'
-                  ? 'bg-command-surface text-cyan-400 shadow-sm border border-command-border'
-                  : 'text-command-muted hover:text-white'
+                  ? 'bg-command-surface text-cyan-600 shadow-sm border border-command-border'
+                  : 'text-command-muted hover:text-command-text'
               }`}
             >
               <Car className="w-3.5 h-3.5" />
@@ -877,7 +877,7 @@ export function ParkingLayoutView() {
                 <div className="p-2.5 rounded bg-command-elevated/70 border border-command-border space-y-1">
                   <div className="flex justify-between text-[11px]">
                     <span className="text-command-muted">Approach Zone:</span>
-                    <span className={selectedApproach ? 'text-purple-400 font-bold' : 'text-command-muted'}>
+                    <span className={selectedApproach ? 'text-purple-600 font-bold' : 'text-command-muted'}>
                       {selectedApproach ? 'Attached' : 'None'}
                     </span>
                   </div>
@@ -1003,7 +1003,7 @@ export function ParkingLayoutView() {
                     )}
                     {ev.local_operator_label && (
                       <div className="text-[10px] text-command-muted">
-                        Operator: <span className="text-white font-mono">{ev.local_operator_label}</span>
+                        Operator: <span className="text-command-text font-mono">{ev.local_operator_label}</span>
                       </div>
                     )}
                     {ev.note && <div className="text-[10px] text-command-muted italic">{ev.note}</div>}
@@ -1056,7 +1056,7 @@ export function ParkingLayoutView() {
 
       {/* New Site Modal */}
       {isNewSiteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
             <h3 className="font-bold text-sm text-command-text">Create New Site</h3>
             <form onSubmit={handleCreateSite} className="space-y-3 text-xs">
@@ -1094,7 +1094,7 @@ export function ParkingLayoutView() {
 
       {/* New Camera Modal */}
       {isNewCameraModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-xl glass-panel-elevated border border-command-border p-5 space-y-4">
             <h3 className="font-bold text-sm text-command-text">Create New Camera</h3>
             <form onSubmit={handleCreateCamera} className="space-y-3 text-xs">

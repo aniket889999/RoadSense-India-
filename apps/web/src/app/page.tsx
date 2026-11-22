@@ -196,7 +196,7 @@ export default function OperationsDashboard() {
               ) : (
                 <div className="flex flex-col items-center justify-center h-[calc(100vh-10rem)] rounded-xl glass-panel border border-command-border p-8 text-center space-y-4">
                   <Film className="w-16 h-16 text-command-muted animate-pulse" />
-                  <h3 className="text-3xl font-medium text-white">
+                  <h3 className="text-3xl font-medium text-command-text">
                     No drive session selected
                   </h3>
                   <p className="text-xs font-mono text-command-muted max-w-md">

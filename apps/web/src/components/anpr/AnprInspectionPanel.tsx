@@ -77,28 +77,28 @@ function getResultStatusStyle(status: ResultStatus): {
   switch (status) {
     case 'COMPLETE':
       return {
-        banner: 'bg-emerald-950/30 border-emerald-600/50 text-emerald-200',
-        badge: 'bg-emerald-900/60 text-emerald-300 border-emerald-500/50',
+        banner: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
         description:
           'All detected plates produced a candidate read matching the supported IN_COMMON_V1 format shape.',
       };
     case 'NEEDS_REVIEW':
       return {
-        banner: 'bg-amber-950/30 border-amber-600/50 text-amber-200',
-        badge: 'bg-amber-900/60 text-amber-300 border-amber-500/50',
+        banner: 'bg-amber-50 border-amber-200 text-amber-700',
+        badge: 'bg-amber-50 text-amber-700 border-amber-200',
         description:
           'Check each candidate against its image crop. Review-only engines intentionally require confirmation; other reasons can include uncertain text or unsupported format.',
       };
     case 'NO_PLATE':
       return {
-        banner: 'bg-slate-900/70 border-command-border text-command-text',
+        banner: 'bg-slate-100 border-command-border text-command-text',
         badge: 'bg-command-elevated text-command-muted border-command-border',
         description: 'No license plate bounding boxes were detected in this image.',
       };
     case 'UNAVAILABLE':
       return {
-        banner: 'bg-rose-950/40 border-rose-600/60 text-rose-200',
-        badge: 'bg-rose-900/60 text-rose-300 border-rose-500/50',
+        banner: 'bg-rose-50 border-rose-200 text-rose-700',
+        badge: 'bg-rose-50 text-rose-700 border-rose-200',
         description:
           'Local recognition runtime or required weights are unavailable. No plate results were generated.',
       };
@@ -114,24 +114,24 @@ function getReadStatusStyle(status: ReadStatus): {
   switch (status) {
     case 'READ':
       return {
-        badge: 'bg-emerald-900/50 text-emerald-300 border-emerald-600/50',
+        badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
         boxBorder: '#22C55E',
         boxFill: 'rgba(34, 197, 94, 0.16)',
-        boxTag: 'bg-emerald-950/90 text-emerald-200 border-emerald-500/70',
+        boxTag: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       };
     case 'NEEDS_REVIEW':
       return {
-        badge: 'bg-amber-900/50 text-amber-300 border-amber-600/50',
+        badge: 'bg-amber-50 text-amber-700 border-amber-200',
         boxBorder: '#F59E0B',
         boxFill: 'rgba(245, 158, 11, 0.16)',
-        boxTag: 'bg-amber-950/90 text-amber-200 border-amber-500/70',
+        boxTag: 'bg-amber-50 text-amber-700 border-amber-200',
       };
     case 'UNREADABLE':
       return {
-        badge: 'bg-rose-900/50 text-rose-300 border-rose-600/50',
+        badge: 'bg-rose-50 text-rose-700 border-rose-200',
         boxBorder: '#EF4444',
         boxFill: 'rgba(239, 68, 68, 0.16)',
-        boxTag: 'bg-rose-950/90 text-rose-200 border-rose-500/70',
+        boxTag: 'bg-rose-50 text-rose-700 border-rose-200',
       };
   }
 }
@@ -139,11 +139,11 @@ function getReadStatusStyle(status: ReadStatus): {
 function getFormatStatusStyle(status: FormatStatus): string {
   switch (status) {
     case 'MATCHED':
-      return 'bg-emerald-900/40 text-emerald-300 border-emerald-600/40';
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
     case 'NO_MATCH':
-      return 'bg-amber-900/40 text-amber-300 border-amber-600/40';
+      return 'bg-amber-50 text-amber-700 border-amber-200';
     case 'EMPTY':
-      return 'bg-slate-800/70 text-command-muted border-command-border';
+      return 'bg-slate-100 text-command-muted border-command-border';
   }
 }
 
@@ -361,19 +361,22 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
       className="space-y-5 font-sans text-xs text-command-text"
     >
       {/* Brand hero: what the tool does, with honestly labelled measured results */}
-      <div className="relative overflow-hidden rounded-4xl bg-brand text-white px-7 py-9 lg:px-12 lg:py-12">
-        <div className="absolute inset-0 brand-grain opacity-60 pointer-events-none" aria-hidden="true" />
+      <div className="relative overflow-hidden rounded-4xl bg-command-surface border border-command-border shadow-subtle px-7 py-9 lg:px-12 lg:py-12">
+        <div className="absolute inset-0 hero-glow pointer-events-none" aria-hidden="true" />
         <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-8 items-end reveal">
           <div className="lg:col-span-7 space-y-5">
-            <p className="text-[13px] font-medium text-white/80">Number plate recognition · India</p>
-            <h1 className="text-[40px] leading-[1.02] lg:text-[60px] font-medium tracking-[-0.035em]">
+            <p className="inline-flex items-center gap-2 rounded-full bg-brand-soft px-3 py-1 text-[12px] font-medium text-brand-deep">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand" aria-hidden="true" />
+              Number plate recognition · India
+            </p>
+            <h1 className="text-[40px] leading-[1.04] lg:text-[56px] font-semibold tracking-[-0.035em] text-command-text">
               Find the plate.
               <br />
               Read it. Check it.
               <br />
-              <span className="text-brand-ink">Let a person decide.</span>
+              <span className="text-brand">Let a person decide.</span>
             </h1>
-            <p className="max-w-xl text-[15px] leading-relaxed text-white/85">
+            <p className="max-w-xl text-[15px] leading-relaxed text-command-muted">
               A trained detector finds the plate, OCR reads it, the format and issuing RTO are checked, and every
               uncertain reading goes to review with a reason. Everything runs on this machine.
             </p>
@@ -384,14 +387,14 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
               { value: '33 · 0 wrong', label: 'auto-accepted with the opt-in policy' },
               { value: '1,302', label: 'RTO codes decoded offline' },
             ].map((stat) => (
-              <div key={stat.label} className="flex flex-col-reverse rounded-3xl bg-brand-ink/90 px-5 py-4">
-                <dt className="mt-1.5 text-[12px] leading-snug text-white/70">{stat.label}</dt>
-                <dd className="text-[26px] font-medium tracking-[-0.02em] leading-none">{stat.value}</dd>
+              <div key={stat.label} className="flex flex-col-reverse rounded-3xl bg-command-bg border border-command-border px-5 py-4">
+                <dt className="mt-1.5 text-[12px] leading-snug text-command-muted">{stat.label}</dt>
+                <dd className="text-[26px] font-semibold tracking-[-0.02em] leading-none text-command-text">{stat.value}</dd>
               </div>
             ))}
           </dl>
         </div>
-        <p className="relative mt-8 text-[11px] text-white/75">
+        <p className="relative mt-8 text-[11px] text-command-muted">
           Validation results on mostly truck images with publisher labels; the held-out test is pending. Not a
           registration lookup or toll system.
         </p>
@@ -403,7 +406,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
           <div className="flex items-center space-x-2">
             <Camera className="w-5 h-5 text-brand shrink-0" />
             <div>
-              <h2 className="text-[22px] leading-tight font-medium text-white">
+              <h2 className="text-[22px] leading-tight font-medium text-command-text">
                 Inspect an image
               </h2>
               <p className="mt-1 text-[13px] leading-snug text-command-muted">
@@ -413,10 +416,10 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
           </div>
 
           <div className="flex items-center space-x-2">
-            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-white/5 text-[12px] text-command-muted">
-              Profile <strong className="font-medium text-white">IN_COMMON_V1</strong>
+            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-command-border text-[12px] text-command-muted">
+              Profile <strong className="font-medium text-command-text">IN_COMMON_V1</strong>
             </span>
-            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-white/5 text-[12px] text-command-muted">
+            <span className="px-3.5 py-1.5 rounded-full bg-command-elevated border border-command-border text-[12px] text-command-muted">
               JPEG / PNG · max 10 MiB
             </span>
           </div>
@@ -427,9 +430,9 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
           <div
             role="status"
             aria-live="polite"
-            className="flex items-center space-x-2 p-2.5 rounded-lg bg-amber-950/30 border border-amber-600/50 text-amber-200 text-xs"
+            className="flex items-center space-x-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs"
           >
-            <ServerOff className="w-4 h-4 text-amber-400 shrink-0" />
+            <ServerOff className="w-4 h-4 text-amber-600 shrink-0" />
             <span>Recognition service is not connected yet.</span>
           </div>
         )}
@@ -474,7 +477,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
               <div className="min-w-0">
                 {selectedFile ? (
                   <>
-                    <div className="text-[14px] font-medium text-white truncate">
+                    <div className="text-[14px] font-medium text-command-text truncate">
                       {selectedFile.name}
                     </div>
                     <div className="text-[11px] text-command-muted">
@@ -486,7 +489,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                   </>
                 ) : (
                   <>
-                    <div className="text-[14px] font-medium text-white">
+                    <div className="text-[14px] font-medium text-command-text">
                       Drop a vehicle or gate image here, or{' '}
                       <span className="text-brand underline underline-offset-2">browse</span>
                     </div>
@@ -506,7 +509,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                   handleClearImage();
                 }}
                 disabled={isAnalyzing}
-                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-full bg-command-elevated hover:bg-command-border border border-white/5 text-command-muted hover:text-white text-[12px] shrink-0 transition-colors disabled:opacity-40"
+                className="flex items-center space-x-1.5 px-3.5 py-2 rounded-full bg-command-elevated hover:bg-command-border border border-command-border text-command-muted hover:text-command-text text-[12px] shrink-0 transition-colors disabled:opacity-40"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Clear</span>
@@ -541,9 +544,9 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
         {errorMessage && (
           <div
             role="alert"
-            className="flex items-start space-x-2 p-3 rounded-lg bg-rose-950/40 border border-rose-600/50 text-rose-200 text-xs"
+            className="flex items-start space-x-2 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs"
           >
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <span>{errorMessage}</span>
           </div>
         )}
@@ -552,11 +555,11 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
       {result && !isAnalyzing && (
         <div className="flex flex-wrap items-center gap-3 p-4 rounded-xl glass-panel border border-command-border">
           <button type="button" onClick={handleAnnotatedExport} disabled={!previewUrl || isExporting}
-            className="px-5 py-2.5 rounded-full bg-white text-command-bg font-medium text-[13px] hover:bg-white/90 transition-colors disabled:opacity-40">
+            className="px-5 py-2.5 rounded-full bg-command-text text-white font-medium text-[13px] hover:bg-slate-700 transition-colors disabled:opacity-40">
             {isExporting ? 'Preparing image…' : 'Download annotated PNG'}
           </button>
           <button type="button" disabled={isExporting} onClick={() => downloadBlob(createReviewReport(result), `roadsense-anpr-${result.request_id.replace(/[^a-zA-Z0-9_-]/g, '')}.json`)}
-            className="px-5 py-2.5 rounded-full bg-command-elevated border border-white/10 text-white text-[13px] hover:bg-command-border transition-colors disabled:opacity-40">
+            className="px-5 py-2.5 rounded-full bg-command-elevated border border-command-border text-command-text text-[13px] hover:bg-command-border transition-colors disabled:opacity-40">
             Download review JSON
           </button>
           <span className="font-sans text-command-muted">Exports stay in your browser. Readings are not human verified.</span>
@@ -568,7 +571,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
         {/* Left: Local Preview & Bounding Box Overlay */}
         <div className="lg:col-span-7 p-6 rounded-xl glass-panel border border-command-border flex flex-col space-y-4">
           <div className="flex items-center justify-between">
-            <span className="text-[17px] leading-snug font-medium text-white">
+            <span className="text-[17px] leading-snug font-medium text-command-text">
               Image and detected plates
             </span>
             {result && (
@@ -701,8 +704,8 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
 
         {/* Right: Result Status & Per-Plate OCR Readouts */}
         <div className="lg:col-span-5 p-6 rounded-xl glass-panel border border-command-border flex flex-col space-y-4">
-          <div className="flex items-center justify-between border-b border-white/5 pb-3">
-            <span className="text-[17px] leading-snug font-medium text-white">
+          <div className="flex items-center justify-between border-b border-command-border pb-3">
+            <span className="text-[17px] leading-snug font-medium text-command-text">
               Reading and checks
             </span>
             {result && (
@@ -751,7 +754,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center space-x-2">
                         {result.status === 'COMPLETE' ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         ) : (
                           <AlertTriangle className="w-4 h-4 shrink-0" />
                         )}
@@ -776,8 +779,8 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
 
               {/* Top-level Warnings */}
               {result.warnings.length > 0 && (
-                <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-600/40 text-amber-200 space-y-1">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 space-y-1">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
                     Inspection Warnings
                   </div>
                   <ul className="list-disc list-inside text-[11px] font-sans space-y-0.5">
@@ -977,7 +980,7 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                               {' • '}2D line tilt: {plate.image_quality.observed_line_tilt_degrees === null ? 'insufficient evidence' : `${plate.image_quality.observed_line_tilt_degrees.toFixed(1)}°`}
                             </div>
                             {plate.image_quality.warnings.map(flag => (
-                              <p key={flag} className="text-amber-200">{QUALITY_GUIDANCE[flag]}</p>
+                              <p key={flag} className="text-amber-700">{QUALITY_GUIDANCE[flag]}</p>
                             ))}
                             <p className="text-command-muted text-[10px]">
                               Advisory measurements only. {plate.image_quality.warnings.length === 0 ? 'No configured cues triggered; this does not verify the text.' : 'Check the crop before using any reading.'}
@@ -1000,16 +1003,16 @@ export function AnprInspectionPanel({ onAnalyze }: AnprInspectionPanelProps) {
                         {/* Review Reason Codes */}
                         {plate.reason_codes.length > 0 && (
                           <div className="pt-1.5 border-t border-command-border space-y-1">
-                            <span className="block text-[10px] uppercase text-amber-300 font-bold">
+                            <span className="block text-[10px] uppercase text-amber-700 font-bold">
                               Review Reason Codes
                             </span>
                             <ul className="space-y-1">
                               {plate.reason_codes.map((code) => (
                                 <li
                                   key={code}
-                                  className="flex items-start space-x-1.5 text-[11px] font-sans text-amber-200"
+                                  className="flex items-start space-x-1.5 text-[11px] font-sans text-amber-700"
                                 >
-                                  <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-700/50 text-amber-300 shrink-0">
+                                  <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-amber-50 border border-amber-200 text-amber-700 shrink-0">
                                     {code}
                                   </span>
                                   <span>{REASON_CODE_LABELS[code] ?? code}</span>

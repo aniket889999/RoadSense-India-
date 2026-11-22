@@ -50,9 +50,9 @@ export function simulatedRecord(plateText: string, bhYear: number | null) {
 
 function Row({ label, value, muted }: { label: string; value: React.ReactNode; muted?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-2.5 border-b border-white/5 last:border-0">
+    <div className="flex items-baseline justify-between gap-4 py-2.5 border-b border-command-border last:border-0">
       <span className="text-[12px] text-command-muted shrink-0">{label}</span>
-      <span className={`text-right text-[14px] ${muted ? 'text-command-muted' : 'text-white'}`}>{value}</span>
+      <span className={`text-right text-[14px] ${muted ? 'text-command-muted' : 'text-command-text'}`}>{value}</span>
     </div>
   );
 }
@@ -66,14 +66,14 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
   const sim = simulatedRecord(text, bhYear);
 
   return (
-    <section aria-label="Registration card" className="rounded-4xl bg-command-surface border border-white/5 overflow-hidden">
+    <section aria-label="Registration card" className="rounded-4xl bg-command-surface border border-command-border overflow-hidden">
       <div className="grid grid-cols-1 lg:grid-cols-12">
         {/* Plate + issuing authority (real public directory data) */}
         <div className="lg:col-span-7 p-6 lg:p-8 space-y-6">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-[12px] text-command-muted">Registration card · {plate.plate_id}</p>
-              <p className="mt-2 font-mono text-[34px] lg:text-[44px] leading-none tracking-[0.06em] text-white break-all">
+              <p className="mt-2 font-mono text-[34px] lg:text-[44px] leading-none tracking-[0.06em] text-command-text break-all">
                 {text || '—'}
               </p>
               <p className="mt-2 text-[12px] text-command-muted">
@@ -88,7 +88,7 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
           </div>
 
           <div>
-            <div className="flex items-center gap-2 text-white text-[15px] font-medium mb-1">
+            <div className="flex items-center gap-2 text-command-text text-[15px] font-medium mb-1">
               <MapPin className="w-4 h-4 text-brand" />
               <span>Issuing authority</span>
             </div>
@@ -120,9 +120,9 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
         </div>
 
         {/* Simulated owner section (browser-only demo) */}
-        <div className="lg:col-span-5 relative p-6 lg:p-8 bg-[repeating-linear-gradient(135deg,rgba(237,68,57,0.10)_0_12px,transparent_12px_24px)] border-t lg:border-t-0 lg:border-l border-white/5">
+        <div className="lg:col-span-5 relative p-6 lg:p-8 bg-[repeating-linear-gradient(135deg,rgba(79,70,229,0.06)_0_12px,transparent_12px_24px)] border-t lg:border-t-0 lg:border-l border-command-border">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-white text-[15px] font-medium">
+            <div className="flex items-center gap-2 text-command-text text-[15px] font-medium">
               <FlaskConical className="w-4 h-4 text-brand" />
               <span>Owner record</span>
             </div>
@@ -131,7 +131,7 @@ export function RegistrationCard({ plate }: { plate: PlateResult }) {
                 type="checkbox"
                 checked={showSimulated}
                 onChange={(e) => setShowSimulated(e.target.checked)}
-                className="accent-[#ED4439]"
+                className="accent-[#4F46E5]"
               />
               Demo mode
             </label>

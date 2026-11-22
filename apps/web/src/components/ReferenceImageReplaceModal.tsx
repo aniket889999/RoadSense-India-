@@ -56,10 +56,10 @@ export function ReferenceImageReplaceModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in font-mono">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm animate-fade-in font-mono">
       <div className="w-full max-w-lg rounded-xl glass-panel-elevated border border-accent-amber/40 shadow-2xl p-6 space-y-5">
         <div className="flex items-center justify-between border-b border-command-border pb-3">
-          <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm">
+          <div className="flex items-center space-x-2 text-amber-600 font-bold text-sm">
             <AlertTriangle className="w-5 h-5 shrink-0" />
             <span>Confirm Reference Frame Replacement: {cameraName}</span>
           </div>
@@ -78,14 +78,14 @@ export function ReferenceImageReplaceModal({
           </div>
         )}
 
-        <div className="p-3.5 rounded-lg bg-accent-amber/10 border border-accent-amber/30 text-amber-300 text-xs space-y-2">
+        <div className="p-3.5 rounded-lg bg-accent-amber/10 border border-accent-amber/30 text-amber-700 text-xs space-y-2">
           <p className="font-bold uppercase tracking-wide text-[11px]">Lifecycle Consequence Warning:</p>
           <p className="leading-relaxed">
-            Replacing the camera reference frame will <span className="font-bold text-white underline">permanently invalidate</span> all existing layout revisions (DRAFT, PENDING_REVIEW, and VERIFIED) for this camera.
+            Replacing the camera reference frame will <span className="font-bold text-command-text underline">permanently invalidate</span> all existing layout revisions (DRAFT, PENDING_REVIEW, and VERIFIED) for this camera.
             Any polygon geometry calibrated against the old reference frame will become invalid for occupancy inference.
           </p>
           <p className="text-command-muted text-[11px]">
-            New File: <span className="text-white font-mono">{pendingFile.name}</span> ({(pendingFile.size / 1024).toFixed(1)} KB)
+            New File: <span className="text-command-text font-mono">{pendingFile.name}</span> ({(pendingFile.size / 1024).toFixed(1)} KB)
           </p>
         </div>
 

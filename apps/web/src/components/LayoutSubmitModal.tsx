@@ -44,7 +44,7 @@ export function LayoutSubmitModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in font-mono">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-100 backdrop-blur-sm animate-fade-in font-mono">
       <div className="w-full max-w-md rounded-xl glass-panel-elevated border border-command-border shadow-2xl p-6 space-y-5">
         <div className="flex items-center justify-between border-b border-command-border pb-3">
           <div className="flex items-center space-x-2 text-radar-bright font-bold text-sm">
@@ -70,8 +70,8 @@ export function LayoutSubmitModal({
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <p className="text-command-muted leading-relaxed">
             Submitting layout revision #{revisionNumber} shifts its status from{' '}
-            <span className="text-blue-400 font-bold">DRAFT</span> to{' '}
-            <span className="text-amber-400 font-bold">PENDING_REVIEW</span>.
+            <span className="text-blue-600 font-bold">DRAFT</span> to{' '}
+            <span className="text-amber-600 font-bold">PENDING_REVIEW</span>.
             Enter your operator identity assertion below.
           </p>
 

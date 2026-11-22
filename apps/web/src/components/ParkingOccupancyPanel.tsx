@@ -344,21 +344,21 @@ export function ParkingOccupancyPanel({
   const getCapacityBadgeStyle = (state?: CapacityState | string) => {
     switch (state) {
       case 'USABLE_AVAILABLE':
-        return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+        return 'bg-emerald-500/20 text-emerald-600 border border-emerald-200';
       case 'OCCUPIED':
-        return 'bg-rose-500/20 text-rose-400 border border-rose-500/30';
+        return 'bg-rose-500/20 text-rose-600 border border-rose-200';
       case 'HAZARD_BLOCKED':
-        return 'bg-fuchsia-500/20 text-fuchsia-400 border border-fuchsia-500/30';
+        return 'bg-fuchsia-500/20 text-fuchsia-600 border border-fuchsia-200';
       case 'APPROACH_BLOCKED':
-        return 'bg-orange-500/20 text-orange-400 border border-orange-500/30';
+        return 'bg-orange-500/20 text-orange-600 border border-orange-200';
       case 'VACANT_UNASSESSED':
-        return 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30';
+        return 'bg-yellow-500/20 text-yellow-700 border border-yellow-200';
       case 'INFERENCE_BLOCKED':
-        return 'bg-rose-950/60 text-rose-300 border border-rose-600/50';
+        return 'bg-rose-50 text-rose-700 border border-rose-200';
       case 'UNKNOWN':
       case 'OCCLUDED':
       default:
-        return 'bg-slate-700/30 text-slate-400 border border-slate-600/30';
+        return 'bg-slate-100 text-slate-500 border border-slate-200';
     }
   };
 
@@ -424,9 +424,9 @@ export function ParkingOccupancyPanel({
           <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
             <div className="flex items-center space-x-2">
               {hasReferenceImage ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               ) : (
-                <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
               )}
               <span className="text-command-text">Reference Image Ingested</span>
             </div>
@@ -444,9 +444,9 @@ export function ParkingOccupancyPanel({
           <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
             <div className="flex items-center space-x-2">
               {hasVerifiedLayout ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               ) : (
-                <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
               )}
               <span className="text-command-text">Layout Human-Verified</span>
             </div>
@@ -464,9 +464,9 @@ export function ParkingOccupancyPanel({
           <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
             <div className="flex items-center space-x-2">
               {hasCompletedAssessment ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               ) : (
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
               )}
               <span className="text-command-text">Stability Assessed</span>
             </div>
@@ -484,18 +484,18 @@ export function ParkingOccupancyPanel({
           <div className="p-2 rounded-lg bg-command-surface border border-command-border flex items-center justify-between">
             <div className="flex items-center space-x-2">
               {isGateAllowed ? (
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               ) : (
-                <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <ShieldAlert className="w-3.5 h-3.5 text-rose-600 shrink-0" />
               )}
               <span className="text-command-text">
-                Gate: <strong className={isGateAllowed ? 'text-emerald-400' : 'text-rose-400'}>{isGateAllowed ? 'ALLOWED' : 'BLOCKED'}</strong>
+                Gate: <strong className={isGateAllowed ? 'text-emerald-600' : 'text-rose-600'}>{isGateAllowed ? 'ALLOWED' : 'BLOCKED'}</strong>
               </span>
             </div>
             {isGateBlocked && onNavigateToStability && (
               <button
                 onClick={onNavigateToStability}
-                className="text-[10px] text-rose-400 hover:underline font-bold"
+                className="text-[10px] text-rose-600 hover:underline font-bold"
               >
                 Inspect Gate
               </button>
@@ -509,16 +509,16 @@ export function ParkingOccupancyPanel({
         id="parking-occupancy-gate-banner"
         className={`p-3.5 rounded-xl border transition-all ${
           isGateAllowed
-            ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
-            : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+            : 'bg-rose-50 border-rose-200 text-rose-700'
         }`}
       >
         <div className="flex items-start justify-between">
           <div className="flex items-start space-x-2.5">
             {isGateAllowed ? (
-              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             ) : (
-              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
             )}
             <div>
               <div className="flex items-center space-x-2">
@@ -528,8 +528,8 @@ export function ParkingOccupancyPanel({
                 <span
                   className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
                     isGateAllowed
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                      ? 'bg-emerald-500/20 text-emerald-600 border border-emerald-200'
+                      : 'bg-rose-500/20 text-rose-600 border border-rose-200'
                   }`}
                 >
                   {gate?.aggregate_decision || (isGateAllowed ? 'STABLE' : 'UNSTABLE / UNVERIFIED')}
@@ -542,10 +542,10 @@ export function ParkingOccupancyPanel({
               </p>
               {gate?.gate_reasons && gate.gate_reasons.length > 0 && (
                 <div className="mt-2 space-y-1">
-                  <span className="text-[10px] font-mono font-bold text-rose-400 uppercase">
+                  <span className="text-[10px] font-mono font-bold text-rose-600 uppercase">
                     Gate Enforcement Reasons:
                   </span>
-                  <ul className="list-disc list-inside text-[10px] font-mono text-rose-200/80 space-y-0.5">
+                  <ul className="list-disc list-inside text-[10px] font-mono text-rose-700 space-y-0.5">
                     {gate.gate_reasons.map((r, idx) => (
                       <li key={idx}>{r}</li>
                     ))}
@@ -558,7 +558,7 @@ export function ParkingOccupancyPanel({
           <button
             onClick={loadData}
             disabled={isLoading}
-            className="p-1.5 rounded-lg bg-command-elevated border border-command-border text-command-muted hover:text-white transition-all text-xs"
+            className="p-1.5 rounded-lg bg-command-elevated border border-command-border text-command-muted hover:text-command-text transition-all text-xs"
             title="Refresh Gate Status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -570,7 +570,7 @@ export function ParkingOccupancyPanel({
       <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3">
         <div className="flex items-center justify-between border-b border-command-border pb-2">
           <div className="flex items-center space-x-2">
-            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <Sparkles className="w-4 h-4 text-emerald-600" />
             <span className="font-bold text-xs text-command-text">
               Safe Usable Parking Capacity (Phase 3A Fusion)
             </span>
@@ -578,14 +578,14 @@ export function ParkingOccupancyPanel({
           <div className="flex items-center space-x-2">
             <button
               onClick={() => setShowAddHazardModal(true)}
-              className="px-2 py-1 rounded bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-fuchsia-300 font-bold text-[10px] flex items-center space-x-1 transition-all"
+              className="px-2 py-1 rounded bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-fuchsia-700 font-bold text-[10px] flex items-center space-x-1 transition-all"
             >
               <Plus className="w-3 h-3" />
               <span>Associate Hazard</span>
             </button>
             <button
               onClick={() => setShowInspectionModal(true)}
-              className="px-2 py-1 rounded bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-300 font-bold text-[10px] flex items-center space-x-1 transition-all"
+              className="px-2 py-1 rounded bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-700 font-bold text-[10px] flex items-center space-x-1 transition-all"
             >
               <Layers className="w-3 h-3" />
               <span>Record Inspection</span>
@@ -593,7 +593,7 @@ export function ParkingOccupancyPanel({
             <button
               onClick={loadData}
               disabled={isLoading}
-              className="p-1 rounded bg-command-elevated border border-command-border text-command-muted hover:text-white text-[10px] transition-all"
+              className="p-1 rounded bg-command-elevated border border-command-border text-command-muted hover:text-command-text text-[10px] transition-all"
               title="Refresh Capacity Snapshot"
             >
               <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
@@ -605,54 +605,54 @@ export function ParkingOccupancyPanel({
         {isGateBlocked && (
           <div
             id="capacity-inference-blocked-banner"
-            className="p-3 rounded-lg bg-rose-950/80 border border-rose-500 text-rose-300 text-xs font-mono font-bold flex items-center space-x-2"
+            className="p-3 rounded-lg bg-rose-50 border border-rose-500 text-rose-700 text-xs font-mono font-bold flex items-center space-x-2"
           >
-            <Ban className="w-4 h-4 text-rose-400 shrink-0" />
+            <Ban className="w-4 h-4 text-rose-600 shrink-0" />
             <span>INFERENCE_BLOCKED: Camera Operational Gate is BLOCKED. Official safe usable capacity claims are prohibited until camera stability is confirmed.</span>
           </div>
         )}
 
         {/* 7 Reconciled KPI Counters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center font-mono text-xs">
-          <div className="p-2 rounded-lg bg-emerald-950/40 border border-emerald-500/40">
-            <span className="text-[10px] text-emerald-400 uppercase block font-bold">Usable Available (SUC)</span>
-            <span className="text-lg font-bold text-emerald-300">
+          <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200">
+            <span className="text-[10px] text-emerald-600 uppercase block font-bold">Usable Available (SUC)</span>
+            <span className="text-lg font-bold text-emerald-700">
               {capacitySnapshot?.usable_available_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-cyan-950/40 border border-cyan-500/40">
-            <span className="text-[10px] text-cyan-400 uppercase block font-bold">Physical Vacant</span>
-            <span className="text-lg font-bold text-cyan-300">
+          <div className="p-2 rounded-lg bg-cyan-50 border border-cyan-200">
+            <span className="text-[10px] text-cyan-600 uppercase block font-bold">Physical Vacant</span>
+            <span className="text-lg font-bold text-cyan-700">
               {capacitySnapshot?.physical_vacant_count ?? selectedJob?.final_vacant_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/40">
-            <span className="text-[10px] text-rose-400 uppercase block font-bold">Occupied</span>
-            <span className="text-lg font-bold text-rose-300">
+          <div className="p-2 rounded-lg bg-rose-50 border border-rose-200">
+            <span className="text-[10px] text-rose-600 uppercase block font-bold">Occupied</span>
+            <span className="text-lg font-bold text-rose-700">
               {capacitySnapshot?.occupied_count ?? selectedJob?.final_occupied_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-fuchsia-950/40 border border-fuchsia-500/40">
-            <span className="text-[10px] text-fuchsia-400 uppercase block font-bold">Hazard Blocked</span>
-            <span className="text-lg font-bold text-fuchsia-300">
+          <div className="p-2 rounded-lg bg-fuchsia-50 border border-fuchsia-200">
+            <span className="text-[10px] text-fuchsia-600 uppercase block font-bold">Hazard Blocked</span>
+            <span className="text-lg font-bold text-fuchsia-700">
               {capacitySnapshot?.hazard_blocked_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-orange-950/40 border border-orange-500/40">
-            <span className="text-[10px] text-orange-400 uppercase block font-bold">Approach Blocked</span>
-            <span className="text-lg font-bold text-orange-300">
+          <div className="p-2 rounded-lg bg-orange-50 border border-orange-200">
+            <span className="text-[10px] text-orange-600 uppercase block font-bold">Approach Blocked</span>
+            <span className="text-lg font-bold text-orange-700">
               {capacitySnapshot?.approach_blocked_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-yellow-950/40 border border-yellow-500/40">
-            <span className="text-[10px] text-yellow-400 uppercase block font-bold">Vacant Unassessed</span>
-            <span className="text-lg font-bold text-yellow-300">
+          <div className="p-2 rounded-lg bg-yellow-50 border border-yellow-200">
+            <span className="text-[10px] text-yellow-600 uppercase block font-bold">Vacant Unassessed</span>
+            <span className="text-lg font-bold text-yellow-700">
               {capacitySnapshot?.vacant_unassessed_count ?? 0}
             </span>
           </div>
-          <div className="p-2 rounded-lg bg-slate-900/60 border border-slate-700/60">
-            <span className="text-[10px] text-slate-400 uppercase block font-bold">Unknown / Occluded</span>
-            <span className="text-lg font-bold text-slate-300">
+          <div className="p-2 rounded-lg bg-slate-100 border border-slate-200">
+            <span className="text-[10px] text-slate-500 uppercase block font-bold">Unknown / Occluded</span>
+            <span className="text-lg font-bold text-slate-700">
               {(capacitySnapshot?.unknown_count ?? 0) + (capacitySnapshot?.occluded_count ?? 0)}
             </span>
           </div>
@@ -664,27 +664,27 @@ export function ParkingOccupancyPanel({
             Safe Usable Capacity Policy Color Language:
           </span>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5 text-center">
-            <div className="p-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
               <span>GREEN = USABLE</span>
             </div>
-            <div className="p-1 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-rose-50 border border-rose-200 text-rose-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
               <span>RED = OCCUPIED</span>
             </div>
-            <div className="p-1 rounded bg-fuchsia-950/60 border border-fuchsia-500/40 text-fuchsia-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-fuchsia-500 inline-block" />
               <span>MAGENTA = HAZARD</span>
             </div>
-            <div className="p-1 rounded bg-orange-950/60 border border-orange-500/40 text-orange-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-orange-50 border border-orange-200 text-orange-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />
               <span>ORANGE = APPROACH</span>
             </div>
-            <div className="p-1 rounded bg-yellow-950/60 border border-yellow-500/40 text-yellow-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-yellow-50 border border-yellow-200 text-yellow-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-yellow-400 inline-block" />
               <span>YELLOW = UNASSESSED</span>
             </div>
-            <div className="p-1 rounded bg-slate-900/80 border border-slate-700/60 text-slate-300 flex items-center space-x-1 justify-center">
+            <div className="p-1 rounded bg-slate-100 border border-slate-200 text-slate-700 flex items-center space-x-1 justify-center">
               <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
               <span>GREY = UNKNOWN</span>
             </div>
@@ -696,13 +696,13 @@ export function ParkingOccupancyPanel({
           <div className="p-2 rounded bg-command-surface/60 border border-command-border flex flex-wrap items-center justify-between text-[10px] font-mono text-command-muted gap-1">
             <div className="flex items-center space-x-2">
               <Fingerprint className="w-3.5 h-3.5 text-radar-bright" />
-              <span>Snapshot SHA: <strong className="text-white">{capacitySnapshot.snapshot_sha256.slice(0, 16)}...</strong></span>
+              <span>Snapshot SHA: <strong className="text-command-text">{capacitySnapshot.snapshot_sha256.slice(0, 16)}...</strong></span>
             </div>
             <div>
-              <span>Config SHA: <strong className="text-white">{capacitySnapshot.policy_config_sha256.slice(0, 16)}...</strong></span>
+              <span>Config SHA: <strong className="text-command-text">{capacitySnapshot.policy_config_sha256.slice(0, 16)}...</strong></span>
             </div>
             <div>
-              <span>Evaluated: <strong className="text-white">{new Date(capacitySnapshot.evaluated_at).toLocaleTimeString()}</strong></span>
+              <span>Evaluated: <strong className="text-command-text">{new Date(capacitySnapshot.evaluated_at).toLocaleTimeString()}</strong></span>
             </div>
           </div>
         )}
@@ -723,7 +723,7 @@ export function ParkingOccupancyPanel({
         {/* Local Processing and Privacy Notice */}
         <div className="p-2 rounded-lg bg-command-surface/50 border border-command-border text-[11px] font-mono text-command-muted flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Lock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <Lock className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
             <span>100% On-Premise Execution · Media remains confined to local disk</span>
           </div>
           <span className="text-[10px] text-command-muted">Max: 200MB (MP4/MOV/AVI)</span>
@@ -772,7 +772,7 @@ export function ParkingOccupancyPanel({
               className={`p-2.5 rounded-lg border flex items-start space-x-2 cursor-pointer transition-all ${
                 operatorConfirmationAcknowledged
                   ? 'bg-command-elevated border-radar-bright text-command-text'
-                  : 'bg-command-surface border-command-border text-command-muted hover:text-white'
+                  : 'bg-command-surface border-command-border text-command-muted hover:text-command-text'
               }`}
             >
               {operatorConfirmationAcknowledged ? (
@@ -783,7 +783,7 @@ export function ParkingOccupancyPanel({
               <div className="text-[11px] font-mono leading-tight">
                 <span>
                   I confirm this footage corresponds to stationary camera{' '}
-                  <strong className="text-white">{cameraName || cameraId}</strong> with active verified layout.
+                  <strong className="text-command-text">{cameraName || cameraId}</strong> with active verified layout.
                 </span>
               </div>
             </div>
@@ -792,9 +792,9 @@ export function ParkingOccupancyPanel({
           {errorMessage && (
             <div
               id="occupancy-error-banner"
-              className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/40 text-rose-300 text-[11px] font-mono flex items-start space-x-2"
+              className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-mono flex items-start space-x-2"
             >
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <span className="font-bold">Execution Blocked / Error:</span>
                 <p className="leading-snug">{errorMessage}</p>
@@ -820,7 +820,7 @@ export function ParkingOccupancyPanel({
                 </>
               ) : isGateBlocked ? (
                 <>
-                  <Ban className="w-3.5 h-3.5 text-rose-400" />
+                  <Ban className="w-3.5 h-3.5 text-rose-600" />
                   <span>Processing Prohibited (Gate BLOCKED)</span>
                 </>
               ) : !operatorConfirmationAcknowledged && selectedVideoFile ? (
@@ -844,7 +844,7 @@ export function ParkingOccupancyPanel({
         <div className="p-3.5 rounded-xl glass-panel border border-command-border space-y-3">
           <div className="flex items-center justify-between border-b border-command-border pb-2">
             <div className="flex items-center space-x-2">
-              <Activity className="w-4 h-4 text-cyan-400" />
+              <Activity className="w-4 h-4 text-cyan-600" />
               <span className="font-bold text-xs text-command-text">
                 Job Details: {selectedJob.id.slice(0, 8)}...
               </span>
@@ -853,12 +853,12 @@ export function ParkingOccupancyPanel({
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
                   selectedJob.status === 'COMPLETE'
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    ? 'bg-emerald-500/20 text-emerald-600 border border-emerald-200'
                     : selectedJob.status === 'BLOCKED_BY_STABILITY_GATE' || selectedJob.status === 'FAILED'
-                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                    ? 'bg-rose-500/20 text-rose-600 border border-rose-200'
                     : selectedJob.status === 'CANCELLED'
-                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                    : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 animate-pulse'
+                    ? 'bg-amber-500/20 text-amber-600 border border-amber-200'
+                    : 'bg-cyan-500/20 text-cyan-600 border border-cyan-200 animate-pulse'
                 }`}
               >
                 {selectedJob.status.replace(/_/g, ' ')}
@@ -873,7 +873,7 @@ export function ParkingOccupancyPanel({
             selectedJob.status !== 'BLOCKED_BY_STABILITY_GATE' && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-[11px] font-mono">
-                  <div className="flex items-center space-x-1.5 text-cyan-300">
+                  <div className="flex items-center space-x-1.5 text-cyan-700">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     <span>{selectedJob.stage_message || selectedJob.status}</span>
                   </div>
@@ -894,7 +894,7 @@ export function ParkingOccupancyPanel({
                   <button
                     onClick={handleCancelJob}
                     disabled={isCancelling}
-                    className="text-rose-400 hover:text-rose-300 underline font-bold"
+                    className="text-rose-600 hover:text-rose-700 underline font-bold"
                   >
                     {isCancelling ? 'Cancelling...' : 'Cancel Job'}
                   </button>
@@ -904,8 +904,8 @@ export function ParkingOccupancyPanel({
 
           {/* Blocked by gate message */}
           {selectedJob.status === 'BLOCKED_BY_STABILITY_GATE' && (
-            <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-500/30 text-rose-300 text-xs space-y-2">
-              <div className="flex items-center space-x-2 font-bold text-rose-400">
+            <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs space-y-2">
+              <div className="flex items-center space-x-2 font-bold text-rose-600">
                 <Ban className="w-4 h-4" />
                 <span>Job Terminated by Stability Gate</span>
               </div>
@@ -914,7 +914,7 @@ export function ParkingOccupancyPanel({
                   'The uploaded video failed stability verification. Recalibration or a stationary camera recording is required before occupancy can be computed.'}
               </p>
               {selectedJob.gate_reasons && selectedJob.gate_reasons.length > 0 && (
-                <ul className="list-disc list-inside text-[10px] font-mono text-rose-200/80">
+                <ul className="list-disc list-inside text-[10px] font-mono text-rose-700">
                   {selectedJob.gate_reasons.map((r, i) => (
                     <li key={i}>{r}</li>
                   ))}
@@ -927,8 +927,8 @@ export function ParkingOccupancyPanel({
           {selectedJob.status === 'COMPLETE' && (
             <div className="space-y-3.5">
               {/* AI Notice Banner */}
-              <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-300 text-[11px] font-mono flex items-center space-x-2">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-mono flex items-center space-x-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                 <span className="font-bold">
                   AI-generated operational evidence — human review required. Work orders require physical site inspection.
                 </span>
@@ -940,19 +940,19 @@ export function ParkingOccupancyPanel({
                   Synchronized Visual Overlay Legend:
                 </span>
                 <div className="grid grid-cols-4 gap-1.5">
-                  <div className="p-1 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 flex items-center space-x-1 justify-center">
+                  <div className="p-1 rounded bg-rose-50 border border-rose-200 text-rose-700 flex items-center space-x-1 justify-center">
                     <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
                     <span>RED = OCCUPIED</span>
                   </div>
-                  <div className="p-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 flex items-center space-x-1 justify-center">
+                  <div className="p-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center space-x-1 justify-center">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
                     <span>GREEN = VACANT</span>
                   </div>
-                  <div className="p-1 rounded bg-amber-950/60 border border-amber-500/40 text-amber-300 flex items-center space-x-1 justify-center">
+                  <div className="p-1 rounded bg-amber-50 border border-amber-200 text-amber-700 flex items-center space-x-1 justify-center">
                     <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
                     <span>AMBER = OCCLUDED</span>
                   </div>
-                  <div className="p-1 rounded bg-slate-900/80 border border-slate-700/60 text-slate-300 flex items-center space-x-1 justify-center">
+                  <div className="p-1 rounded bg-slate-100 border border-slate-200 text-slate-700 flex items-center space-x-1 justify-center">
                     <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
                     <span>GREY = UNKNOWN</span>
                   </div>
@@ -963,23 +963,23 @@ export function ParkingOccupancyPanel({
               <div className="grid grid-cols-4 gap-2 text-center font-mono">
                 <div className="p-2.5 rounded-lg bg-command-elevated border border-command-border">
                   <span className="text-[10px] text-command-muted uppercase block">Total Bays</span>
-                  <span className="text-base font-bold text-white">{selectedJob.total_bays}</span>
+                  <span className="text-base font-bold text-command-text">{selectedJob.total_bays}</span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-rose-950/40 border border-rose-500/40">
-                  <span className="text-[10px] text-rose-400 uppercase block">Occupied</span>
-                  <span className="text-base font-bold text-rose-300">
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200">
+                  <span className="text-[10px] text-rose-600 uppercase block">Occupied</span>
+                  <span className="text-base font-bold text-rose-700">
                     {selectedJob.final_occupied_count}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40">
-                  <span className="text-[10px] text-emerald-400 uppercase block">Vacant</span>
-                  <span className="text-base font-bold text-emerald-300">
+                <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                  <span className="text-[10px] text-emerald-600 uppercase block">Vacant</span>
+                  <span className="text-base font-bold text-emerald-700">
                     {selectedJob.final_vacant_count}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-700/60">
-                  <span className="text-[10px] text-slate-400 uppercase block">Unknown</span>
-                  <span className="text-base font-bold text-slate-300">
+                <div className="p-2.5 rounded-lg bg-slate-100 border border-slate-200">
+                  <span className="text-[10px] text-slate-500 uppercase block">Unknown</span>
+                  <span className="text-base font-bold text-slate-700">
                     {selectedJob.final_unknown_count}
                   </span>
                 </div>
@@ -1027,7 +1027,7 @@ export function ParkingOccupancyPanel({
                   <a
                     href={getOccupancyManifestUrl(selectedJob.id)}
                     download={`manifest_${selectedJob.id}.json`}
-                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
+                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-cyan-700 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                   >
                     <FileJson className="w-3.5 h-3.5 shrink-0" />
                     <span>Manifest JSON</span>
@@ -1037,7 +1037,7 @@ export function ParkingOccupancyPanel({
                   <a
                     href={getOccupancyTimelineUrl(selectedJob.id)}
                     download={`timeline_${selectedJob.id}.jsonl`}
-                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-amber-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
+                    className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-amber-700 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                   >
                     <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
                     <span>Timeline JSONL</span>
@@ -1046,7 +1046,7 @@ export function ParkingOccupancyPanel({
                 <a
                   href={getOccupancySummaryUrl(selectedJob.id)}
                   download={`summary_${selectedJob.id}.json`}
-                  className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-emerald-300 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
+                  className="py-2 px-2.5 rounded-lg bg-command-elevated hover:bg-command-elevated/80 border border-command-border text-emerald-700 font-bold flex items-center justify-center space-x-1 transition-all shadow-sm truncate"
                 >
                   <FileText className="w-3.5 h-3.5 shrink-0" />
                   <span>Summary JSON</span>
@@ -1078,8 +1078,8 @@ export function ParkingOccupancyPanel({
                         onClick={() => setBayFilter(mode.key)}
                         className={`px-1.5 py-0.5 rounded transition-all ${
                           bayFilter === mode.key
-                            ? 'bg-command-elevated text-white font-bold'
-                            : 'text-command-muted hover:text-white'
+                            ? 'bg-command-elevated text-command-text font-bold'
+                            : 'text-command-muted hover:text-command-text'
                         }`}
                       >
                         {mode.label}
@@ -1120,7 +1120,7 @@ export function ParkingOccupancyPanel({
                               <span className="text-[10px] font-mono text-command-muted">
                                 {item.space_type}
                               </span>
-                              <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                              <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-100 text-slate-500 border border-slate-200">
                                 Physical: {item.final_state}
                               </span>
                             </div>
@@ -1137,8 +1137,8 @@ export function ParkingOccupancyPanel({
                                 <span
                                   className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
                                     item.final_state === 'OCCUPIED'
-                                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                                      : 'bg-slate-700/30 text-slate-400 border border-slate-600/30'
+                                      ? 'bg-rose-500/20 text-rose-600 border border-rose-200'
+                                      : 'bg-slate-100 text-slate-500 border border-slate-200'
                                   }`}
                                 >
                                   {item.final_state}
@@ -1152,11 +1152,11 @@ export function ParkingOccupancyPanel({
                             {dec && (
                               <>
                                 {dec.pavement_inspection_fresh && dec.inspection_age_seconds != null ? (
-                                  <span className="text-emerald-400 bg-emerald-950/40 px-1 py-0.5 rounded border border-emerald-800/40">
+                                  <span className="text-emerald-600 bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200">
                                     Pavement Fresh ({Math.round(dec.inspection_age_seconds / 60)}m ago)
                                   </span>
                                 ) : (
-                                  <span className="text-amber-400 bg-amber-950/40 px-1 py-0.5 rounded border border-amber-800/40 font-bold">
+                                  <span className="text-amber-600 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 font-bold">
                                     No current pavement inspection
                                   </span>
                                 )}
@@ -1173,7 +1173,7 @@ export function ParkingOccupancyPanel({
                             )}
 
                             {pendingSuggestions.length > 0 && (
-                              <span className="text-cyan-300 bg-cyan-950/40 px-1 py-0.5 rounded border border-cyan-800/40 flex items-center space-x-0.5">
+                              <span className="text-cyan-700 bg-cyan-50 px-1 py-0.5 rounded border border-cyan-200 flex items-center space-x-0.5">
                                 <Info className="w-2.5 h-2.5" />
                                 <span>{pendingSuggestions.length} AI Suggestion(s) Pending Review</span>
                               </span>
@@ -1205,7 +1205,7 @@ export function ParkingOccupancyPanel({
                       </div>
                       <button
                         onClick={() => setInspectedBayLabel(null)}
-                        className="text-command-muted hover:text-white text-[11px]"
+                        className="text-command-muted hover:text-command-text text-[11px]"
                       >
                         Close
                       </button>
@@ -1214,17 +1214,17 @@ export function ParkingOccupancyPanel({
                     <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-command-muted">
                       <div>
                         <span>Space Type:</span>{' '}
-                        <strong className="text-white">{inspectedBay.space_type}</strong>
+                        <strong className="text-command-text">{inspectedBay.space_type}</strong>
                       </div>
                       <div>
                         <span>Physical Occupancy:</span>{' '}
                         <strong
                           className={
                             inspectedBay.final_state === 'OCCUPIED'
-                              ? 'text-rose-400'
+                              ? 'text-rose-600'
                               : inspectedBay.final_state === 'VACANT'
-                              ? 'text-emerald-400'
-                              : 'text-slate-400'
+                              ? 'text-emerald-600'
+                              : 'text-slate-500'
                           }
                         >
                           {inspectedBay.final_state}
@@ -1232,18 +1232,18 @@ export function ParkingOccupancyPanel({
                       </div>
                       <div>
                         <span>Detection Confidence:</span>{' '}
-                        <strong className="text-white">
+                        <strong className="text-command-text">
                           {(inspectedBay.final_confidence * 100).toFixed(1)}%
                         </strong>
                       </div>
                       <div>
                         <span>Transitions Count:</span>{' '}
-                        <strong className="text-white">{inspectedBay.transitions_count}</strong>
+                        <strong className="text-command-text">{inspectedBay.transitions_count}</strong>
                       </div>
                       {inspectedBay.last_vehicle_track_id && (
                         <div className="col-span-2">
                           <span>Last Contributing Vehicle Track:</span>{' '}
-                          <strong className="text-cyan-400">
+                          <strong className="text-cyan-600">
                             Track #{inspectedBay.last_vehicle_track_id}
                           </strong>
                         </div>
@@ -1255,8 +1255,8 @@ export function ParkingOccupancyPanel({
                             <strong
                               className={
                                 inspectedDecision.pavement_inspection_fresh
-                                  ? 'text-emerald-400'
-                                  : 'text-amber-400'
+                                  ? 'text-emerald-600'
+                                  : 'text-amber-600'
                               }
                             >
                               {inspectedDecision.pavement_inspection_fresh
@@ -1280,7 +1280,7 @@ export function ParkingOccupancyPanel({
                     <div className="space-y-2 pt-1 border-t border-command-border">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-bold text-command-text flex items-center space-x-1">
-                          <ShieldAlert className="w-3 h-3 text-fuchsia-400" />
+                          <ShieldAlert className="w-3 h-3 text-fuchsia-600" />
                           <span>Pavement Hazard Associations ({inspectedBayHazards.length})</span>
                         </span>
                         <button
@@ -1291,7 +1291,7 @@ export function ParkingOccupancyPanel({
                             setNewHazardTargetType('BAY');
                             setShowAddHazardModal(true);
                           }}
-                          className="px-2 py-0.5 rounded bg-command-surface hover:bg-command-surface/80 border border-command-border text-fuchsia-300 font-bold text-[10px] flex items-center space-x-1"
+                          className="px-2 py-0.5 rounded bg-command-surface hover:bg-command-surface/80 border border-command-border text-fuchsia-700 font-bold text-[10px] flex items-center space-x-1"
                         >
                           <Plus className="w-2.5 h-2.5" />
                           <span>Link Hazard</span>
@@ -1311,11 +1311,11 @@ export function ParkingOccupancyPanel({
                             >
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center space-x-1.5">
-                                  <span className="font-bold text-white">{hazard.hazard_label}</span>
-                                  <span className="px-1 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                                  <span className="font-bold text-command-text">{hazard.hazard_label}</span>
+                                  <span className="px-1 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200">
                                     {hazard.severity_label}
                                   </span>
-                                  <span className="px-1 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                  <span className="px-1 py-0.2 rounded bg-slate-100 text-slate-500 border border-slate-200">
                                     {hazard.target_type}
                                   </span>
                                 </div>
@@ -1323,10 +1323,10 @@ export function ParkingOccupancyPanel({
                                   <span
                                     className={`px-1.5 py-0.2 rounded font-bold ${
                                       hazard.review_state === 'CONFIRMED'
-                                        ? 'bg-emerald-500/20 text-emerald-400'
+                                        ? 'bg-emerald-500/20 text-emerald-600'
                                         : hazard.review_state === 'UNREVIEWED' || hazard.review_state === 'NEEDS_REVIEW'
-                                        ? 'bg-cyan-500/20 text-cyan-300'
-                                        : 'bg-slate-700/40 text-slate-400'
+                                        ? 'bg-cyan-500/20 text-cyan-700'
+                                        : 'bg-slate-100 text-slate-500'
                                     }`}
                                   >
                                     {hazard.review_state}
@@ -1334,10 +1334,10 @@ export function ParkingOccupancyPanel({
                                   <span
                                     className={`px-1.5 py-0.2 rounded font-bold ${
                                       hazard.lifecycle_state === 'ACTIVE'
-                                        ? 'bg-rose-500/20 text-rose-400'
+                                        ? 'bg-rose-500/20 text-rose-600'
                                         : hazard.lifecycle_state === 'MITIGATED'
-                                        ? 'bg-amber-500/20 text-amber-300'
-                                        : 'bg-slate-700/40 text-slate-400'
+                                        ? 'bg-amber-500/20 text-amber-700'
+                                        : 'bg-slate-100 text-slate-500'
                                     }`}
                                   >
                                     {hazard.lifecycle_state}
@@ -1346,7 +1346,7 @@ export function ParkingOccupancyPanel({
                               </div>
 
                               {(hazard.review_state === 'UNREVIEWED' || hazard.review_state === 'NEEDS_REVIEW') && (
-                                <div className="p-1 rounded bg-cyan-950/30 border border-cyan-800/40 text-cyan-300 text-[9px] flex items-center justify-between">
+                                <div className="p-1 rounded bg-cyan-50 border border-cyan-200 text-cyan-700 text-[9px] flex items-center justify-between">
                                   <span>Unverified AI Suggestion (does not affect capacity until verified)</span>
                                   <div className="flex space-x-1">
                                     <button
@@ -1415,7 +1415,7 @@ export function ParkingOccupancyPanel({
                   </div>
                   <button
                     onClick={() => setDeleteConfirmOpen(true)}
-                    className="text-rose-400 hover:text-rose-300 font-bold flex items-center space-x-1"
+                    className="text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1"
                   >
                     <Trash2 className="w-3 h-3" />
                     <span>Purge Artifacts</span>
@@ -1425,7 +1425,7 @@ export function ParkingOccupancyPanel({
                 <div className="space-y-0.5 truncate">
                   <div>
                     <span>Detector SHA: </span>
-                    <span className="text-cyan-300">{selectedJob.detector_checkpoint_sha256?.slice(0, 16)}...</span>
+                    <span className="text-cyan-700">{selectedJob.detector_checkpoint_sha256?.slice(0, 16)}...</span>
                   </div>
                   <div>
                     <span>Layout SHA: </span>
@@ -1433,7 +1433,7 @@ export function ParkingOccupancyPanel({
                   </div>
                   <div>
                     <span>Config SHA: </span>
-                    <span className="text-amber-300">{selectedJob.occupancy_config_sha256?.slice(0, 16)}...</span>
+                    <span className="text-amber-700">{selectedJob.occupancy_config_sha256?.slice(0, 16)}...</span>
                   </div>
                   <div className="text-[9px] text-command-muted/70 pt-0.5">
                     Storage: /media/parking_jobs/{selectedJob.id}
@@ -1462,8 +1462,8 @@ export function ParkingOccupancyPanel({
                   onClick={() => setSelectedJob(job)}
                   className={`p-2 rounded-lg border transition-all cursor-pointer flex items-center justify-between ${
                     isSelected
-                      ? 'bg-command-elevated border-radar-bright text-white'
-                      : 'bg-command-surface border-command-border text-command-muted hover:text-white'
+                      ? 'bg-command-elevated border-radar-bright text-command-text'
+                      : 'bg-command-surface border-command-border text-command-muted hover:text-command-text'
                   }`}
                 >
                   <div className="flex items-center space-x-2">
@@ -1475,10 +1475,10 @@ export function ParkingOccupancyPanel({
                   <span
                     className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
                       job.status === 'COMPLETE'
-                        ? 'bg-emerald-500/20 text-emerald-400'
+                        ? 'bg-emerald-500/20 text-emerald-600'
                         : job.status === 'BLOCKED_BY_STABILITY_GATE'
-                        ? 'bg-rose-500/20 text-rose-400'
-                        : 'bg-cyan-500/20 text-cyan-400'
+                        ? 'bg-rose-500/20 text-rose-600'
+                        : 'bg-cyan-500/20 text-cyan-600'
                     }`}
                   >
                     {job.status}
@@ -1492,14 +1492,14 @@ export function ParkingOccupancyPanel({
 
       {/* Safe Delete Confirmation Modal */}
       {deleteConfirmOpen && selectedJob && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-100 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-command-bg border border-command-border rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl">
-            <div className="flex items-center space-x-2 text-rose-400 font-bold text-sm">
+            <div className="flex items-center space-x-2 text-rose-600 font-bold text-sm">
               <AlertTriangle className="w-5 h-5" />
               <span>Confirm Fail-Closed Artifact Deletion</span>
             </div>
             <p className="text-xs text-command-muted font-mono leading-relaxed">
-              Are you sure you want to delete job <strong className="text-white">{selectedJob.id.slice(0, 8)}</strong> and its associated annotated video and timeline artifacts?
+              Are you sure you want to delete job <strong className="text-command-text">{selectedJob.id.slice(0, 8)}</strong> and its associated annotated video and timeline artifacts?
               This operation purges local disk artifacts and records an immutable tombstone audit event.
             </p>
 
@@ -1513,7 +1513,7 @@ export function ParkingOccupancyPanel({
                   value={deleteOperatorLabel}
                   onChange={(e) => setDeleteOperatorLabel(e.target.value)}
                   placeholder="e.g. operator_name"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text font-mono focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1526,7 +1526,7 @@ export function ParkingOccupancyPanel({
                   value={deleteReason}
                   onChange={(e) => setDeleteReason(e.target.value)}
                   placeholder="e.g. Routine retention policy purge"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text font-mono focus:outline-none focus:border-radar-bright"
                 />
               </div>
             </div>
@@ -1554,16 +1554,16 @@ export function ParkingOccupancyPanel({
 
       {/* Add Hazard Association Modal */}
       {showAddHazardModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-100 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-command-bg border border-command-border rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-command-border pb-2">
-              <div className="flex items-center space-x-2 text-fuchsia-400 font-bold text-sm">
+              <div className="flex items-center space-x-2 text-fuchsia-600 font-bold text-sm">
                 <ShieldAlert className="w-5 h-5" />
                 <span>Associate Pavement Hazard</span>
               </div>
               <button
                 onClick={() => setShowAddHazardModal(false)}
-                className="text-command-muted hover:text-white"
+                className="text-command-muted hover:text-command-text"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1606,7 +1606,7 @@ export function ParkingOccupancyPanel({
                   value={newHazardBayId}
                   onChange={(e) => setNewHazardBayId(e.target.value)}
                   placeholder="e.g. Bay 1 or space UUID"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1618,7 +1618,7 @@ export function ParkingOccupancyPanel({
                   value={newHazardLabel}
                   onChange={(e) => setNewHazardLabel(e.target.value)}
                   placeholder="e.g. Pothole / rut in bay ingress"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1627,7 +1627,7 @@ export function ParkingOccupancyPanel({
                 <select
                   value={newHazardSeverity}
                   onChange={(e) => setNewHazardSeverity(e.target.value)}
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 >
                   <option value="LOW">LOW</option>
                   <option value="MEDIUM">MEDIUM</option>
@@ -1646,7 +1646,7 @@ export function ParkingOccupancyPanel({
                   value={newHazardNotes}
                   onChange={(e) => setNewHazardNotes(e.target.value)}
                   placeholder="Inspection notes or visual assessment reference"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1679,16 +1679,16 @@ export function ParkingOccupancyPanel({
 
       {/* Record Pavement Inspection Modal */}
       {showInspectionModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-100 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-command-bg border border-command-border rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-command-border pb-2">
-              <div className="flex items-center space-x-2 text-cyan-400 font-bold text-sm">
+              <div className="flex items-center space-x-2 text-cyan-600 font-bold text-sm">
                 <Layers className="w-5 h-5" />
                 <span>Record Pavement Inspection</span>
               </div>
               <button
                 onClick={() => setShowInspectionModal(false)}
-                className="text-command-muted hover:text-white"
+                className="text-command-muted hover:text-command-text"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1707,7 +1707,7 @@ export function ParkingOccupancyPanel({
                   value={newInspectorLabel}
                   onChange={(e) => setNewInspectorLabel(e.target.value)}
                   placeholder="e.g. site_inspector_john"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1718,7 +1718,7 @@ export function ParkingOccupancyPanel({
                   value={newInspectionSessionId}
                   onChange={(e) => setNewInspectionSessionId(e.target.value)}
                   placeholder="e.g. survey_session_2026_09_13"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
@@ -1729,7 +1729,7 @@ export function ParkingOccupancyPanel({
                   value={newInspectionNotes}
                   onChange={(e) => setNewInspectionNotes(e.target.value)}
                   placeholder="Ground survey notes, weather conditions, inspection tool details"
-                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-radar-bright"
+                  className="w-full bg-command-surface border border-command-border rounded-lg px-2.5 py-1.5 text-xs text-command-text focus:outline-none focus:border-radar-bright"
                 />
               </div>
 
